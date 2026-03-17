@@ -4,10 +4,15 @@ import { basename, join } from "node:path";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import { loadConfig } from "./lib/config.js";
+import { HeartbeatService } from "./lib/heartbeat.js";
 import { verifyLinearCli } from "./lib/linear.js";
 import { Logger } from "./lib/logger.js";
-import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn } from "./lib/pi-session.js";
+import { buildManagerReview, handleManagerMessage } from "./lib/manager.js";
+import { ensureManagerSystemFiles, loadManagerPolicy } from "./lib/manager-state.js";
+import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn, runSystemTurn } from "./lib/pi-session.js";
+import { SchedulerService } from "./lib/scheduler.js";
 import { classifyTaskIntent, isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
+import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
 import {
   appendThreadLog,
   buildThreadPaths,
@@ -78,6 +83,7 @@ async function main(): Promise<void> {
   const queue = new ThreadQueue();
   const socketClient = new SocketModeClient({ appToken: config.slackAppToken });
   const webClient = new WebClient(config.slackBotToken);
+  const systemPaths = buildSystemPaths(config.workspaceDir);
   const cleanupTimer = setInterval(() => {
     void disposeIdleThreadRuntimes().catch((error) => {
       logger.warn("Idle thread runtime cleanup failed", {
@@ -87,7 +93,10 @@ async function main(): Promise<void> {
   }, 5 * 60 * 1000);
   cleanupTimer.unref();
 
+  await ensureSystemWorkspace(systemPaths);
+  await ensureManagerSystemFiles(systemPaths);
   await verifyLinearCli(config.linearTeamKey);
+  const managerPolicy = await loadManagerPolicy(systemPaths);
 
   const authTest = await webClient.auth.test();
   const botUserId = authTest.user_id;
@@ -101,6 +110,9 @@ async function main(): Promise<void> {
     model: config.botModel,
     linearWorkspace: config.linearWorkspace,
     linearTeamKey: config.linearTeamKey,
+    heartbeatIntervalMin: managerPolicy.heartbeatIntervalMin,
+    schedulerPollSec: config.schedulerPollSec,
+    controlRoomChannelId: managerPolicy.controlRoomChannelId,
   });
 
   socketClient.on("message", async ({ event, ack }) => {
@@ -141,14 +153,28 @@ async function main(): Promise<void> {
       const intent = classifyTaskIntent(message.text);
 
       try {
-        const reply = await runAgentTurn(config, paths, {
-          channelId: message.channelId,
-          userId: message.userId,
-          text: message.text,
-          rootThreadTs: message.rootThreadTs,
-          intent,
-          attachments,
-        });
+        const managerResult = await handleManagerMessage(
+          config,
+          systemPaths,
+          {
+            channelId: message.channelId,
+            rootThreadTs: message.rootThreadTs,
+            messageTs: message.ts,
+            userId: message.userId,
+            text: message.text,
+          },
+        );
+
+        const reply = managerResult.handled
+          ? managerResult.reply ?? "対応しました。"
+          : await runAgentTurn(config, paths, {
+              channelId: message.channelId,
+              userId: message.userId,
+              text: message.text,
+              rootThreadTs: message.rootThreadTs,
+              intent,
+              attachments,
+            });
 
         await webClient.chat.postMessage({
           channel: message.channelId,
@@ -190,9 +216,121 @@ async function main(): Promise<void> {
   await socketClient.start();
   logger.info("Slack bot connected");
 
+  const heartbeatService = new HeartbeatService({
+    logger,
+    workspaceDir: config.workspaceDir,
+    systemPaths,
+    allowedChannelIds: config.slackAllowedChannelIds,
+    intervalMin: managerPolicy.heartbeatIntervalMin,
+    activeLookbackHours: config.heartbeatActiveLookbackHours,
+    executeHeartbeat: async ({ channelId, prompt }) => {
+      const paths = buildHeartbeatPaths(config.workspaceDir, channelId);
+      await ensureThreadWorkspace(paths);
+      await appendThreadLog(paths, {
+        type: "system",
+        ts: `${Date.now() / 1000}`,
+        threadTs: "heartbeat",
+        text: prompt,
+      });
+
+      const reply = await buildManagerReview(config, systemPaths, "heartbeat");
+      if (!reply) {
+        return { reply: "HEARTBEAT_OK" };
+      }
+
+      if (reply.trim() !== "HEARTBEAT_OK") {
+        await webClient.chat.postMessage({
+          channel: channelId,
+          text: reply,
+        });
+      }
+
+      await appendThreadLog(paths, {
+        type: "assistant",
+        ts: `${Date.now() / 1000}`,
+        threadTs: "heartbeat",
+        text: reply,
+      });
+
+      return { reply };
+    },
+  });
+  await heartbeatService.start();
+
+  const schedulerService = new SchedulerService({
+    logger,
+    systemPaths,
+    pollSec: config.schedulerPollSec,
+    executeJob: async ({ job }) => {
+      if (!config.slackAllowedChannelIds.has(job.channelId)) {
+        throw new Error(`Job channel ${job.channelId} is not in SLACK_ALLOWED_CHANNEL_IDS`);
+      }
+
+      if (job.action) {
+        const mappedKind = job.action;
+        const reply = await buildManagerReview(config, systemPaths, mappedKind);
+        if (!reply) {
+          return {
+            delivered: false,
+            summary: "No review output",
+          };
+        }
+
+        await webClient.chat.postMessage({
+          channel: job.channelId,
+          text: reply,
+        });
+
+        return {
+          delivered: true,
+          summary: reply,
+        };
+      }
+
+      const paths = buildSchedulerPaths(config.workspaceDir, job.id);
+      await ensureThreadWorkspace(paths);
+      await appendThreadLog(paths, {
+        type: "system",
+        ts: `${Date.now() / 1000}`,
+        threadTs: job.id,
+        text: job.prompt,
+      });
+
+      const reply = await runSystemTurn(config, paths, {
+        kind: "scheduler",
+        channelId: job.channelId,
+        text: job.prompt,
+        metadata: {
+          jobId: job.id,
+          scheduleKind: job.kind,
+        },
+      });
+
+      await webClient.chat.postMessage({
+        channel: job.channelId,
+        text: reply,
+      });
+
+      await appendThreadLog(paths, {
+        type: "assistant",
+        ts: `${Date.now() / 1000}`,
+        threadTs: job.id,
+        text: reply,
+      });
+
+      return {
+        delivered: true,
+        summary: reply,
+      };
+    },
+  });
+  await schedulerService.start();
+
   const shutdown = async (signal: string) => {
     logger.info("Shutting down", { signal });
     clearInterval(cleanupTimer);
+    heartbeatService.stop();
+    schedulerService.stop();
     await socketClient.disconnect();
     await disposeAllThreadRuntimes();
     process.exit(0);

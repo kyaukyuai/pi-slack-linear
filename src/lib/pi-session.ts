@@ -25,6 +25,13 @@ export interface AgentInput {
   attachments: AttachmentRecord[];
 }
 
+export interface SystemAgentInput {
+  kind: "heartbeat" | "scheduler";
+  channelId: string;
+  text: string;
+  metadata?: Record<string, string>;
+}
+
 interface SharedRuntime {
   agentDir: string;
   authStorage: AuthStorage;
@@ -43,14 +50,18 @@ const threadRuntimePromises = new Map<string, Promise<ThreadRuntime>>();
 
 function buildSystemPrompt(config: AppConfig): string {
   return [
-    "You are a Japanese Slack assistant for task management.",
+    "You are a Japanese Slack execution manager for task management.",
     "Reply in Japanese.",
     "Linear is the only system of record for tracked tasks.",
     "Do not use or invent any internal todo list.",
-    "Only create, list, or update Linear issues when the user clearly asks for task tracking work.",
+    "Treat the allowed Slack channel as a control room for task execution.",
+    "Create, search, inspect, assign, and update Linear issues when task progression requires it.",
+    "Prefer checking for existing work before creating new issues.",
+    "For larger requests, create a parent issue and execution-sized child issues.",
+    "Use owner hints from the conversation when assigning work, but do not ask for API keys or workspace/team identifiers.",
     "If the request is ambiguous, ask exactly one concise follow-up question before taking action.",
     "Do not ask the user for API keys. Slack and Linear credentials are already configured in the environment.",
-    "Use the dedicated linear_create_issue, linear_list_active_issues, and linear_update_issue tools for tracked task work.",
+    "Use the dedicated Linear tools for tracked task work.",
     `The fixed Linear workspace slug is ${config.linearWorkspace}.`,
     `The fixed Linear team key is ${config.linearTeamKey}.`,
     "Interpret relative dates in Asia/Tokyo and convert them to YYYY-MM-DD before passing due dates to Linear.",
@@ -91,6 +102,25 @@ function buildPrompt(input: AgentInput, config: AppConfig, paths: ThreadPaths): 
     "",
     "Current user message:",
     input.text || "(no text, attachments only)",
+  ].join("\n");
+}
+
+function buildSystemPromptInput(input: SystemAgentInput, config: AppConfig): string {
+  const metadataLines = Object.entries(input.metadata ?? {})
+    .map(([key, value]) => `- ${key}: ${value}`)
+    .join("\n");
+
+  return [
+    "System automation context:",
+    `- runKind: ${input.kind}`,
+    `- channelId: ${input.channelId}`,
+    `- fixedLinearWorkspace: ${config.linearWorkspace}`,
+    `- fixedLinearTeamKey: ${config.linearTeamKey}`,
+    `- currentDateJst: ${currentDateInJst()}`,
+    ...(metadataLines ? ["", "Metadata:", metadataLines] : []),
+    "",
+    "Task:",
+    input.text,
   ].join("\n");
 }
 
@@ -253,6 +283,14 @@ export async function disposeAllThreadRuntimes(): Promise<void> {
 }
 
 export async function runAgentTurn(config: AppConfig, paths: ThreadPaths, input: AgentInput): Promise<string> {
+  return runPromptTurn(config, paths, buildPrompt(input, config, paths));
+}
+
+export async function runSystemTurn(config: AppConfig, paths: ThreadPaths, input: SystemAgentInput): Promise<string> {
+  return runPromptTurn(config, paths, buildSystemPromptInput(input, config));
+}
+
+async function runPromptTurn(config: AppConfig, paths: ThreadPaths, prompt: string): Promise<string> {
   const runtimeKey = buildThreadRuntimeKey(paths);
   const runtime = await getOrCreateThreadRuntime(config, paths);
   const messageCountBefore = runtime.session.messages.length;
@@ -264,7 +302,7 @@ export async function runAgentTurn(config: AppConfig, paths: ThreadPaths, input:
   });
 
   try {
-    await runtime.session.prompt(buildPrompt(input, config, paths));
+    await runtime.session.prompt(prompt);
     await runtime.session.agent.waitForIdle();
 
     const newMessages = (runtime.session.messages as unknown[]).slice(messageCountBefore);

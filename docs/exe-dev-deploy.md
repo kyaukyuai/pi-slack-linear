@@ -75,6 +75,9 @@ LINEAR_TEAM_KEY=AIC
 ANTHROPIC_API_KEY=sk-ant-...
 BOT_MODEL=claude-sonnet-4-6
 WORKSPACE_DIR=/workspace
+HEARTBEAT_INTERVAL_MIN=30
+HEARTBEAT_ACTIVE_LOOKBACK_HOURS=24
+SCHEDULER_POLL_SEC=30
 LOG_LEVEL=info
 ```
 
@@ -83,6 +86,7 @@ LOG_LEVEL=info
 - `SLACK_ALLOWED_CHANNEL_IDS` はカンマ区切りで複数指定できます。
 - `LINEAR_TEAM_KEY` は UUID ではなく `AIC`, `KYA` のような team key を使います。
 - headless 運用では `ANTHROPIC_API_KEY` を推奨します。
+- manager review と heartbeat を既定で使うなら `HEARTBEAT_INTERVAL_MIN=30` のままにします。
 
 ## 4. Optional: use `auth.json` instead of `ANTHROPIC_API_KEY`
 
@@ -133,10 +137,18 @@ docker compose logs -f
 こんにちは
 ```
 
-Linear issue 作成:
+自律起票:
 
 ```text
 明日の田平さんとの会議準備のタスクを追加して
+```
+
+複雑依頼の分割:
+
+```text
+- ログイン画面の不具合を調査する
+- API 側の原因を確認する
+- 修正方針をまとめる
 ```
 
 一覧:
@@ -160,10 +172,12 @@ AIC-2 の期限を 2026-03-20 にして
 期待する挙動:
 
 - bot は thread で返信する
-- tracked task は Linear に作成される
+- 明確な依頼は Linear に自律起票される
+- 複雑な依頼は parent issue + child issues へ分割される
 - relative date を含む依頼では due date が設定される
 - `タスク確認` は active issue を返す
 - 同じ Slack thread では会話が継続する
+- `09:00`, `17:00`, `Mon 09:30` に manager review jobs が自動で動く
 
 ## 7. Restart and updates
 
@@ -180,11 +194,52 @@ docker compose up -d --build
 docker compose down
 ```
 
-## 8. Optional: run on boot
+## 8. Manager system files
+
+起動すると `/workspace/system` に manager 用ファイルが自動生成されます。
+
+- `policy.json`
+- `owner-map.json`
+- `intake-ledger.json`
+- `followups.json`
+- `planning-ledger.json`
+- `jobs.json`
+- `HEARTBEAT.md`
+
+このうち、明示的に編集したくなるのは主に `policy.json`, `owner-map.json`, `HEARTBEAT.md` です。
+
+例:
+
+```bash
+mkdir -p workspace/system
+cat > workspace/system/HEARTBEAT.md <<'EOF'
+You are running a periodic heartbeat for this Slack channel.
+Check active Linear issues and only report one short actionable update.
+If nothing is worth posting, reply exactly HEARTBEAT_OK.
+EOF
+```
+
+```bash
+cat > workspace/system/jobs.json <<'EOF'
+[
+  {
+    "id": "manager-review-morning",
+    "enabled": true,
+    "channelId": "C0ALAMDRB9V",
+    "prompt": "manager review: morning",
+    "kind": "daily",
+    "time": "09:00",
+    "action": "morning-review"
+  }
+]
+EOF
+```
+
+## 9. Optional: run on boot
 
 `restart: unless-stopped` を入れているので、Docker daemon 再起動後は container も復帰します。明示的に host 起動時の制御を増やしたいなら `systemd` で `docker compose up -d` を包んでも構いませんが、v1 では必須ではありません。
 
-## 9. Notes on `exe.dev`
+## 10. Notes on `exe.dev`
 
 - `exe.dev` は VM なので Docker をそのまま使えます。
 - public HTTP proxy は不要です。Slack Socket Mode は outbound 接続だけで動きます。

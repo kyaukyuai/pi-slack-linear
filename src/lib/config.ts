@@ -10,6 +10,9 @@ const envSchema = z.object({
   LINEAR_TEAM_KEY: z.string().min(1),
   BOT_MODEL: z.string().default("claude-sonnet-4-5"),
   WORKSPACE_DIR: z.string().default("/workspace"),
+  HEARTBEAT_INTERVAL_MIN: z.coerce.number().int().min(0).default(30),
+  HEARTBEAT_ACTIVE_LOOKBACK_HOURS: z.coerce.number().int().positive().default(24),
+  SCHEDULER_POLL_SEC: z.coerce.number().int().positive().default(30),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
@@ -23,6 +26,9 @@ export interface AppConfig {
   linearTeamKey: string;
   botModel: string;
   workspaceDir: string;
+  heartbeatIntervalMin: number;
+  heartbeatActiveLookbackHours: number;
+  schedulerPollSec: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
@@ -41,6 +47,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     linearTeamKey: parsed.LINEAR_TEAM_KEY,
     botModel: parsed.BOT_MODEL,
     workspaceDir: parsed.WORKSPACE_DIR,
+    heartbeatIntervalMin: parsed.HEARTBEAT_INTERVAL_MIN,
+    heartbeatActiveLookbackHours: parsed.HEARTBEAT_ACTIVE_LOOKBACK_HOURS,
+    schedulerPollSec: parsed.SCHEDULER_POLL_SEC,
     logLevel: parsed.LOG_LEVEL,
   };
 }
