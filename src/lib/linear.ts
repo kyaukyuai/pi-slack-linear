@@ -811,8 +811,8 @@ async function loadIssueRelations(
 export async function verifyLinearCli(teamKey: string): Promise<void> {
   const versionResult = await execLinear(["--version"], process.env);
   const version = versionResult.stdout || versionResult.stderr;
-  if (compareVersions(version, "2.4.0") < 0) {
-    throw new Error(`linear-cli v2.4.0 or newer is required. Current version: ${version || "unknown"}`);
+  if (compareVersions(version, "2.4.1") < 0) {
+    throw new Error(`linear-cli v2.4.1 or newer is required. Current version: ${version || "unknown"}`);
   }
 
   const whoami = await execLinear(["auth", "whoami"], process.env);

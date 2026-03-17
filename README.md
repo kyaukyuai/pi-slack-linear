@@ -69,9 +69,9 @@ Optional:
 - `SCHEDULER_POLL_SEC`
 - `LOG_LEVEL`
 
-この bot は `linear-cli v2.4.0` 以上を前提にしています。実行時の Linear 取得・更新は `issue list/view/create/update --json`, `issue comment add --json`, `issue relation list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を使います。
+この bot は `linear-cli v2.4.1` 以上を前提にしています。実行時の Linear 取得・更新は `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を使います。
 
-`LINEAR_WORKSPACE` は固定先の説明用です。`LINEAR_API_KEY` がある場合、`linear-cli v2.4.0` では `-w/--workspace` と併用しないようにしています。
+`LINEAR_WORKSPACE` は固定先の説明用です。`LINEAR_API_KEY` がある場合、`linear-cli v2.4.1` では `-w/--workspace` と併用しないようにしています。
 
 `ANTHROPIC_API_KEY` を入れない場合は、手元の `~/.pi/agent/auth.json` を docker compose で `/workspace/.pi/agent/auth.json` に mount して使えます。
 
