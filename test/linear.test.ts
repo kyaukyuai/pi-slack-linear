@@ -142,6 +142,8 @@ describe("linear command builders", () => {
     );
 
     expect(args).toContain("--json");
+    expect(args).toContain("--sort");
+    expect(args).toContain("manual");
     expect(args).toContain("--query");
     expect(args).toContain("auth");
     expect(args).toContain("--parent");
