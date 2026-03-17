@@ -1,0 +1,12 @@
+services:
+  bot:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - ./workspace:/workspace
+      - ${HOME}/.pi/agent/auth.json:/workspace/.pi/agent/auth.json:ro
