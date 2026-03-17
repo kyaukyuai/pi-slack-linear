@@ -34,8 +34,12 @@ const policy: ManagerPolicy = {
   clarificationCooldownHours: 12,
   fallbackOwner: "kyaukyuai",
   autoCreate: true,
+  autoStatusUpdate: true,
   autoAssign: true,
   autoPlan: true,
+  reviewExplicitFollowupCount: 1,
+  researchAutoPlanMinActions: 2,
+  researchAutoPlanMaxChildren: 3,
   urgentPriorityThreshold: 2,
 };
 

@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleManagerMessage } from "../src/lib/manager.js";
-import { ensureManagerSystemFiles, loadIntakeLedger } from "../src/lib/manager-state.js";
+import { buildManagerReview, handleManagerMessage } from "../src/lib/manager.js";
+import { ensureManagerSystemFiles, loadFollowupsLedger, loadIntakeLedger } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 
 const linearMocks = vi.hoisted(() => ({
@@ -73,6 +73,12 @@ describe("handleManagerMessage clarification flow", () => {
     schedulerPollSec: 30,
     logLevel: "info" as const,
   };
+
+  async function updatePolicy(patch: Record<string, unknown>): Promise<void> {
+    const raw = await readFile(systemPaths.policyFile, "utf8");
+    const current = JSON.parse(raw) as Record<string, unknown>;
+    await writeFile(systemPaths.policyFile, `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`, "utf8");
+  }
 
   beforeEach(async () => {
     workspaceDir = await mkdtemp(join(tmpdir(), "pi-slack-linear-manager-"));
@@ -263,6 +269,57 @@ describe("handleManagerMessage clarification flow", () => {
     expect(ledger.at(-1)?.lastResolvedIssueId).toBe("AIC-110");
   });
 
+  it("keeps status updates enabled when autoCreate is disabled", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-1",
+      identifier: "AIC-210",
+      title: "ログイン画面の不具合修正",
+      url: "https://linear.app/kyaukyuai/issue/AIC-210",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-progress-autocreate-off",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "ログイン画面の不具合修正を対応しておいて",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    await updatePolicy({
+      autoCreate: false,
+      autoStatusUpdate: true,
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-progress-autocreate-off",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "進捗です。原因は再現できています",
+      },
+      new Date("2026-03-17T04:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("進捗を Linear に反映しました");
+    expect(linearMocks.addLinearProgressComment).toHaveBeenCalledWith(
+      "AIC-210",
+      expect.stringContaining("進捗です。原因は再現できています"),
+      expect.any(Object),
+    );
+  });
+
   it("imports numbered task lists without mangling titles and applies inline assignee metadata", async () => {
     linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
       parent: {
@@ -372,6 +429,15 @@ describe("handleManagerMessage clarification flow", () => {
         },
       ],
     });
+    linearMocks.getLinearIssue.mockImplementation(async (issueId: string) => ({
+      id: issueId,
+      identifier: issueId,
+      title: issueId === "AIC-121" ? "設計" : issueId === "AIC-122" ? "実装" : "複雑な依頼",
+      url: `https://linear.app/kyaukyuai/issue/${issueId}`,
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    }));
 
     await handleManagerMessage(
       { ...config, workspaceDir },
@@ -404,6 +470,87 @@ describe("handleManagerMessage clarification flow", () => {
     expect(result.reply).toContain("AIC-121");
     expect(result.reply).toContain("AIC-122");
     expect(linearMocks.updateLinearIssueState).not.toHaveBeenCalled();
+  });
+
+  it("prefers a matching child issue in a multi-issue thread", async () => {
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
+        id: "parent-1",
+        identifier: "AIC-220",
+        title: "複雑な依頼",
+        url: "https://linear.app/kyaukyuai/issue/AIC-220",
+        relations: [],
+        inverseRelations: [],
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-221",
+          title: "設計",
+          url: "https://linear.app/kyaukyuai/issue/AIC-221",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-222",
+          title: "実装",
+          url: "https://linear.app/kyaukyuai/issue/AIC-222",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
+    linearMocks.getLinearIssue.mockImplementation(async (issueId: string) => ({
+      id: issueId,
+      identifier: issueId,
+      title: issueId === "AIC-221" ? "設計" : issueId === "AIC-222" ? "実装" : "複雑な依頼",
+      url: `https://linear.app/kyaukyuai/issue/${issueId}`,
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    }));
+    linearMocks.updateLinearIssueState.mockResolvedValueOnce({
+      id: "child-1",
+      identifier: "AIC-221",
+      title: "設計",
+      url: "https://linear.app/kyaukyuai/issue/AIC-221",
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-complex-title-match",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "期限は 2026-03-20 で、作業は\n- 設計\n- 実装\nに分けて進めて",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-complex-title-match",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "設計は終わりました",
+      },
+      new Date("2026-03-17T04:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("完了を Linear に反映しました");
+    expect(result.reply).toContain("AIC-221");
+    expect(linearMocks.updateLinearIssueState).toHaveBeenCalledWith("AIC-221", "completed", expect.any(Object));
   });
 
   it("marks a thread-linked issue as blocked", async () => {
@@ -535,6 +682,79 @@ describe("handleManagerMessage clarification flow", () => {
     );
   });
 
+  it("creates follow-up child issues when research yields concrete next actions", async () => {
+    linearMocks.createManagedLinearIssue
+      .mockResolvedValueOnce({
+        id: "parent-1",
+        identifier: "AIC-240",
+        title: "ログイン画面の不具合",
+        url: "https://linear.app/kyaukyuai/issue/AIC-240",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "child-1",
+        identifier: "AIC-241",
+        title: "調査: ログイン画面の不具合",
+        url: "https://linear.app/kyaukyuai/issue/AIC-241",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "child-2",
+        identifier: "AIC-242",
+        title: "API 仕様の確認",
+        url: "https://linear.app/kyaukyuai/issue/AIC-242",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "child-3",
+        identifier: "AIC-243",
+        title: "修正方針の整理",
+        url: "https://linear.app/kyaukyuai/issue/AIC-243",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      });
+    linearMocks.searchLinearIssues
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    slackContextMocks.getSlackThreadContext.mockResolvedValue({
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "thread-research-followups",
+      entries: [
+        { type: "user", ts: "1", threadTs: "thread-research-followups", text: "ログイン画面の不具合を調査して" },
+        { type: "assistant", ts: "2", threadTs: "thread-research-followups", text: "- API 仕様の確認\n- 修正方針の整理" },
+      ],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-research-followups",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "ログイン画面の不具合を調査して",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("追加 task を 2 件作成しました");
+    expect(result.reply).toContain("AIC-242 / API 仕様の確認");
+    expect(result.reply).toContain("AIC-243 / 修正方針の整理");
+    expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(4);
+
+    const ledger = await loadIntakeLedger(systemPaths);
+    expect(ledger.at(-1)?.childIssueIds).toEqual(["AIC-241", "AIC-242", "AIC-243"]);
+  });
+
   it("reuses an existing issue as the parent for research requests", async () => {
     linearMocks.searchLinearIssues
       .mockResolvedValueOnce([
@@ -598,5 +818,50 @@ describe("handleManagerMessage clarification flow", () => {
     const ledger = await loadIntakeLedger(systemPaths);
     expect(ledger.at(-1)?.parentIssueId).toBe("AIC-11");
     expect(ledger.at(-1)?.childIssueIds).toEqual(["AIC-150"]);
+  });
+
+  it("adds one explicit follow-up to reviews and suppresses the same issue in heartbeat", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "AIC-300",
+        title: "期限超過のタスク",
+        dueDate: "2026-03-16",
+        updatedAt: "2026-03-10T03:00:00.000Z",
+        priority: 1,
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        state: { id: "state-1", name: "Started", type: "started" },
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+
+    const morning = await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "morning-review",
+      new Date("2026-03-17T01:00:00.000Z"),
+    );
+
+    expect(morning).toContain("朝の execution review です。");
+    expect(morning).toContain("AIC-300");
+    expect(morning).toContain("確認したいこと:");
+
+    const followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-300",
+        lastCategory: "overdue",
+      }),
+    ]));
+
+    const heartbeat = await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "heartbeat",
+      new Date("2026-03-17T02:00:00.000Z"),
+    );
+
+    expect(heartbeat).toBeUndefined();
   });
 });

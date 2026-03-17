@@ -28,8 +28,12 @@ const managerPolicySchema = z.object({
   clarificationCooldownHours: z.number().int().positive().default(12),
   fallbackOwner: z.string().min(1).default("kyaukyuai"),
   autoCreate: z.boolean().default(true),
+  autoStatusUpdate: z.boolean().default(true),
   autoAssign: z.boolean().default(true),
   autoPlan: z.boolean().default(true),
+  reviewExplicitFollowupCount: z.number().int().min(0).max(3).default(1),
+  researchAutoPlanMinActions: z.number().int().min(1).max(10).default(2),
+  researchAutoPlanMaxChildren: z.number().int().min(1).max(10).default(3),
   urgentPriorityThreshold: z.number().int().min(0).max(4).default(2),
 });
 
@@ -113,8 +117,12 @@ const DEFAULT_POLICY: ManagerPolicy = {
   clarificationCooldownHours: 12,
   fallbackOwner: "kyaukyuai",
   autoCreate: true,
+  autoStatusUpdate: true,
   autoAssign: true,
   autoPlan: true,
+  reviewExplicitFollowupCount: 1,
+  researchAutoPlanMinActions: 2,
+  researchAutoPlanMaxChildren: 3,
   urgentPriorityThreshold: 2,
 };
 

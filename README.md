@@ -117,6 +117,15 @@ scheduler は `/workspace/system/jobs.json` を読み、`at`, `every`, `daily`, 
 
 `policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、fallback owner を `kyaukyuai` に設定します。
 
+`policy.json` では次の manager knobs を調整できます。
+
+- `autoCreate`
+- `autoStatusUpdate`
+- `followupCooldownHours`
+- `reviewExplicitFollowupCount`
+- `researchAutoPlanMinActions`
+- `researchAutoPlanMaxChildren`
+
 ## Slack App Setup
 
 最低限これを設定します。
