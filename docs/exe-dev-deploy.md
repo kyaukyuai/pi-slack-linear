@@ -11,6 +11,7 @@
   - Slack Socket Mode
   - Anthropic
   - Linear API
+- Bundled CLI: `linear-cli v2.4.0`
 
 `exe.dev` の HTTP proxy は必須ではありません。この bot は常駐 daemon として動けば十分です。
 
@@ -115,6 +116,8 @@ Compose で起動します。
 ```bash
 docker compose up -d --build
 ```
+
+この image は `linear-cli v2.4.0` を同梱し、`issue list/view/create/update --json`, `issue comment add --json`, `issue relation list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を前提に動きます。
 
 ログ確認:
 

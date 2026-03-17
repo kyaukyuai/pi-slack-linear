@@ -9,6 +9,7 @@ import { buildSystemPaths } from "../src/lib/system-workspace.js";
 const linearMocks = vi.hoisted(() => ({
   searchLinearIssues: vi.fn(),
   createManagedLinearIssue: vi.fn(),
+  createManagedLinearIssueBatch: vi.fn(),
   assignLinearIssue: vi.fn(),
   addLinearComment: vi.fn(),
   addLinearProgressComment: vi.fn(),
@@ -32,6 +33,7 @@ const webResearchMocks = vi.hoisted(() => ({
 vi.mock("../src/lib/linear.js", () => ({
   searchLinearIssues: linearMocks.searchLinearIssues,
   createManagedLinearIssue: linearMocks.createManagedLinearIssue,
+  createManagedLinearIssueBatch: linearMocks.createManagedLinearIssueBatch,
   assignLinearIssue: linearMocks.assignLinearIssue,
   addLinearComment: linearMocks.addLinearComment,
   addLinearProgressComment: linearMocks.addLinearProgressComment,
@@ -79,6 +81,7 @@ describe("handleManagerMessage clarification flow", () => {
 
     linearMocks.searchLinearIssues.mockReset().mockResolvedValue([]);
     linearMocks.createManagedLinearIssue.mockReset();
+    linearMocks.createManagedLinearIssueBatch.mockReset();
     linearMocks.assignLinearIssue.mockReset().mockResolvedValue(undefined);
     linearMocks.addLinearComment.mockReset().mockResolvedValue(undefined);
     linearMocks.addLinearProgressComment.mockReset().mockResolvedValue({ id: "comment-1", body: "ok" });
@@ -139,38 +142,42 @@ describe("handleManagerMessage clarification flow", () => {
     expect(first.reply).toContain("期限を確認したいです");
     expect(first.reply).toContain("進め方を固めたいです");
     expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+    expect(linearMocks.createManagedLinearIssueBatch).not.toHaveBeenCalled();
 
     let ledger = await loadIntakeLedger(systemPaths);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]?.status).toBe("needs-clarification");
 
-    linearMocks.createManagedLinearIssue
-      .mockResolvedValueOnce({
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
         id: "parent-1",
         identifier: "AIC-100",
         title: "来週のリリースに向けた対応",
         url: "https://linear.app/kyaukyuai/issue/AIC-100",
         relations: [],
         inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-1",
-        identifier: "AIC-101",
-        title: "API レート制限の確認",
-        url: "https://linear.app/kyaukyuai/issue/AIC-101",
-        assignee: { id: "user-1", displayName: "y.kakui" },
-        relations: [],
-        inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-2",
-        identifier: "AIC-102",
-        title: "修正対応",
-        url: "https://linear.app/kyaukyuai/issue/AIC-102",
-        assignee: { id: "user-1", displayName: "y.kakui" },
-        relations: [],
-        inverseRelations: [],
-      });
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-101",
+          title: "API レート制限の確認",
+          url: "https://linear.app/kyaukyuai/issue/AIC-101",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-102",
+          title: "修正対応",
+          url: "https://linear.app/kyaukyuai/issue/AIC-102",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
 
     const second = await handleManagerMessage(
       { ...config, workspaceDir },
@@ -193,8 +200,9 @@ describe("handleManagerMessage clarification flow", () => {
     expect(second.reply).not.toContain("暫定で kyaukyuai に寄せています");
     expect(second.reply).toContain("この thread で進捗・完了・blocked をそのまま返してください");
 
-    expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(3);
-    expect(linearMocks.assignLinearIssue).toHaveBeenCalledTimes(1);
+    expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+    expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledTimes(1);
+    expect(linearMocks.assignLinearIssue).not.toHaveBeenCalled();
     expect(linearMocks.addLinearRelation).toHaveBeenCalledWith("AIC-101", "blocks", "AIC-102", expect.any(Object));
 
     ledger = await loadIntakeLedger(systemPaths);
@@ -256,34 +264,37 @@ describe("handleManagerMessage clarification flow", () => {
   });
 
   it("imports numbered task lists without mangling titles and applies inline assignee metadata", async () => {
-    linearMocks.createManagedLinearIssue
-      .mockResolvedValueOnce({
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
         id: "parent-1",
         identifier: "AIC-200",
         title: "2ヶ月版の見積もり書作成 ほか1件",
         url: "https://linear.app/kyaukyuai/issue/AIC-200",
         relations: [],
         inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-1",
-        identifier: "AIC-201",
-        title: "2ヶ月版の見積もり書作成",
-        url: "https://linear.app/kyaukyuai/issue/AIC-201",
-        assignee: { id: "user-1", displayName: "角井 勇哉" },
-        relations: [],
-        inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-2",
-        identifier: "AIC-202",
-        title: "4月・5月の2ヶ月間でのクローン成果物の作成",
-        url: "https://linear.app/kyaukyuai/issue/AIC-202",
-        assignee: { id: "user-1", displayName: "角井 勇哉" },
-        dueDate: "2026-05-31",
-        relations: [],
-        inverseRelations: [],
-      });
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-201",
+          title: "2ヶ月版の見積もり書作成",
+          url: "https://linear.app/kyaukyuai/issue/AIC-201",
+          assignee: { id: "user-1", displayName: "角井 勇哉" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-202",
+          title: "4月・5月の2ヶ月間でのクローン成果物の作成",
+          url: "https://linear.app/kyaukyuai/issue/AIC-202",
+          assignee: { id: "user-1", displayName: "角井 勇哉" },
+          dueDate: "2026-05-31",
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
 
     const result = await handleManagerMessage(
       { ...config, workspaceDir },
@@ -306,62 +317,61 @@ describe("handleManagerMessage clarification flow", () => {
     expect(result.reply).toContain("- AIC-202 / 4月・5月の2ヶ月間でのクローン成果物の作成 / 担当: 角井 勇哉 / 期限: 2026-05-31");
     expect(result.reply).not.toContain("暫定で kyaukyuai に寄せています");
 
-    expect(linearMocks.createManagedLinearIssue).toHaveBeenNthCalledWith(
-      1,
+    expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "2ヶ月版の見積もり書作成 ほか1件",
-        dueDate: undefined,
+        parent: expect.objectContaining({
+          title: "2ヶ月版の見積もり書作成 ほか1件",
+          dueDate: undefined,
+        }),
+        children: [
+          expect.objectContaining({
+            title: "2ヶ月版の見積もり書作成",
+            assignee: "角井 勇哉",
+            dueDate: undefined,
+          }),
+          expect.objectContaining({
+            title: "4月・5月の2ヶ月間でのクローン成果物の作成",
+            assignee: "角井 勇哉",
+            dueDate: "2026-05-31",
+          }),
+        ],
       }),
       expect.any(Object),
     );
-    expect(linearMocks.createManagedLinearIssue).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        title: "2ヶ月版の見積もり書作成",
-        assignee: "角井 勇哉",
-        dueDate: undefined,
-      }),
-      expect.any(Object),
-    );
-    expect(linearMocks.createManagedLinearIssue).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        title: "4月・5月の2ヶ月間でのクローン成果物の作成",
-        assignee: "角井 勇哉",
-        dueDate: "2026-05-31",
-      }),
-      expect.any(Object),
-    );
+    expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
   });
 
   it("asks for an issue id when the thread maps to multiple issues for completion", async () => {
-    linearMocks.createManagedLinearIssue
-      .mockResolvedValueOnce({
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
         id: "parent-1",
         identifier: "AIC-120",
         title: "複雑な依頼",
         url: "https://linear.app/kyaukyuai/issue/AIC-120",
         relations: [],
         inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-1",
-        identifier: "AIC-121",
-        title: "設計",
-        url: "https://linear.app/kyaukyuai/issue/AIC-121",
-        assignee: { id: "user-1", displayName: "y.kakui" },
-        relations: [],
-        inverseRelations: [],
-      })
-      .mockResolvedValueOnce({
-        id: "child-2",
-        identifier: "AIC-122",
-        title: "実装",
-        url: "https://linear.app/kyaukyuai/issue/AIC-122",
-        assignee: { id: "user-1", displayName: "y.kakui" },
-        relations: [],
-        inverseRelations: [],
-      });
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-121",
+          title: "設計",
+          url: "https://linear.app/kyaukyuai/issue/AIC-121",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-122",
+          title: "実装",
+          url: "https://linear.app/kyaukyuai/issue/AIC-122",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
 
     await handleManagerMessage(
       { ...config, workspaceDir },

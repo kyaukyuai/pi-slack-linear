@@ -1,6 +1,6 @@
 FROM node:22-slim
 
-ARG LINEAR_CLI_VERSION=2.2.1
+ARG LINEAR_CLI_VERSION=2.4.0
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates curl git jq ripgrep tini xz-utils \

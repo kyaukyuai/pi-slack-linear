@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCreateIssueArgs,
+  buildCreateBatchArgs,
+  buildIssueChildrenArgs,
+  buildIssueCommentAddArgs,
   buildIssueUrlArgs,
   buildListActiveIssuesArgs,
+  buildSearchIssuesArgs,
+  buildTeamMembersArgs,
   buildUpdateIssueArgs,
+  normalizeLinearIssuePayload,
+  normalizeRelationListPayload,
+  normalizeTeamMembersPayload,
 } from "../src/lib/linear.js";
 
 describe("linear command builders", () => {
@@ -116,5 +124,205 @@ describe("linear command builders", () => {
     });
 
     expect(args).toEqual(["issue", "url", "KYA-123"]);
+  });
+
+  it("builds JSON search args with parent and date filters", () => {
+    const args = buildSearchIssuesArgs(
+      {
+        query: "auth",
+        parent: "KYA-10",
+        priority: 2,
+        updatedBefore: "2026-03-31T00:00:00Z",
+        dueBefore: "2026-04-07",
+      },
+      {
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_TEAM_KEY: "KYA",
+      },
+    );
+
+    expect(args).toContain("--json");
+    expect(args).toContain("--query");
+    expect(args).toContain("auth");
+    expect(args).toContain("--parent");
+    expect(args).toContain("KYA-10");
+    expect(args).toContain("--priority");
+    expect(args).toContain("2");
+    expect(args).toContain("--updated-before");
+    expect(args).toContain("2026-03-31T00:00:00Z");
+    expect(args).toContain("--due-before");
+    expect(args).toContain("2026-04-07");
+  });
+
+  it("builds comment, children, team members, and batch args for v2.4.0 commands", () => {
+    expect(
+      buildIssueCommentAddArgs("KYA-123", "tracking", {
+        LINEAR_API_KEY: "lin_api_test",
+      }),
+    ).toEqual(["issue", "comment", "add", "KYA-123", "--body", "tracking", "--json"]);
+
+    expect(
+      buildIssueChildrenArgs("KYA-123", {
+        LINEAR_API_KEY: "lin_api_test",
+      }),
+    ).toEqual(["issue", "children", "KYA-123", "--json"]);
+
+    expect(
+      buildTeamMembersArgs({
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_TEAM_KEY: "KYA",
+      }),
+    ).toEqual(["team", "members", "KYA", "--json"]);
+
+    expect(
+      buildCreateBatchArgs("/tmp/issue-batch.json", {
+        LINEAR_API_KEY: "lin_api_test",
+      }),
+    ).toEqual(["issue", "create-batch", "--file", "/tmp/issue-batch.json", "--json"]);
+  });
+
+  it("normalizes issue view payloads with hierarchy and relations", () => {
+    const issue = normalizeLinearIssuePayload({
+      id: "issue-123",
+      identifier: "TEST-123",
+      title: "Fix authentication bug in login flow",
+      description: "Users are experiencing issues logging in when their session expires.",
+      url: "https://linear.app/test-team/issue/TEST-123/fix-authentication-bug-in-login-flow",
+      dueDate: "2025-08-25",
+      priority: 2,
+      updatedAt: "2025-08-16T15:30:00Z",
+      assignee: {
+        id: "user-1",
+        name: "jane.doe",
+        displayName: "Jane Doe",
+        initials: "JD",
+      },
+      state: {
+        name: "In Progress",
+        color: "#f87462",
+      },
+      parent: {
+        id: "issue-100",
+        identifier: "TEST-100",
+        title: "Epic: Security Improvements",
+        url: "https://linear.app/test-team/issue/TEST-100/epic-security-improvements",
+      },
+      children: [
+        {
+          id: "issue-200",
+          identifier: "TEST-200",
+          title: "Update session middleware",
+          url: "https://linear.app/test-team/issue/TEST-200/update-session-middleware",
+        },
+      ],
+      relations: {
+        blocks: [
+          {
+            relationId: "relation-1",
+            id: "issue-201",
+            identifier: "TEST-201",
+            title: "Blocked issue",
+            url: "https://linear.app/test-team/issue/TEST-201/blocked-issue",
+          },
+        ],
+        blockedBy: [
+          {
+            relationId: "relation-2",
+            id: "issue-202",
+            identifier: "TEST-202",
+            title: "Blocking issue",
+            url: "https://linear.app/test-team/issue/TEST-202/blocking-issue",
+          },
+        ],
+      },
+    });
+
+    expect(issue).toMatchObject({
+      identifier: "TEST-123",
+      title: "Fix authentication bug in login flow",
+      parent: {
+        identifier: "TEST-100",
+      },
+      children: [
+        {
+          identifier: "TEST-200",
+        },
+      ],
+      relations: [
+        {
+          type: "blocks",
+          relatedIssue: {
+            identifier: "TEST-201",
+          },
+        },
+      ],
+      inverseRelations: [
+        {
+          type: "blocked-by",
+          issue: {
+            identifier: "TEST-202",
+          },
+        },
+      ],
+    });
+  });
+
+  it("normalizes relation-list and team-members payloads", () => {
+    const relationPayload = normalizeRelationListPayload({
+      outgoing: [
+        {
+          id: "relation-out-1",
+          type: "blocks",
+          issue: {
+            id: "issue-456",
+            identifier: "ENG-456",
+            title: "Blocked issue",
+            url: "https://linear.app/issue/ENG-456",
+          },
+        },
+      ],
+      incoming: [
+        {
+          id: "relation-in-1",
+          type: "blocked-by",
+          issue: {
+            id: "issue-789",
+            identifier: "ENG-789",
+            title: "Blocking issue",
+            url: "https://linear.app/issue/ENG-789",
+          },
+        },
+      ],
+    });
+
+    expect(relationPayload.relations?.[0]).toMatchObject({
+      type: "blocks",
+      relatedIssue: { identifier: "ENG-456" },
+    });
+    expect(relationPayload.inverseRelations?.[0]).toMatchObject({
+      type: "blocked-by",
+      issue: { identifier: "ENG-789" },
+    });
+
+    const members = normalizeTeamMembersPayload({
+      team: "ENG",
+      members: [
+        {
+          id: "user-2",
+          name: "asmith",
+          displayName: "Alice Smith",
+          email: "alice@example.com",
+        },
+      ],
+    });
+
+    expect(members).toEqual([
+      {
+        id: "user-2",
+        name: "asmith",
+        displayName: "Alice Smith",
+        email: "alice@example.com",
+      },
+    ]);
   });
 });

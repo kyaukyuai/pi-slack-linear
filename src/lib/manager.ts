@@ -3,8 +3,8 @@ import {
   addLinearComment,
   addLinearProgressComment,
   addLinearRelation,
-  assignLinearIssue,
   createManagedLinearIssue,
+  createManagedLinearIssueBatch,
   getLinearIssue,
   listRiskyLinearIssues,
   markLinearIssueBlocked,
@@ -1111,12 +1111,72 @@ export async function handleManagerMessage(
     };
   }
 
+  const planningReason = research ? "research-first" : complex ? "complex-request" : "single-issue";
+  const rawChildren = research
+    ? unique([`調査: ${planningTitle}`, ...segments])
+    : segments.length > 0
+      ? segments
+      : complex
+        ? [`実行: ${primaryTitle}`]
+        : [primaryTitle];
   const existingResearchParent = research ? chooseExistingResearchParent(duplicates, planningTitle) : undefined;
+  const needsNewParent = (complex || research) && !existingResearchParent;
   const usedFallbackOwners = new Set<string>();
+  const parentOwner = needsNewParent ? chooseOwner(planningTitle, ownerMap) : undefined;
+  if (parentOwner?.resolution === "fallback") {
+    usedFallbackOwners.add(parentOwner.entry.id);
+  }
 
-  const createdParent = (complex || research) && !existingResearchParent
-    ? await createManagedLinearIssue(
-        {
+  const plannedChildren = rawChildren.map((childText) => {
+    const parsedChild = parseTaskSegment(childText, now);
+    const owner = chooseOwner(parsedChild.title, ownerMap);
+    if (!parsedChild.assignee && owner.resolution === "fallback") {
+      usedFallbackOwners.add(owner.entry.id);
+    }
+
+    return {
+      childText,
+      title: parsedChild.title,
+      description: research && childText.startsWith("調査:")
+        ? [
+            "## Slack source",
+            requestMessage.text,
+            "",
+            "## 調べた範囲",
+            "- ここに調査対象を書く",
+            "",
+            "## 分かったこと",
+            "- ここに調査結果を書く",
+            "",
+            "## 未確定事項",
+            "- ここに未確定事項を書く",
+            "",
+            "## 次アクション",
+            "- ここに次アクションを書く",
+          ].join("\n")
+        : [
+            "## Slack source",
+            requestMessage.text,
+            "",
+            "## 完了条件",
+            "- 実行単位で完了できる状態にする",
+          ].join("\n"),
+      dueDate: parsedChild.dueDate ?? globalDueDate,
+      assignee: parsedChild.assignee ?? owner.entry.linearAssignee,
+      priority: (parsedChild.dueDate ?? globalDueDate) ? 2 : undefined,
+      isResearch: research && childText.startsWith("調査:"),
+    };
+  });
+
+  let createdParent: LinearIssue | undefined;
+  let parent = existingResearchParent;
+  let createdChildren: LinearIssue[] = [];
+  let researchChild: LinearIssue | undefined;
+
+  if (needsNewParent && plannedChildren.length >= 2) {
+    const batch = await createManagedLinearIssueBatch(
+      {
+        parent: {
           title: planningTitle,
           description: [
             "## 目的",
@@ -1126,76 +1186,67 @@ export async function handleManagerMessage(
             "- Slack の依頼を親 issue として管理する",
             "- 実行子 issue で前進できる状態にする",
           ].join("\n"),
+          assignee: parentOwner?.entry.linearAssignee,
           dueDate: globalDueDate,
           priority: globalDueDate ? 2 : undefined,
         },
-        env,
-      )
-    : undefined;
-  const parent = existingResearchParent ?? createdParent;
-
-  const createdChildren: LinearIssue[] = [];
-  const planningReason = research ? "research-first" : complex ? "complex-request" : "single-issue";
-  const rawChildren = research
-    ? unique([`調査: ${planningTitle}`, ...segments])
-    : segments.length > 0
-      ? segments
-      : complex
-        ? [`実行: ${primaryTitle}`]
-        : [primaryTitle];
-
-  let researchChild: LinearIssue | undefined;
-
-  for (const childText of rawChildren) {
-    const parsedChild = parseTaskSegment(childText, now);
-    const childTitle = parsedChild.title;
-    const owner = parsedChild.assignee
-      ? chooseOwner(childTitle, ownerMap)
-      : chooseOwner(childTitle, ownerMap);
-    const assignee = parsedChild.assignee ?? owner.entry.linearAssignee;
-    if (!parsedChild.assignee && owner.resolution === "fallback") {
-      usedFallbackOwners.add(owner.entry.id);
-    }
-
-    const child = await createManagedLinearIssue(
-      {
-        title: childTitle,
-        description: research && childText.startsWith("調査:")
-          ? [
-              "## Slack source",
-              requestMessage.text,
-              "",
-              "## 調べた範囲",
-              "- ここに調査対象を書く",
-              "",
-              "## 分かったこと",
-              "- ここに調査結果を書く",
-              "",
-              "## 未確定事項",
-              "- ここに未確定事項を書く",
-              "",
-              "## 次アクション",
-              "- ここに次アクションを書く",
-            ].join("\n")
-          : [
-              "## Slack source",
-              requestMessage.text,
-              "",
-              "## 完了条件",
-              "- 実行単位で完了できる状態にする",
-            ].join("\n"),
-        dueDate: parsedChild.dueDate ?? globalDueDate,
-        parent: parent?.identifier,
-        assignee,
-        priority: (parsedChild.dueDate ?? globalDueDate) ? 2 : undefined,
+        children: plannedChildren.map((child) => ({
+          title: child.title,
+          description: child.description,
+          dueDate: child.dueDate,
+          assignee: child.assignee,
+          priority: child.priority,
+        })),
       },
       env,
     );
+    createdParent = batch.parent;
+    parent = batch.parent;
+    createdChildren = batch.children;
+    researchChild = createdChildren.find((child) => child.title.startsWith("調査:"));
+  } else {
+    createdParent = needsNewParent
+      ? await createManagedLinearIssue(
+          {
+            title: planningTitle,
+            description: [
+              "## 目的",
+              planningTitle,
+              "",
+              "## 完了条件",
+              "- Slack の依頼を親 issue として管理する",
+              "- 実行子 issue で前進できる状態にする",
+            ].join("\n"),
+            assignee: parentOwner?.entry.linearAssignee,
+            dueDate: globalDueDate,
+            priority: globalDueDate ? 2 : undefined,
+          },
+          env,
+        )
+      : undefined;
+    parent = existingResearchParent ?? createdParent;
 
-    createdChildren.push(child);
-    if (research && childText.startsWith("調査:")) {
-      researchChild = child;
+    for (const child of plannedChildren) {
+      const createdChild = await createManagedLinearIssue(
+        {
+          title: child.title,
+          description: child.description,
+          dueDate: child.dueDate,
+          parent: parent?.identifier,
+          assignee: child.assignee,
+          priority: child.priority,
+        },
+        env,
+      );
+
+      createdChildren.push(createdChild);
+      if (child.isResearch) {
+        researchChild = createdChild;
+      }
     }
+  }
+
+  for (const child of createdChildren) {
     await addLinearComment(child.identifier, formatSourceComment(requestMessage, planningReason), env);
   }
 
@@ -1207,11 +1258,6 @@ export async function handleManagerMessage(
     for (let index = 1; index < createdChildren.length; index += 1) {
       await addLinearRelation(createdChildren[index - 1].identifier, "blocks", createdChildren[index].identifier, env);
     }
-  }
-
-  if (createdParent) {
-    const owner = chooseOwner(createdParent.title, ownerMap);
-    await assignLinearIssue(createdParent.identifier, owner.entry.linearAssignee, env);
   }
 
   if (researchChild) {
