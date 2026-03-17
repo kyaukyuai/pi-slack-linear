@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildManagerReview, handleManagerMessage } from "../src/lib/manager.js";
+import { buildHeartbeatReviewDecision, buildManagerReview, handleManagerMessage } from "../src/lib/manager.js";
 import { ensureManagerSystemFiles, loadFollowupsLedger, loadIntakeLedger } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 
@@ -1009,5 +1009,258 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(heartbeat).toBeUndefined();
+  });
+
+  it("resolves an awaiting follow-up when the same issue receives a progress update", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-1",
+      identifier: "AIC-301",
+      title: "期限超過のタスク",
+      url: "https://linear.app/kyaukyuai/issue/AIC-301",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-followup-resolve",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "期限超過のタスクを対応しておいて",
+      },
+      new Date("2026-03-17T00:30:00.000Z"),
+    );
+
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "AIC-301",
+        title: "期限超過のタスク",
+        dueDate: "2026-03-16",
+        updatedAt: "2026-03-10T03:00:00.000Z",
+        priority: 1,
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        state: { id: "state-1", name: "Started", type: "started" },
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+
+    await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "morning-review",
+      new Date("2026-03-17T01:00:00.000Z"),
+    );
+
+    let followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-301",
+        status: "awaiting-response",
+      }),
+    ]));
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-followup-resolve",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "進捗です。原因は再現できています",
+      },
+      new Date("2026-03-17T01:10:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-301",
+        status: "resolved",
+      }),
+    ]));
+    expect(followups.find((entry) => entry.issueId === "AIC-301")?.resolvedAt).toBeTruthy();
+  });
+
+  it("re-pings an unresolved follow-up after cooldown and increments the counter", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "AIC-302",
+        title: "blocked のタスク",
+        dueDate: "2026-03-16",
+        updatedAt: "2026-03-10T03:00:00.000Z",
+        priority: 1,
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        state: { id: "state-1", name: "Started", type: "started" },
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+
+    await writeFile(systemPaths.intakeLedgerFile, `${JSON.stringify([
+      {
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-followup-reping",
+        sourceMessageTs: "msg-1",
+        messageFingerprint: "followup-reping",
+        childIssueIds: ["AIC-302"],
+        status: "created",
+        clarificationReasons: [],
+        lastResolvedIssueId: "AIC-302",
+        createdAt: "2026-03-17T00:00:00.000Z",
+        updatedAt: "2026-03-17T00:00:00.000Z",
+      },
+    ], null, 2)}\n`);
+
+    await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "morning-review",
+      new Date("2026-03-17T01:00:00.000Z"),
+    );
+
+    const review = await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "evening-review",
+      new Date("2026-03-18T02:30:00.000Z"),
+    );
+
+    expect(review?.followup?.issueId).toBe("AIC-302");
+
+    const followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-302",
+        status: "awaiting-response",
+        rePingCount: 1,
+      }),
+    ]));
+  });
+
+  it("does not create follow-up child issues from request text when synthesis has no next actions", async () => {
+    linearMocks.createManagedLinearIssue
+      .mockResolvedValueOnce({
+        id: "parent-1",
+        identifier: "AIC-340",
+        title: "ログイン画面の不具合",
+        url: "https://linear.app/kyaukyuai/issue/AIC-340",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "child-1",
+        identifier: "AIC-341",
+        title: "調査: ログイン画面の不具合",
+        url: "https://linear.app/kyaukyuai/issue/AIC-341",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        relations: [],
+        inverseRelations: [],
+      });
+    linearMocks.searchLinearIssues
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    piSessionMocks.runResearchSynthesisTurn.mockRejectedValueOnce(new Error("synthesis failed"));
+    slackContextMocks.getSlackThreadContext.mockResolvedValue({
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "thread-research-fallback",
+      entries: [
+        { type: "user", ts: "1", threadTs: "thread-research-fallback", text: "ログイン画面の不具合を調査して。API 仕様の確認と修正方針の整理が必要です。" },
+      ],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-research-fallback",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "ログイン画面の不具合を調査して。API 仕様の確認と修正方針の整理が必要です。",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).not.toContain("追加 task を");
+    expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(2);
+
+    const ledger = await loadIntakeLedger(systemPaths);
+    expect(ledger.at(-1)?.childIssueIds).toEqual(["AIC-341"]);
+  });
+
+  it("returns a heartbeat noop reason when urgent issues are suppressed by cooldown", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([
+      {
+        id: "issue-1",
+        identifier: "AIC-400",
+        title: "期限超過のタスク",
+        dueDate: "2026-03-16",
+        updatedAt: "2026-03-10T03:00:00.000Z",
+        priority: 1,
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        state: { id: "state-1", name: "Started", type: "started" },
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+    await writeFile(systemPaths.followupsFile, `${JSON.stringify([
+      {
+        issueId: "AIC-400",
+        lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
+        lastCategory: "overdue",
+        status: "awaiting-response",
+        requestText: "次の一手と完了見込みを共有してください。",
+      },
+    ], null, 2)}\n`);
+
+    const decision = await buildHeartbeatReviewDecision(
+      { ...config, workspaceDir },
+      systemPaths,
+      new Date("2026-03-17T01:00:00.000Z"),
+    );
+
+    expect(decision.review).toBeUndefined();
+    expect(decision.reason).toBe("suppressed-by-cooldown");
+  });
+
+  it("marks awaiting follow-ups as resolved when the tracked risk disappears", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([]);
+    await writeFile(systemPaths.followupsFile, `${JSON.stringify([
+      {
+        issueId: "AIC-401",
+        lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
+        lastCategory: "overdue",
+        status: "awaiting-response",
+        requestText: "次の一手と完了見込みを共有してください。",
+      },
+    ], null, 2)}\n`);
+
+    const review = await buildManagerReview(
+      { ...config, workspaceDir },
+      systemPaths,
+      "morning-review",
+      new Date("2026-03-17T02:00:00.000Z"),
+    );
+
+    expect(review?.text).toContain("今日すぐに共有すべきリスクはありません");
+
+    const followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-401",
+        status: "resolved",
+      }),
+    ]));
   });
 });

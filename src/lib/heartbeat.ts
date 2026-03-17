@@ -9,6 +9,8 @@ export interface HeartbeatExecutionContext {
 
 export interface HeartbeatExecutionResult {
   reply: string;
+  status: "posted" | "noop";
+  reason?: "outside-business-hours" | "no-active-channels" | "no-urgent-items" | "suppressed-by-cooldown";
 }
 
 export interface HeartbeatServiceOptions {
@@ -66,6 +68,14 @@ export class HeartbeatService {
         this.options.activeLookbackHours * 60 * 60 * 1000,
       );
 
+      if (activeChannels.length === 0) {
+        this.options.logger.info("Heartbeat noop", {
+          status: "noop",
+          reason: "no-active-channels",
+        });
+        return;
+      }
+
       for (const channelId of activeChannels) {
         try {
           const result = await this.options.executeHeartbeat({
@@ -73,9 +83,19 @@ export class HeartbeatService {
             prompt: instructions,
           });
 
-          if (result.reply.trim() === "HEARTBEAT_OK") {
+          if (result.status === "noop") {
+            this.options.logger.info("Heartbeat noop", {
+              channelId,
+              status: "noop",
+              reason: result.reason ?? "no-urgent-items",
+            });
             continue;
           }
+
+          this.options.logger.info("Heartbeat posted", {
+            channelId,
+            status: "posted",
+          });
         } catch (error) {
           this.options.logger.error("Heartbeat failed", {
             channelId,

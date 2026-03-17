@@ -7,7 +7,7 @@ import { loadConfig } from "./lib/config.js";
 import { HeartbeatService } from "./lib/heartbeat.js";
 import { verifyLinearCli } from "./lib/linear.js";
 import { Logger } from "./lib/logger.js";
-import { buildManagerReview, formatManagerReviewFollowupLine, handleManagerMessage, type ManagerReviewResult } from "./lib/manager.js";
+import { buildHeartbeatReviewDecision, buildManagerReview, formatManagerReviewFollowupLine, handleManagerMessage, type ManagerReviewResult } from "./lib/manager.js";
 import { ensureManagerSystemFiles, loadManagerPolicy } from "./lib/manager-state.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn, runSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
@@ -267,18 +267,24 @@ async function main(): Promise<void> {
         text: prompt,
       });
 
-      const review = await buildManagerReview(config, systemPaths, "heartbeat");
-      if (!review) {
-        return { reply: "HEARTBEAT_OK" };
-      }
-      const reply = await formatManagerReviewForSlack(webClient, logger, review);
-
-      if (reply.trim() !== "HEARTBEAT_OK") {
-        await webClient.chat.postMessage({
-          channel: channelId,
+      const decision = await buildHeartbeatReviewDecision(config, systemPaths);
+      if (!decision.review) {
+        const reason = decision.reason ?? "no-urgent-items";
+        const reply = `heartbeat noop: ${reason}`;
+        await appendThreadLog(paths, {
+          type: "system",
+          ts: `${Date.now() / 1000}`,
+          threadTs: "heartbeat",
           text: reply,
         });
+        return { reply, status: "noop", reason };
       }
+      const review = decision.review;
+      const reply = await formatManagerReviewForSlack(webClient, logger, review);
+      await webClient.chat.postMessage({
+        channel: channelId,
+        text: reply,
+      });
 
       await appendThreadLog(paths, {
         type: "assistant",
@@ -287,7 +293,7 @@ async function main(): Promise<void> {
         text: reply,
       });
 
-      return { reply };
+      return { reply, status: "posted" as const };
     },
   });
   await heartbeatService.start();

@@ -73,6 +73,14 @@ const followupLedgerEntrySchema = z.object({
   lastPublicFollowupAt: z.string().datetime().optional(),
   lastEscalationAt: z.string().datetime().optional(),
   lastCategory: z.string().optional(),
+  status: z.enum(["awaiting-response", "resolved"]).optional(),
+  requestText: z.string().optional(),
+  sourceChannelId: z.string().optional(),
+  sourceThreadTs: z.string().optional(),
+  sourceMessageTs: z.string().optional(),
+  assigneeDisplayName: z.string().optional(),
+  rePingCount: z.number().int().min(0).optional(),
+  resolvedAt: z.string().datetime().optional(),
 });
 
 const planningLedgerEntrySchema = z.object({
