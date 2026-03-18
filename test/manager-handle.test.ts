@@ -761,6 +761,98 @@ describe("handleManagerMessage clarification flow", () => {
     );
   });
 
+  it("asks for clarification instead of forcing a weak status match onto the latest child", async () => {
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
+        id: "parent-1",
+        identifier: "AIC-500",
+        title: "ログイン画面の不具合",
+        url: "https://linear.app/kyaukyuai/issue/AIC-500",
+        relations: [],
+        inverseRelations: [],
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-501",
+          title: "テスト環境でログインフローを実行しスクリーンショット付きで再現手順を記録する",
+          url: "https://linear.app/kyaukyuai/issue/AIC-501",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-502",
+          title: "直近のデプロイ履歴・設定変更履歴を確認し不具合発生タイミングと照合する",
+          url: "https://linear.app/kyaukyuai/issue/AIC-502",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
+    linearMocks.getLinearIssue.mockImplementation(async (issueId: string) => ({
+      id: issueId,
+      identifier: issueId,
+      title: issueId === "AIC-501"
+        ? "テスト環境でログインフローを実行しスクリーンショット付きで再現手順を記録する"
+        : issueId === "AIC-502"
+          ? "直近のデプロイ履歴・設定変更履歴を確認し不具合発生タイミングと照合する"
+          : "ログイン画面の不具合",
+      url: `https://linear.app/kyaukyuai/issue/${issueId}`,
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-1", name: "Started", type: "started" },
+      latestActionKind: issueId === "AIC-502" ? "progress" : "other",
+      comments: issueId === "AIC-502"
+        ? [{ id: "comment-1", body: "## Progress update\nデプロイ履歴を確認しています", createdAt: "2026-03-17T04:01:00.000Z" }]
+        : [{ id: "comment-2", body: "## Slack source\n再現手順の確認", createdAt: "2026-03-17T04:01:00.000Z" }],
+      relations: [],
+      inverseRelations: [],
+    }));
+    slackContextMocks.getSlackThreadContext.mockResolvedValue({
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "thread-weak-routing",
+      entries: [
+        { type: "user", ts: "1", threadTs: "thread-weak-routing", text: "ログイン画面の不具合を調査して" },
+        { type: "assistant", ts: "2", threadTs: "thread-weak-routing", text: "AIC-501 と AIC-502 を作成しました" },
+      ],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-weak-routing",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "期限は 2026-03-20 で、作業は\n- テスト環境でログインフローを実行しスクリーンショット付きで再現手順を記録する\n- 直近のデプロイ履歴・設定変更履歴を確認し不具合発生タイミングと照合する\nに分けて進めて",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-weak-routing",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "進捗です。原因は再現できています。次は API 仕様を確認します。本日中に更新します。",
+      },
+      new Date("2026-03-17T04:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("進捗を反映したい issue を特定できませんでした。");
+    expect(result.reply).toContain("AIC-501");
+    expect(result.reply).toContain("AIC-502");
+    expect(result.reply).toContain("当てはまるものが無ければ `新規 task` と返してください。");
+    expect(linearMocks.addLinearProgressComment).not.toHaveBeenCalled();
+  });
+
   it("marks a thread-linked issue as blocked", async () => {
     linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
       id: "issue-1",
@@ -815,6 +907,7 @@ describe("handleManagerMessage clarification flow", () => {
 
     expect(reply).toContain("AIC-431 / 設計整理 / 最新: 進捗 / 理由: 直近 thread focus");
     expect(reply).toContain("AIC-432 / 設計検証 / 最新: blocked / 理由: 最新 intake entry");
+    expect(reply).toContain("当てはまるものが無ければ `新規 task` と返してください。");
   });
 
   it("writes a structured research comment for research-first requests", async () => {
@@ -1042,7 +1135,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("対象: AIC-11 ログイン画面の不具合修正 配下 / AIC-150 調査: ログイン画面の不具合");
+    expect(result.reply).toContain("対象: AIC-150 調査: ログイン画面の不具合修正 / 親: AIC-11");
     expect(result.reply).toContain("次アクション: 調査結果をもとに必要なら実行 task を追加します。");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(1);
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledWith(

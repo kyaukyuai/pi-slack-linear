@@ -104,6 +104,11 @@ describe("manager helpers", () => {
 
   it("detects research requests and resolves owners", () => {
     expect(needsResearchTask("ログイン画面の不具合を調査して")).toBe(true);
+    expect(needsResearchTask("ログイン画面の不具合を調査して。API 仕様の確認と修正方針の整理が必要です。")).toBe(true);
+    expect(needsResearchTask(`期限は 2026-03-20 で、作業は
+- API 仕様の確認
+- デプロイ履歴の確認
+に分けて進めて`)).toBe(false);
     expect(chooseOwner("ログイン画面の不具合修正", ownerMap).resolution).toBe("mapped");
     expect(chooseOwner("バックオフィス運用タスク", ownerMap).resolution).toBe("fallback");
   });

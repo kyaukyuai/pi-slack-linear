@@ -114,6 +114,11 @@ export interface RiskAssessment {
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const RESEARCH_PATTERN = /(調査|確認|検証|比較|リサーチ|洗い出し|調べ)/i;
+const RESEARCH_TITLE_PATTERN = /(調査|検証|比較|リサーチ|洗い出し|調べ)/i;
+const EXPLICIT_RESEARCH_REQUEST_PATTERN =
+  /(?:を|について)?(調査|検証|比較|リサーチ|洗い出し|調べ)(しておいて|して|お願いします|お願い|したい|してほしい)?(?:[。!！?？\s]|$)/i;
+const EXPLICIT_CONFIRM_REQUEST_PATTERN =
+  /(?:を|について)?確認(しておいて|して|お願いします|お願い|したい|してほしい)(?:[。!！?？\s]|$)/i;
 const REQUEST_PATTERN =
   /(linear|issue|イシュー|ticket|チケット|todo|タスク|登録|追加|作成|作って|しておいて|お願い|お願いします|対応して|やっておいて|進めて|進めておいて)/i;
 const COMPLETED_PATTERN = /(完了|終わった|終わりました|done|closed?|完了した)/i;
@@ -126,6 +131,27 @@ const AMBIGUOUS_EXECUTION_PATTERN = /(進めておいて|進めて|よしなに|
 const ACTIONABLE_RESEARCH_PATTERN = /(確認|修正|対応|実装|調査|整理|洗い出し|作成|更新|共有|再現|検証|比較)/i;
 const LIST_MARKER_PATTERN = /^\s*(?:[-*・•]\s+|\d+[.)]\s+)/;
 const LIST_HEADING_PATTERN = /^(?:タスク|todo|issue|イシュー)?\s*一覧$/i;
+const SIGNAL_TERM_STOPWORDS = new Set([
+  "進捗",
+  "完了",
+  "更新",
+  "確認",
+  "対応",
+  "調査",
+  "整理",
+  "作業",
+  "原因",
+  "必要",
+  "共有",
+  "待ち",
+  "本日中",
+  "今日",
+  "明日",
+  "状態",
+  "issue",
+  "task",
+  "linear",
+]);
 
 interface ParsedTaskSegment {
   raw: string;
@@ -196,7 +222,22 @@ export function classifyManagerSignal(text: string): ManagerMessageKind {
 }
 
 export function needsResearchTask(text: string): boolean {
-  return RESEARCH_PATTERN.test(text);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  const bulletLines = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => LIST_MARKER_PATTERN.test(line))
+    .map((line) => stripLeadingListMarker(line))
+    .filter(Boolean);
+  if (bulletLines.length >= 2) return false;
+  if (extractInlineTaskSegments(text).length >= 2) return false;
+  if (/(?:作業|対応|タスク)(?:は|を)?.+に分けて/i.test(normalized)) return false;
+  return EXPLICIT_RESEARCH_REQUEST_PATTERN.test(normalized) || EXPLICIT_CONFIRM_REQUEST_PATTERN.test(normalized);
+}
+
+function isResearchIssueTitle(text: string): boolean {
+  return RESEARCH_TITLE_PATTERN.test(text);
 }
 
 function extractInlineTaskSegments(text: string): string[] {
@@ -297,8 +338,8 @@ function chooseExistingResearchParent(duplicates: LinearIssue[], baseTitle: stri
     .sort((left, right) => {
       const leftTitle = normalizeText(left.title);
       const rightTitle = normalizeText(right.title);
-      const leftIsResearch = needsResearchTask(left.title);
-      const rightIsResearch = needsResearchTask(right.title);
+      const leftIsResearch = isResearchIssueTitle(left.title);
+      const rightIsResearch = isResearchIssueTitle(right.title);
       const leftIncludesBase = leftTitle.includes(normalizedBase) || normalizedBase.includes(leftTitle);
       const rightIncludesBase = rightTitle.includes(normalizedBase) || normalizedBase.includes(rightTitle);
 
@@ -530,6 +571,7 @@ interface ThreadIssueCandidates {
 interface ScoredIssueTarget {
   issue: LinearIssue;
   score: number;
+  signalMatches: number;
 }
 
 interface RecentFocusText {
@@ -548,6 +590,10 @@ interface IssueTargetResolution {
   selectedIssueIds: string[];
   candidates: ResolvedIssueCandidate[];
   reason: "explicit" | "thread" | "missing" | "ambiguous";
+}
+
+function compactLinearIssues(issues: Array<LinearIssue | undefined>): LinearIssue[] {
+  return issues.filter((issue): issue is LinearIssue => Boolean(issue));
 }
 
 function collectThreadIssueCandidates(
@@ -620,6 +666,33 @@ function tokenizeForMatching(text: string): string[] {
     .filter((token) => token.length >= 2);
 }
 
+function extractSignalTerms(text: string): string[] {
+  const normalized = text
+    .replace(/[。！!？?,、/()（）[\]{}「」『』:：]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return [];
+
+  return unique(
+    normalized
+      .split(/\s+/)
+      .flatMap((segment) => segment.split(/[ぁ-ん]+/))
+      .map((token) => trimJapaneseParticles(token).toLowerCase())
+      .filter((token) => token.length >= 2)
+      .filter((token) => !SIGNAL_TERM_STOPWORDS.has(token)),
+  ).slice(0, 8);
+}
+
+function countLooseSignalOverlap(leftTerms: string[], rightTerms: string[]): number {
+  let overlap = 0;
+  for (const left of leftTerms) {
+    if (rightTerms.some((right) => right === left || right.includes(left) || left.includes(right))) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
 function countTokenOverlap(left: string, right: string): number {
   const leftTokens = new Set(tokenizeForMatching(left));
   const rightTokens = new Set(tokenizeForMatching(right));
@@ -664,10 +737,21 @@ function scoreIssueTargetCandidate(
   candidates: ThreadIssueCandidates,
   kind: Exclude<ManagerMessageKind, "conversation" | "request">,
   recentFocusTexts: RecentFocusText[],
-): number {
+): ScoredIssueTarget {
   let score = 0;
   const normalizedIssueTitle = normalizeText(issue.title);
   const normalizedFocus = normalizeText(focusText);
+  const focusTerms = extractSignalTerms(focusText);
+  const titleSignalMatches = countLooseSignalOverlap(focusTerms, extractSignalTerms(issue.title));
+  const commentSignalMatches = Math.max(
+    0,
+    ...getRecentLinearCommentBodies(issue).map((commentText) => countLooseSignalOverlap(focusTerms, extractSignalTerms(commentText))),
+  );
+  const recentSlackSignalMatches = Math.max(
+    0,
+    ...recentFocusTexts.map((recentFocus) => countLooseSignalOverlap(focusTerms, extractSignalTerms(recentFocus.text))),
+  );
+  const signalMatches = Math.max(titleSignalMatches, commentSignalMatches, recentSlackSignalMatches);
 
   if (candidates.childIssueIds.has(issue.identifier)) {
     score += 22;
@@ -694,6 +778,10 @@ function scoreIssueTargetCandidate(
       score += Math.min(countTokenOverlap(issue.title, focusText) * 12, 24);
     }
   }
+
+  score += titleSignalMatches * 16;
+  score += commentSignalMatches * 10;
+  score += recentSlackSignalMatches * 6;
 
   for (const recentFocus of recentFocusTexts) {
     if (!recentFocus.text) continue;
@@ -748,7 +836,15 @@ function scoreIssueTargetCandidate(
     score += 4;
   }
 
-  return score;
+  if (focusTerms.length > 0 && signalMatches === 0) {
+    score -= 20;
+  }
+
+  return {
+    issue,
+    score,
+    signalMatches,
+  };
 }
 
 async function resolveIssueTargetsFromThread(
@@ -785,14 +881,14 @@ async function resolveIssueTargetsFromThread(
   }
 
   const focusText = deriveStatusFocusText(message.text);
+  const focusTerms = extractSignalTerms(focusText);
   const recentFocusTexts = await loadRecentThreadFocusTexts(workspaceDir, message);
   const candidateIssues = (await Promise.all(
     candidates.candidateIds.map(async (issueId) => {
       try {
         const issue = await getLinearIssue(issueId, env, undefined, { includeComments: true });
         return {
-          issue,
-          score: scoreIssueTargetCandidate(issue, focusText, candidates, kind, recentFocusTexts),
+          ...scoreIssueTargetCandidate(issue, focusText, candidates, kind, recentFocusTexts),
         };
       } catch {
         return undefined;
@@ -813,8 +909,10 @@ async function resolveIssueTargetsFromThread(
   const second = candidateIssues[1];
   const topScore = top?.score ?? 0;
   const secondScore = second?.score ?? Number.NEGATIVE_INFINITY;
+  const requiredSignalMatches = focusTerms.length >= 2 ? 2 : focusTerms.length === 1 ? 1 : 0;
+  const hasStrongSignalMatch = requiredSignalMatches === 0 || (top?.signalMatches ?? 0) >= requiredSignalMatches;
 
-  if (top && topScore >= 24 && topScore - secondScore >= 8) {
+  if (top && topScore >= 24 && topScore - secondScore >= 8 && hasStrongSignalMatch) {
     return {
       selectedIssueIds: [top.issue.identifier],
       candidates: candidateIssues.map((item) => ({
@@ -855,6 +953,7 @@ export function formatIssueSelectionReply(
     for (const issue of issues.slice(0, 5)) {
       lines.push(`- ${issue.issueId}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}${issue.focusReason ? ` / 理由: ${issue.focusReason}` : ""}`);
     }
+    lines.push("当てはまるものが無ければ `新規 task` と返してください。");
   } else {
     lines.push("同じ thread に紐づく issue が無かったため、`AIC-123` のように issue ID を含めてください。");
   }
@@ -1137,13 +1236,18 @@ function truncateSlackText(text: string, maxLength = 80): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function buildSlackTargetLabel(issue: Pick<LinearIssue, "identifier" | "title">): string {
-  return `${issue.identifier} ${truncateSlackText(issue.title)}`;
+function buildSlackTargetLabel(issue: Pick<LinearIssue, "identifier" | "title">, maxLength = 80): string {
+  return `${issue.identifier} ${truncateSlackText(issue.title, maxLength)}`;
 }
 
-function formatChildIssueSummaryForSlack(children: LinearIssue[], limit = 2): string | undefined {
+function formatChildIssueSummaryForSlack(
+  children: LinearIssue[],
+  options?: { limit?: number; titleMaxLength?: number },
+): string | undefined {
   if (children.length === 0) return undefined;
-  const visible = children.slice(0, limit).map((issue) => buildSlackTargetLabel(issue));
+  const limit = options?.limit ?? 2;
+  const titleMaxLength = options?.titleMaxLength ?? 80;
+  const visible = children.slice(0, limit).map((issue) => buildSlackTargetLabel(issue, titleMaxLength));
   const suffix = children.length > limit ? ` (+${children.length - limit}件)` : "";
   return `子task: ${visible.join(" / ")}${suffix}`;
 }
@@ -1541,12 +1645,15 @@ function buildResearchSlackSummary(args: {
   followupChildren?: LinearIssue[];
 }): string {
   const lines = [
-    `分かったこと: ${truncateSlackText(args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。", 90)}`,
-    `未確定事項: ${truncateSlackText(args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。", 90)}`,
+    `分かったこと: ${truncateSlackText(args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。", 72)}`,
+    `未確定事項: ${truncateSlackText(args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。", 72)}`,
   ];
   if ((args.followupChildren?.length ?? 0) > 0) {
     lines.push(`次アクション: 調査結果をもとに追加 task を ${args.followupChildren!.length} 件作成しました。`);
-    const childSummary = formatChildIssueSummaryForSlack(args.followupChildren ?? []);
+    const childSummary = formatChildIssueSummaryForSlack(args.followupChildren ?? [], {
+      limit: 2,
+      titleMaxLength: 32,
+    });
     if (childSummary) {
       lines.push(childSummary);
     }
@@ -1559,8 +1666,8 @@ function buildResearchSlackSummary(args: {
   return formatThreadReplyForSlack({
     headline: "調査内容を Linear に記録しました。",
     target: args.reusedParent
-      ? `${buildSlackTargetLabel(args.parent)} 配下 / ${buildSlackTargetLabel(args.researchChild)}`
-      : buildSlackTargetLabel(args.parent),
+      ? `${buildSlackTargetLabel(args.researchChild, 48)} / 親: ${args.parent.identifier}`
+      : buildSlackTargetLabel(args.researchChild, 48),
     lines,
     maxLines: 6,
   });
@@ -2378,7 +2485,10 @@ export async function handleManagerMessage(
     );
     createdParent = batch.parent;
     parent = batch.parent;
-    createdChildren = batch.children;
+    createdChildren = compactLinearIssues(batch.children);
+    if (createdChildren.length !== plannedChildren.length) {
+      throw new Error(`Linear batch create returned ${createdChildren.length}/${plannedChildren.length} children`);
+    }
     researchChild = createdChildren.find((child) => child.title.startsWith("調査:"));
   } else {
     createdParent = needsNewParent
@@ -2414,6 +2524,10 @@ export async function handleManagerMessage(
         },
         env,
       );
+
+      if (!createdChild) {
+        throw new Error(`Linear create returned no issue for child: ${child.title}`);
+      }
 
       createdChildren.push(createdChild);
       if (child.isResearch) {
