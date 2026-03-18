@@ -1655,6 +1655,7 @@ describe("handleManagerMessage clarification flow", () => {
   });
 
   it("keeps owner-missing follow-ups unresolved until an assignee is actually set", async () => {
+    const repositories = createFileBackedManagerRepositories(systemPaths);
     await writeFile(systemPaths.intakeLedgerFile, `${JSON.stringify([
       {
         sourceChannelId: "C0ALAMDRB9V",
@@ -1678,6 +1679,31 @@ describe("handleManagerMessage clarification flow", () => {
         requestText: "担当を決めて共有してください。",
       },
     ], null, 2)}\n`);
+    await repositories.workgraph.append([
+      {
+        type: "planning.child_created",
+        occurredAt: "2026-03-17T00:00:00.000Z",
+        threadKey: "C0ALAMDRB9V:thread-owner-missing",
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-owner-missing",
+        sourceMessageTs: "msg-1",
+        issueId: "AIC-305",
+        title: "担当未設定の task",
+        kind: "execution",
+      },
+      {
+        type: "intake.created",
+        occurredAt: "2026-03-17T00:00:00.000Z",
+        threadKey: "C0ALAMDRB9V:thread-owner-missing",
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-owner-missing",
+        sourceMessageTs: "msg-1",
+        messageFingerprint: "owner-missing",
+        childIssueIds: ["AIC-305"],
+        planningReason: "single-issue",
+        lastResolvedIssueId: "AIC-305",
+      },
+    ]);
 
     linearMocks.getLinearIssue.mockResolvedValueOnce({
       id: "issue-305",

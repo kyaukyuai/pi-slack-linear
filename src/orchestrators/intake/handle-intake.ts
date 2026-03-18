@@ -46,7 +46,6 @@ import {
 } from "./formatting.js";
 import {
   buildIntakeKey,
-  buildIssueFocusEvent,
   type IntakeLedgerSupport,
 } from "../shared/intake-ledger.js";
 import {
@@ -233,16 +232,7 @@ export async function handleIntakeRequest({
         childIssueIds: duplicates.map((issue) => issue.identifier),
         status: "linked-existing",
         lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
-        issueFocusHistory: duplicates.length === 1 && duplicates[0]
-          ? [buildIssueFocusEvent(
-              duplicates[0].identifier,
-              "reuse",
-              "duplicate-reuse",
-              requestMessage.text,
-              now,
-              ledgerSupport,
-            )]
-          : [],
+        issueFocusHistory: [],
         originalText: requestMessage.text,
         clarificationReasons: [],
         createdAt: ledgerSupport.nowIso(now),
@@ -546,24 +536,7 @@ export async function handleIntakeRequest({
       originalText: requestMessage.text,
       clarificationReasons: [],
       lastResolvedIssueId: researchChild.identifier,
-      issueFocusHistory: [
-        ...(parent ? [buildIssueFocusEvent(
-            parent.identifier,
-            research ? "research-parent" : "create-parent",
-            planningReason,
-            requestMessage.text,
-            now,
-            ledgerSupport,
-          )] : []),
-        ...allCreatedChildren.map((issue) => buildIssueFocusEvent(
-          issue.identifier,
-          issue.identifier === researchChild.identifier ? "research-child" : "create-child",
-          planningReason,
-          issue.title,
-          now,
-          ledgerSupport,
-        )),
-      ],
+      issueFocusHistory: [],
       createdAt: ledgerSupport.nowIso(now),
       updatedAt: ledgerSupport.nowIso(now),
     };
@@ -639,24 +612,7 @@ export async function handleIntakeRequest({
     originalText: requestMessage.text,
     clarificationReasons: [],
     lastResolvedIssueId: createdChildren.length === 1 ? createdChildren[0]?.identifier : createdChildren.length === 0 ? parent?.identifier : undefined,
-    issueFocusHistory: [
-      ...(parent ? [buildIssueFocusEvent(
-          parent.identifier,
-          "create-parent",
-          planningReason,
-          requestMessage.text,
-          now,
-          ledgerSupport,
-        )] : []),
-      ...createdChildren.map((issue) => buildIssueFocusEvent(
-        issue.identifier,
-        "create-child",
-        planningReason,
-        issue.title,
-        now,
-        ledgerSupport,
-      )),
-    ],
+    issueFocusHistory: [],
     createdAt: ledgerSupport.nowIso(now),
     updatedAt: ledgerSupport.nowIso(now),
   };

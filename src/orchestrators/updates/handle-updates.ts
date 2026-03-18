@@ -41,7 +41,6 @@ import {
   formatStatusReply,
 } from "./reply-format.js";
 import {
-  buildIssueFocusEvent,
   upsertThreadIntakeEntry,
   type IntakeLedgerSupport,
 } from "../shared/intake-ledger.js";
@@ -217,16 +216,6 @@ export async function handleManagerUpdates({
         message,
         {
           lastResolvedIssueId: updatedIssue.identifier,
-          issueFocusHistory: [
-            buildIssueFocusEvent(
-              updatedIssue.identifier,
-              "followup-response",
-              "followup",
-              message.text,
-              now,
-              ledgerSupport,
-            ),
-          ],
         },
         now,
         ledgerSupport,
@@ -253,7 +242,6 @@ export async function handleManagerUpdates({
   }
 
   const resolution = await resolveIssueTargetsFromThread(
-    intakeLedger,
     message,
     signal,
     config.workspaceDir,
@@ -299,16 +287,6 @@ export async function handleManagerUpdates({
     {
       status: signal === "progress" ? "progressed" : signal,
       lastResolvedIssueId: targetIssueIds[0],
-      issueFocusHistory: targetIssueIds.map((issueId) => (
-        buildIssueFocusEvent(
-          issueId,
-          signal,
-          "thread-status",
-          message.text,
-          now,
-          ledgerSupport,
-        )
-      )),
     },
     now,
     ledgerSupport,

@@ -3,7 +3,6 @@ import {
   type LinearCommandEnv,
   type LinearIssue,
 } from "../../lib/linear.js";
-import type { IntakeLedgerEntry } from "../../state/manager-state-contract.js";
 import { getSlackThreadContext } from "../../lib/slack-context.js";
 import type { WorkgraphRepository } from "../../state/workgraph/file-backed-workgraph-repository.js";
 import { buildWorkgraphThreadKey } from "../../state/workgraph/events.js";
@@ -95,47 +94,6 @@ export function extractIssueIdentifiers(text: string): string[] {
       .map((match) => match[1] ?? "")
       .filter(Boolean),
   );
-}
-
-function collectEntryIssueIds(entry: IntakeLedgerEntry): string[] {
-  return unique([
-    entry.lastResolvedIssueId,
-    entry.parentIssueId,
-    ...entry.childIssueIds,
-  ].filter(Boolean)) as string[];
-}
-
-function findThreadEntries(
-  intakeLedger: IntakeLedgerEntry[],
-  message: Pick<ThreadLikeMessage, "channelId" | "rootThreadTs">,
-): IntakeLedgerEntry[] {
-  return intakeLedger.filter((entry) => (
-    entry.sourceChannelId === message.channelId && entry.sourceThreadTs === message.rootThreadTs
-  ));
-}
-
-function collectThreadIssueCandidatesFromLedger(
-  intakeLedger: IntakeLedgerEntry[],
-  message: Pick<ThreadLikeMessage, "channelId" | "rootThreadTs">,
-): ThreadIssueCandidates {
-  const threadEntries = [...findThreadEntries(intakeLedger, message)].reverse();
-  const latestEntry = threadEntries[0];
-  const childIssueIds = new Set(
-    threadEntries.flatMap((entry) => entry.childIssueIds ?? []).filter(Boolean),
-  );
-  const parentIssueIds = new Set(
-    threadEntries.map((entry) => entry.parentIssueId).filter(Boolean) as string[],
-  );
-
-  return {
-    candidateIds: unique(threadEntries.flatMap((entry) => collectEntryIssueIds(entry))),
-    childIssueIds,
-    parentIssueIds,
-    latestEntryIssueIds: latestEntry ? collectEntryIssueIds(latestEntry) : [],
-    lastResolvedIssueId: latestEntry?.lastResolvedIssueId
-      ?? threadEntries.find((entry) => entry.lastResolvedIssueId)?.lastResolvedIssueId,
-    latestFocusIssueId: latestEntry?.issueFocusHistory?.slice(-1)[0]?.issueId,
-  };
 }
 
 async function collectThreadIssueCandidatesFromWorkgraph(
@@ -411,12 +369,11 @@ function scoreIssueTargetCandidate(
 }
 
 export async function resolveIssueTargetsFromThread(
-  intakeLedger: IntakeLedgerEntry[],
   message: ThreadLikeMessage,
   kind: UpdateSignal,
   workspaceDir: string,
   env: LinearCommandEnv,
-  workgraph?: WorkgraphRepository,
+  workgraph: WorkgraphRepository,
 ): Promise<IssueTargetResolution> {
   const explicitIssueIds = extractIssueIdentifiers(message.text);
   if (explicitIssueIds.length > 0) {
@@ -427,16 +384,8 @@ export async function resolveIssueTargetsFromThread(
     };
   }
 
-  const legacyCandidates = collectThreadIssueCandidatesFromLedger(intakeLedger, message);
-  const workgraphCandidates = workgraph
-    ? await collectThreadIssueCandidatesFromWorkgraph(workgraph, message)
-    : undefined;
-  const candidates = workgraphCandidates?.candidateIds.length
-    ? {
-        ...workgraphCandidates,
-      }
-    : legacyCandidates;
-  if (candidates.candidateIds.length === 0) {
+  const candidates = await collectThreadIssueCandidatesFromWorkgraph(workgraph, message);
+  if (!candidates || candidates.candidateIds.length === 0) {
     return {
       selectedIssueIds: [],
       candidates: [],

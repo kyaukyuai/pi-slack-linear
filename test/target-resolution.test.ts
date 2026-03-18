@@ -35,7 +35,6 @@ describe("resolveIssueTargetsFromThread", () => {
     ]);
 
     const resolution = await resolveIssueTargetsFromThread(
-      [],
       {
         channelId: "C123",
         rootThreadTs: "thread-1",

@@ -24,13 +24,6 @@ function findThreadEntries(
   ));
 }
 
-function appendIssueFocusHistory(
-  existing: IntakeLedgerEntry["issueFocusHistory"] | undefined,
-  nextEvents: NonNullable<IntakeLedgerEntry["issueFocusHistory"]>,
-): NonNullable<IntakeLedgerEntry["issueFocusHistory"]> {
-  return [...(existing ?? []), ...nextEvents].slice(-20);
-}
-
 export function findPendingClarification(
   intakeLedger: IntakeLedgerEntry[],
   message: ThreadScopedMessage,
@@ -50,23 +43,6 @@ export function buildIntakeKey(
   return `${entry.sourceChannelId}:${entry.sourceThreadTs}:${entry.messageFingerprint}`;
 }
 
-export function buildIssueFocusEvent(
-  issueId: string,
-  actionKind: string,
-  source: string,
-  textSnippet: string | undefined,
-  now: Date,
-  support: Pick<IntakeLedgerSupport, "nowIso">,
-): NonNullable<IntakeLedgerEntry["issueFocusHistory"]>[number] {
-  return {
-    issueId,
-    actionKind,
-    source,
-    ts: support.nowIso(now),
-    textSnippet: textSnippet?.replace(/\s+/g, " ").trim().slice(0, 140) || undefined,
-  };
-}
-
 export function upsertThreadIntakeEntry(
   intakeLedger: IntakeLedgerEntry[],
   message: ThreadMessage,
@@ -78,9 +54,6 @@ export function upsertThreadIntakeEntry(
   const latest = threadEntries[threadEntries.length - 1];
 
   if (!latest) {
-    const issueFocusHistory = patch.issueFocusHistory
-      ? appendIssueFocusHistory([], patch.issueFocusHistory)
-      : [];
     return [
       ...intakeLedger,
       {
@@ -94,8 +67,8 @@ export function upsertThreadIntakeEntry(
         originalText: message.text,
         createdAt: support.nowIso(now),
         updatedAt: support.nowIso(now),
+        issueFocusHistory: [],
         ...patch,
-        issueFocusHistory,
       },
     ];
   }
@@ -105,9 +78,7 @@ export function upsertThreadIntakeEntry(
       ? {
           ...entry,
           ...patch,
-          issueFocusHistory: patch.issueFocusHistory
-            ? appendIssueFocusHistory(entry.issueFocusHistory, patch.issueFocusHistory)
-            : entry.issueFocusHistory,
+          issueFocusHistory: patch.issueFocusHistory ?? entry.issueFocusHistory ?? [],
           updatedAt: support.nowIso(now),
         }
       : entry
