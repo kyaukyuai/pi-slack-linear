@@ -6,9 +6,11 @@ import {
   buildAgentPrompt,
   buildFollowupResolutionPrompt,
   buildResearchSynthesisPrompt,
+  buildTaskPlanningPrompt,
   buildSystemPrompt,
   parseFollowupResolutionReply,
   parseResearchSynthesisReply,
+  parseTaskPlanningReply,
   type ThreadPromptContext,
 } from "../src/lib/pi-session.js";
 import type { ThreadPaths } from "../src/lib/thread-workspace.js";
@@ -157,6 +159,37 @@ describe("prompt helpers", () => {
       nextActions: [
         { title: "API 仕様の確認", purpose: "仕様差分を確認する", confidence: 0.8 },
         { title: "修正方針の整理", purpose: "方針を整理する", confidence: 0.7 },
+      ],
+    });
+  });
+
+  it("builds and parses task planning prompts", () => {
+    const prompt = buildTaskPlanningPrompt({
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      originalRequest: "OPT社と金澤クローンAI開発の契約を締結する必要があります。",
+      latestUserMessage: "ドラフト版作成後、OPT 田平さんに確認依頼する必要あり",
+      combinedRequest: "OPT社と金澤クローンAI開発の契約を締結する必要があります。\n契約書のドラフト版の作成依頼済み\nドラフト版作成後、OPT 田平さんに確認依頼する必要あり",
+      clarificationQuestion: undefined,
+      currentDate: "2026-03-18",
+    });
+
+    expect(prompt).toContain("Reply with a single JSON object only.");
+    expect(prompt).toContain('"planningReason":"single-issue"|"complex-request"|"research-first"');
+    expect(prompt).toContain('Example normalization: "契約書のドラフト版の作成依頼済み" -> "ドラフト作成".');
+
+    const parsed = parseTaskPlanningReply(`\`\`\`json
+{"action":"create","planningReason":"complex-request","parentTitle":"OPT社と金澤クローンAI開発の契約締結","parentDueDate":null,"children":[{"title":"ドラフト作成","kind":"execution","dueDate":null},{"title":"OPT 田平さんへ契約書確認依頼","kind":"execution","dueDate":null,"assigneeHint":"OPT 田平さん"}]}
+\`\`\``);
+
+    expect(parsed).toEqual({
+      action: "create",
+      planningReason: "complex-request",
+      parentTitle: "OPT社と金澤クローンAI開発の契約締結",
+      parentDueDate: undefined,
+      children: [
+        { title: "ドラフト作成", kind: "execution", dueDate: undefined, assigneeHint: undefined },
+        { title: "OPT 田平さんへ契約書確認依頼", kind: "execution", dueDate: undefined, assigneeHint: "OPT 田平さん" },
       ],
     });
   });

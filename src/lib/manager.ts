@@ -32,6 +32,7 @@ import {
 import {
   runFollowupResolutionTurn,
   runResearchSynthesisTurn,
+  runTaskPlanningTurn,
   type FollowupResolutionResult,
   type ResearchNextAction,
   type ResearchSynthesisResult,
@@ -255,6 +256,18 @@ function extractInlineTaskSegments(text: string): string[] {
   );
 }
 
+function hasExplicitTaskBreakdown(text: string): boolean {
+  const bulletLines = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => LIST_MARKER_PATTERN.test(line))
+    .map((line) => stripLeadingListMarker(line))
+    .filter(Boolean);
+
+  if (bulletLines.length >= 2) return true;
+  return extractInlineTaskSegments(text).length >= 2;
+}
+
 export function extractTaskSegments(text: string): string[] {
   const listHeading = getListHeading(text);
   const bulletLines = text
@@ -287,6 +300,17 @@ export function extractTaskSegments(text: string): string[] {
   }
 
   return [];
+}
+
+function isNarrativeTaskBreakdown(text: string, segments: string[]): boolean {
+  if (segments.length < 2) return false;
+  if (hasExplicitTaskBreakdown(text)) return false;
+
+  const nonEmptyLines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return nonEmptyLines.length >= 2;
 }
 
 export function deriveIssueTitle(text: string): string {
@@ -329,7 +353,66 @@ function derivePlanningTitle(text: string, research: boolean, segments: string[]
   if (segments.length >= 3 && text.split("\n").some((line) => LIST_MARKER_PATTERN.test(line))) {
     return summarizeParentTitleFromSegments(segments) ?? "Slack から取り込んだタスク一覧";
   }
+  if (isNarrativeTaskBreakdown(text, segments)) {
+    return deriveIssueTitle(segments[0] ?? text);
+  }
   return research ? deriveResearchTitle(text) : deriveIssueTitle(text);
+}
+
+function filterChildSegmentsForPlanning(text: string, segments: string[], planningTitle: string): string[] {
+  if (!isNarrativeTaskBreakdown(text, segments)) {
+    return segments;
+  }
+
+  const normalizedParent = normalizeText(planningTitle);
+  const filtered = segments.filter((segment) => normalizeText(deriveIssueTitle(segment)) !== normalizedParent);
+  return filtered.length > 0 ? filtered : segments;
+}
+
+function inferDocumentHint(texts: string[]): string | undefined {
+  for (const text of texts) {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    const directMatch = normalized.match(/([^\s、,。]+書)(?=(?:の|を|へ|に|確認|ドラフト|作成|送付|レビュー|締結))/);
+    if (directMatch?.[1]) {
+      return directMatch[1];
+    }
+  }
+
+  for (const text of texts) {
+    if (/契約/.test(text)) {
+      return "契約書";
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeNarrativeChildTitle(
+  text: string,
+  fallbackTitle: string,
+  context: { requestText: string; planningTitle: string; segments: string[] },
+): string {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  const documentHint = inferDocumentHint([normalizedText, ...context.segments, context.requestText, context.planningTitle]);
+
+  const confirmRequestMatch = normalizedText.match(/(?:.+?(?:後|完了後)[、,]\s*)?(.+?)(?:に|へ)確認依頼(?:を)?(?:する)?(?:必要あり|必要があります|が必要|予定|待ち|済み)?$/);
+  if (confirmRequestMatch?.[1]) {
+    const addressee = confirmRequestMatch[1].trim().replace(/\s+/g, " ");
+    return `${addressee}へ${documentHint ? `${documentHint}` : ""}確認依頼`;
+  }
+
+  if (/ドラフト(?:版)?/.test(normalizedText) && /(作成|作成依頼|作成依頼済み)/.test(normalizedText)) {
+    return "ドラフト作成";
+  }
+
+  return fallbackTitle
+    .replace(/依頼済み$/g, "依頼")
+    .replace(/(?:を|の)?作成依頼$/g, "作成")
+    .replace(/(?:する)?必要があります$/g, "")
+    .replace(/(?:する)?必要あり$/g, "")
+    .replace(/(?:が)?必要です$/g, "")
+    .replace(/(?:が)?必要$/g, "")
+    .trim();
 }
 
 function chooseExistingResearchParent(duplicates: LinearIssue[], baseTitle: string): LinearIssue | undefined {
@@ -2339,9 +2422,23 @@ export async function handleManagerMessage(
     };
   }
 
-  const clarificationNeeds = detectClarificationNeeds(requestMessage.text, now);
-  const primaryTitle = deriveIssueTitle(originalRequestText);
-  if (clarificationNeeds.length > 0) {
+  const planningPaths = buildThreadPaths(config.workspaceDir, requestMessage.channelId, requestMessage.rootThreadTs);
+  const taskPlan = await runTaskPlanningTurn(
+    config,
+    planningPaths,
+    {
+      channelId: requestMessage.channelId,
+      rootThreadTs: requestMessage.rootThreadTs,
+      originalRequest: originalRequestText,
+      latestUserMessage: message.text,
+      combinedRequest: requestMessage.text,
+      clarificationQuestion: pendingClarification?.clarificationQuestion,
+      currentDate: toJstDate(now).toISOString().slice(0, 10),
+      taskKey: `${requestMessage.channelId}-${requestMessage.rootThreadTs}-task-plan`,
+    },
+  );
+
+  if (taskPlan.action === "clarify") {
     const clarificationEntry: IntakeLedgerEntry = {
       sourceChannelId: requestMessage.channelId,
       sourceThreadTs: requestMessage.rootThreadTs,
@@ -2350,8 +2447,8 @@ export async function handleManagerMessage(
       childIssueIds: [],
       status: "needs-clarification",
       originalText: requestMessage.text,
-      clarificationQuestion: formatClarificationReply(primaryTitle, clarificationNeeds),
-      clarificationReasons: clarificationNeeds,
+      clarificationQuestion: taskPlan.clarificationQuestion,
+      clarificationReasons: taskPlan.clarificationReasons,
       issueFocusHistory: [],
       createdAt: pendingClarification?.createdAt ?? nowIso(now),
       updatedAt: nowIso(now),
@@ -2367,13 +2464,14 @@ export async function handleManagerMessage(
     };
   }
 
-  const dueDate = extractDueDate(requestMessage.text, now);
-  const segmentsFromFollowup = pendingClarification ? extractTaskSegments(followupText) : [];
-  const segments = segmentsFromFollowup.length > 0 ? segmentsFromFollowup : extractTaskSegments(requestMessage.text);
-  const complex = isComplexRequest(originalRequestText) || segments.length >= 2;
-  const research = needsResearchTask(originalRequestText);
-  const planningTitle = derivePlanningTitle(originalRequestText, research, segments);
-  const globalDueDate = segments.length >= 2 ? extractGlobalDueDate(requestMessage.text, now) : dueDate;
+  const planningReason = taskPlan.planningReason;
+  const planningTitle = taskPlan.parentTitle ?? taskPlan.children[0]?.title;
+  if (!planningTitle) {
+    throw new Error("Task planner returned no planning title");
+  }
+  const primaryTitle = planningTitle;
+  const research = planningReason === "research-first" || taskPlan.children.some((child) => child.kind === "research");
+  const globalDueDate = taskPlan.parentDueDate;
   const duplicates = await searchLinearIssues(
     {
       query: planningTitle.slice(0, 32),
@@ -2409,33 +2507,25 @@ export async function handleManagerMessage(
     };
   }
 
-  const planningReason = research ? "research-first" : complex ? "complex-request" : "single-issue";
-  const rawChildren = research
-    ? [`調査: ${planningTitle}`]
-    : segments.length > 0
-      ? segments
-      : complex
-        ? [`実行: ${primaryTitle}`]
-        : [primaryTitle];
   const existingResearchParent = research ? chooseExistingResearchParent(duplicates, planningTitle) : undefined;
-  const needsNewParent = (complex || research) && !existingResearchParent;
+  const needsNewParent = Boolean(taskPlan.parentTitle) && !existingResearchParent;
   const usedFallbackOwners = new Set<string>();
   const parentOwner = needsNewParent ? chooseOwner(planningTitle, ownerMap) : undefined;
   if (parentOwner?.resolution === "fallback") {
     usedFallbackOwners.add(parentOwner.entry.id);
   }
 
-  const plannedChildren = rawChildren.map((childText) => {
-    const parsedChild = parseTaskSegment(childText, now);
-    const owner = chooseOwner(parsedChild.title, ownerMap);
-    if (!parsedChild.assignee && owner.resolution === "fallback") {
+  const plannedChildren = taskPlan.children.map((child) => {
+    const owner = chooseOwner(child.assigneeHint ?? child.title, ownerMap);
+    if (!child.assigneeHint && owner.resolution === "fallback") {
       usedFallbackOwners.add(owner.entry.id);
     }
+    const childDueDate = child.dueDate ?? globalDueDate;
 
     return {
-      childText,
-      title: parsedChild.title,
-      description: research && childText.startsWith("調査:")
+      childText: child.title,
+      title: child.title,
+      description: child.kind === "research"
         ? [
             "## Slack source",
             requestMessage.text,
@@ -2459,10 +2549,10 @@ export async function handleManagerMessage(
             "## 完了条件",
             "- 実行単位で完了できる状態にする",
           ].join("\n"),
-      dueDate: parsedChild.dueDate ?? globalDueDate,
-      assignee: parsedChild.assignee ?? owner.entry.linearAssignee,
-      priority: (parsedChild.dueDate ?? globalDueDate) ? 2 : undefined,
-      isResearch: research && childText.startsWith("調査:"),
+      dueDate: childDueDate,
+      assignee: child.assigneeHint ?? owner.entry.linearAssignee,
+      priority: childDueDate ? 2 : undefined,
+      isResearch: child.kind === "research",
     };
   });
 
@@ -2504,7 +2594,8 @@ export async function handleManagerMessage(
     if (createdChildren.length !== plannedChildren.length) {
       throw new Error(`Linear batch create returned ${createdChildren.length}/${plannedChildren.length} children`);
     }
-    researchChild = createdChildren.find((child) => child.title.startsWith("調査:"));
+    const researchIndex = plannedChildren.findIndex((child) => child.isResearch);
+    researchChild = researchIndex >= 0 ? createdChildren[researchIndex] : undefined;
   } else {
     createdParent = needsNewParent
       ? await createManagedLinearIssue(

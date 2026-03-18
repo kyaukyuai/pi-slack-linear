@@ -32,6 +32,7 @@ const webResearchMocks = vi.hoisted(() => ({
 }));
 
 const piSessionMocks = vi.hoisted(() => ({
+  runTaskPlanningTurn: vi.fn(),
   runResearchSynthesisTurn: vi.fn(),
   runFollowupResolutionTurn: vi.fn(),
 }));
@@ -62,9 +63,134 @@ vi.mock("../src/lib/web-research.js", () => ({
 }));
 
 vi.mock("../src/lib/pi-session.js", () => ({
+  runTaskPlanningTurn: piSessionMocks.runTaskPlanningTurn,
   runResearchSynthesisTurn: piSessionMocks.runResearchSynthesisTurn,
   runFollowupResolutionTurn: piSessionMocks.runFollowupResolutionTurn,
 }));
+
+function stripTaskTitle(text: string): string {
+  return text
+    .trim()
+    .replace(/^<@[^>]+>\s*/, "")
+    .replace(/^\s*(?:[-*・•]\s+|\d+[.)]\s+)/, "")
+    .replace(/(の)?(タスク|issue|Issue|イシュー|ticket|チケット)(を)?/g, " ")
+    .replace(/(しておいて|やっておいて|追加して|作成して|作って|登録して|おいて|お願い(します)?|対応して|進めておいて|進めて)/g, " ")
+    .replace(/(を)?(調査|確認|検証|比較|リサーチ|洗い出し|調べ)(しておいて|して|お願いします|お願い)?/g, " ")
+    .replace(/[。！!？?]+$/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/を$/, "")
+    .trim();
+}
+
+function extractExplicitTasks(text: string): Array<{ title: string; dueDate?: string; assigneeHint?: string }> {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const numbered = lines.filter((line) => /^\d+[.)]\s+/.test(line) && !/一覧$/.test(line));
+  if (numbered.length >= 2) {
+    return numbered.map((line) => {
+      const metadata = line.match(/[（(]([^()（）]+)[)）]\s*$/)?.[1] ?? "";
+      const title = stripTaskTitle(line.replace(/\s*[（(][^()（）]+[)）]\s*$/, ""));
+      const dueDate = metadata.match(/期限[:：]\s*(\d{4}-\d{2}-\d{2})/)?.[1];
+      const assigneeHint = metadata.match(/担当[:：]\s*([^,，]+)/)?.[1]?.trim();
+      return { title, dueDate, assigneeHint };
+    });
+  }
+
+  const bullets = lines
+    .filter((line) => /^\s*[-*・•]\s+/.test(line))
+    .map((line) => ({ title: stripTaskTitle(line) }));
+  return bullets;
+}
+
+function defaultTaskPlan(input: { combinedRequest: string }): Record<string, unknown> {
+  const text = input.combinedRequest;
+
+  if (text.includes("来週のリリースに向けた対応を進めておいて") && !text.includes("API レート制限の確認")) {
+    return {
+      action: "clarify",
+      clarificationQuestion: [
+        "起票前に確認したい点があります。",
+        "- 対象: 来週のリリースに向けた対応",
+        "- 期限を確認したいです。いつまでに完了したいか教えてください。例: 2026-03-20 / 今日中 / 明日",
+        "- 進め方を固めたいです。完了条件か、分けたい作業を 1-3 点で教えてください。",
+        "- 返答をもらえれば、その内容を取り込んで Linear に起票します。",
+      ].join("\n"),
+      clarificationReasons: ["due_date", "execution_plan"],
+    };
+  }
+
+  if (text.includes("OPT社と金澤クローンAI開発の契約を締結する必要があります")) {
+    return {
+      action: "create",
+      planningReason: "complex-request",
+      parentTitle: "OPT社と金澤クローンAI開発の契約を締結する必要があります",
+      parentDueDate: undefined,
+      children: [
+        { title: "ドラフト作成", kind: "execution", dueDate: undefined },
+        { title: "OPT 田平さんへ契約書確認依頼", kind: "execution", dueDate: undefined },
+      ],
+    };
+  }
+
+  if (text.includes("3. タスク一覧")) {
+    const children = extractExplicitTasks(text);
+    return {
+      action: "create",
+      planningReason: "complex-request",
+      parentTitle: "2ヶ月版の見積もり書作成 ほか1件",
+      parentDueDate: undefined,
+      children: children.map((child) => ({
+        title: child.title,
+        kind: "execution",
+        dueDate: child.dueDate ?? undefined,
+        assigneeHint: child.assigneeHint ?? undefined,
+      })),
+    };
+  }
+
+  if (text.includes("期限は 2026-03-20 で、作業は")) {
+    const children = extractExplicitTasks(text);
+    return {
+      action: "create",
+      planningReason: "complex-request",
+      parentTitle: text.includes("来週のリリースに向けた対応") ? "来週のリリースに向けた対応" : "複雑な依頼",
+      parentDueDate: "2026-03-20",
+      children: children.map((child) => ({
+        title: child.title,
+        kind: "execution",
+        dueDate: child.dueDate ?? undefined,
+        assigneeHint: child.assigneeHint ?? undefined,
+      })),
+    };
+  }
+
+  if (text.includes("ログイン画面の不具合を調査して")) {
+    const parentTitle = text.includes("修正") ? "ログイン画面の不具合修正" : "ログイン画面の不具合";
+    return {
+      action: "create",
+      planningReason: "research-first",
+      parentTitle,
+      parentDueDate: undefined,
+      children: [
+        { title: `調査: ${parentTitle}`, kind: "research", dueDate: undefined },
+      ],
+    };
+  }
+
+  const singleTitle = stripTaskTitle(text) || "Slack からの依頼";
+  return {
+    action: "create",
+    planningReason: "single-issue",
+    parentTitle: null,
+    parentDueDate: undefined,
+    children: [
+      { title: singleTitle, kind: "execution", dueDate: undefined },
+    ],
+  };
+}
 
 describe("handleManagerMessage clarification flow", () => {
   let workspaceDir: string;
@@ -143,6 +269,7 @@ describe("handleManagerMessage clarification flow", () => {
       title: "Example",
       snippet: "Example snippet",
     });
+    piSessionMocks.runTaskPlanningTurn.mockReset().mockImplementation(async (_config: unknown, _paths: unknown, input: { combinedRequest: string }) => defaultTaskPlan(input));
     piSessionMocks.runResearchSynthesisTurn.mockReset().mockResolvedValue({
       findings: ["関連情報の洗い出しを開始しました。"],
       uncertainties: ["スコープや対処方針の確定が必要なら、この thread で詰めます。"],
@@ -427,6 +554,75 @@ describe("handleManagerMessage clarification flow", () => {
       expect.any(Object),
     );
     expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+  });
+
+  it("uses the lead narrative line as the parent and skips creating a duplicate child task", async () => {
+    linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
+      parent: {
+        id: "parent-1",
+        identifier: "AIC-34",
+        title: "OPT社と金澤クローンAI開発の契約を締結する必要があります",
+        url: "https://linear.app/kyaukyuai/issue/AIC-34",
+        relations: [],
+        inverseRelations: [],
+      },
+      children: [
+        {
+          id: "child-1",
+          identifier: "AIC-35",
+          title: "ドラフト作成",
+          url: "https://linear.app/kyaukyuai/issue/AIC-35",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+        {
+          id: "child-2",
+          identifier: "AIC-36",
+          title: "OPT 田平さんへ契約書確認依頼",
+          url: "https://linear.app/kyaukyuai/issue/AIC-36",
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+        },
+      ],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-contract-parent",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: `OPT社と金澤クローンAI開発の契約を締結する必要があります。
+契約書のドラフト版の作成依頼済み
+ドラフト版作成後、OPT 田平さんに確認依頼する必要あり`,
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("対象: <https://linear.app/kyaukyuai/issue/AIC-34|AIC-34 OPT社と金澤クローンAI開発の契約を締結する必要があります>");
+    expect(result.reply).toContain("子task: <https://linear.app/kyaukyuai/issue/AIC-35|AIC-35 ドラフト作成> / <https://linear.app/kyaukyuai/issue/AIC-36|AIC-36 OPT 田平さんへ契約書確認依頼>");
+
+    expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parent: expect.objectContaining({
+          title: "OPT社と金澤クローンAI開発の契約を締結する必要があります",
+        }),
+        children: [
+          expect.objectContaining({
+            title: "ドラフト作成",
+          }),
+          expect.objectContaining({
+            title: "OPT 田平さんへ契約書確認依頼",
+          }),
+        ],
+      }),
+      expect.any(Object),
+    );
   });
 
   it("asks for an issue id when the thread maps to multiple issues for completion", async () => {

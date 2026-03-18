@@ -11,6 +11,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
+import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { getLinearIssue } from "./linear.js";
 import { createLinearCustomTools } from "./linear-tools.js";
@@ -77,6 +78,40 @@ export interface FollowupResolutionResult {
   extractedFields?: Record<string, string>;
   reasoningSummary?: string;
 }
+
+export interface TaskPlanningInput {
+  channelId: string;
+  rootThreadTs: string;
+  originalRequest: string;
+  latestUserMessage: string;
+  combinedRequest: string;
+  clarificationQuestion?: string;
+  currentDate: string;
+  taskKey?: string;
+}
+
+export interface TaskPlanningChild {
+  title: string;
+  kind: "execution" | "research";
+  dueDate?: string;
+  assigneeHint?: string;
+}
+
+export interface TaskPlanningResultClarify {
+  action: "clarify";
+  clarificationQuestion: string;
+  clarificationReasons: Array<"scope" | "due_date" | "execution_plan">;
+}
+
+export interface TaskPlanningResultCreate {
+  action: "create";
+  planningReason: "single-issue" | "complex-request" | "research-first";
+  parentTitle?: string;
+  parentDueDate?: string;
+  children: TaskPlanningChild[];
+}
+
+export type TaskPlanningResult = TaskPlanningResultClarify | TaskPlanningResultCreate;
 
 interface SharedRuntime {
   agentDir: string;
@@ -281,6 +316,54 @@ function normalizeResearchNextActions(value: unknown): ResearchNextAction[] {
     .slice(0, 8);
 }
 
+const optionalDateSchema = z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.null()]).optional();
+
+const taskPlanningChildSchema = z.object({
+  title: z.string().trim().min(1),
+  kind: z.enum(["execution", "research"]).default("execution"),
+  dueDate: optionalDateSchema,
+  assigneeHint: z.union([z.string().trim().min(1), z.null()]).optional(),
+});
+
+const taskPlanningClarifySchema = z.object({
+  action: z.literal("clarify"),
+  clarificationQuestion: z.string().trim().min(1),
+  clarificationReasons: z.array(z.enum(["scope", "due_date", "execution_plan"])).default([]),
+});
+
+const taskPlanningCreateSchema = z.object({
+  action: z.literal("create"),
+  planningReason: z.enum(["single-issue", "complex-request", "research-first"]),
+  parentTitle: z.union([z.string().trim().min(1), z.null()]).optional(),
+  parentDueDate: optionalDateSchema,
+  children: z.array(taskPlanningChildSchema).min(1).max(8),
+}).superRefine((value, ctx) => {
+  const hasParent = typeof value.parentTitle === "string" && value.parentTitle.trim().length > 0;
+  if (value.planningReason !== "single-issue" && !hasParent) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "parentTitle is required for complex-request and research-first",
+      path: ["parentTitle"],
+    });
+  }
+  if (value.planningReason === "single-issue" && value.children.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "single-issue must have exactly one child",
+      path: ["children"],
+    });
+  }
+  if (value.planningReason === "research-first" && !value.children.some((child) => child.kind === "research")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "research-first must include at least one research child",
+      path: ["children"],
+    });
+  }
+});
+
+const taskPlanningSchema = z.union([taskPlanningClarifySchema, taskPlanningCreateSchema]);
+
 function extractJsonObject(text: string): string | undefined {
   const fenced = text.match(/```json\s*([\s\S]*?)```/i) ?? text.match(/```\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
@@ -347,6 +430,35 @@ export function parseResearchSynthesisReply(reply: string): ResearchSynthesisRes
   };
 }
 
+export function parseTaskPlanningReply(reply: string): TaskPlanningResult {
+  const jsonText = extractJsonObject(reply);
+  if (!jsonText) {
+    throw new Error("Task planner reply did not contain a JSON object");
+  }
+
+  const parsed = taskPlanningSchema.parse(JSON.parse(jsonText));
+  if (parsed.action === "clarify") {
+    return {
+      action: "clarify",
+      clarificationQuestion: parsed.clarificationQuestion,
+      clarificationReasons: parsed.clarificationReasons,
+    };
+  }
+
+  return {
+    action: "create",
+    planningReason: parsed.planningReason,
+    parentTitle: parsed.parentTitle ?? undefined,
+    parentDueDate: parsed.parentDueDate ?? undefined,
+    children: parsed.children.map((child) => ({
+      title: child.title,
+      kind: child.kind,
+      dueDate: child.dueDate ?? undefined,
+      assigneeHint: child.assigneeHint ?? undefined,
+    })),
+  };
+}
+
 export function buildResearchSynthesisPrompt(input: ResearchSynthesisInput): string {
   return [
     "Summarize the following collected research evidence for a Slack-first execution manager.",
@@ -380,6 +492,34 @@ export function buildResearchSynthesisPrompt(input: ResearchSynthesisInput): str
     "",
     "Web evidence:",
     input.webSummary || "- none",
+  ].join("\n");
+}
+
+export function buildTaskPlanningPrompt(input: TaskPlanningInput): string {
+  return [
+    "Plan how to register the following Slack request as Linear work.",
+    "Reply with a single JSON object only.",
+    'Use one of these schemas exactly:',
+    '{"action":"clarify","clarificationQuestion":string,"clarificationReasons":["scope"|"due_date"|"execution_plan"]}',
+    '{"action":"create","planningReason":"single-issue"|"complex-request"|"research-first","parentTitle":string|null,"parentDueDate":"YYYY-MM-DD"|null,"children":[{"title":string,"kind":"execution"|"research","dueDate":"YYYY-MM-DD"|null,"assigneeHint":string|null}]}',
+    "Keep all strings in Japanese.",
+    "Use clarify only when the request still lacks enough information to create reliable Linear work.",
+    "clarificationQuestion must be exactly one concise follow-up question.",
+    "For single-issue, set parentTitle to null and return exactly one child.",
+    "For complex-request, return a concise parent title and execution-sized child tasks.",
+    "For research-first, return a non-research parent title and at least one child with kind research.",
+    "Normalize status-like phrases into actionable titles.",
+    'Example normalization: "契約書のドラフト版の作成依頼済み" -> "ドラフト作成".',
+    'Example normalization: "ドラフト版作成後、OPT 田平さんに確認依頼する必要あり" -> "OPT 田平さんへ契約書確認依頼".',
+    "Preserve explicit assignee names in assigneeHint when they are given.",
+    "Do not invent due dates or assignees. Use null or omit when unknown.",
+    `Current date in Asia/Tokyo: ${input.currentDate}`,
+    "",
+    "Context:",
+    `- originalRequest: ${input.originalRequest}`,
+    `- latestUserMessage: ${input.latestUserMessage}`,
+    `- combinedRequest: ${input.combinedRequest}`,
+    `- previousClarificationQuestion: ${input.clarificationQuestion ?? "(none)"}`,
   ].join("\n");
 }
 
@@ -759,6 +899,28 @@ export async function runResearchSynthesisTurn(
   );
 
   return parseResearchSynthesisReply(reply);
+}
+
+export async function runTaskPlanningTurn(
+  config: AppConfig,
+  paths: ThreadPaths,
+  input: TaskPlanningInput,
+): Promise<TaskPlanningResult> {
+  const reply = await runIsolatedPromptTurn(
+    config,
+    paths,
+    buildTaskPlanningPrompt(input),
+    [
+      "You are a task intake planner for a Slack-first execution manager.",
+      "Reply with valid JSON only.",
+      "Convert ambiguous or status-like request text into clean Linear issue titles.",
+      "Prefer concise, execution-ready task titles in Japanese.",
+      "When enough detail exists, do not ask a clarification question.",
+    ].join("\n"),
+    input.taskKey ?? `${input.channelId}-${input.rootThreadTs}-task-planning`,
+  );
+
+  return parseTaskPlanningReply(reply);
 }
 
 export async function runFollowupResolutionTurn(
