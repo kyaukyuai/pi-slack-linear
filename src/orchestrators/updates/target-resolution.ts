@@ -5,6 +5,9 @@ import {
 } from "../../lib/linear.js";
 import type { IntakeLedgerEntry } from "../../state/manager-state-contract.js";
 import { getSlackThreadContext } from "../../lib/slack-context.js";
+import type { WorkgraphRepository } from "../../state/workgraph/file-backed-workgraph-repository.js";
+import { buildWorkgraphThreadKey } from "../../state/workgraph/events.js";
+import { getThreadPlanningContext } from "../../state/workgraph/queries.js";
 import { issueMatchesCompletedState } from "../review/risk.js";
 
 type UpdateSignal = "progress" | "completed" | "blocked";
@@ -111,7 +114,7 @@ function findThreadEntries(
   ));
 }
 
-function collectThreadIssueCandidates(
+function collectThreadIssueCandidatesFromLedger(
   intakeLedger: IntakeLedgerEntry[],
   message: Pick<ThreadLikeMessage, "channelId" | "rootThreadTs">,
 ): ThreadIssueCandidates {
@@ -132,6 +135,34 @@ function collectThreadIssueCandidates(
     lastResolvedIssueId: latestEntry?.lastResolvedIssueId
       ?? threadEntries.find((entry) => entry.lastResolvedIssueId)?.lastResolvedIssueId,
     latestFocusIssueId: latestEntry?.issueFocusHistory?.slice(-1)[0]?.issueId,
+  };
+}
+
+async function collectThreadIssueCandidatesFromWorkgraph(
+  repository: WorkgraphRepository,
+  message: Pick<ThreadLikeMessage, "channelId" | "rootThreadTs">,
+): Promise<ThreadIssueCandidates | undefined> {
+  const planningContext = await getThreadPlanningContext(
+    repository,
+    buildWorkgraphThreadKey(message.channelId, message.rootThreadTs),
+  );
+  if (!planningContext) return undefined;
+
+  const latestResolvedIssueId = planningContext.latestResolvedIssue?.issueId ?? planningContext.thread.lastResolvedIssueId;
+  return {
+    candidateIds: unique([
+      latestResolvedIssueId,
+      planningContext.parentIssue?.issueId,
+      ...planningContext.childIssues.map((issue) => issue.issueId),
+      ...planningContext.linkedIssues.map((issue) => issue.issueId),
+    ].filter(Boolean)) as string[],
+    childIssueIds: new Set(planningContext.childIssues.map((issue) => issue.issueId)),
+    parentIssueIds: new Set(
+      planningContext.parentIssue?.issueId ? [planningContext.parentIssue.issueId] : [],
+    ),
+    latestEntryIssueIds: latestResolvedIssueId ? [latestResolvedIssueId] : [],
+    lastResolvedIssueId: latestResolvedIssueId,
+    latestFocusIssueId: latestResolvedIssueId,
   };
 }
 
@@ -383,6 +414,7 @@ export async function resolveIssueTargetsFromThread(
   kind: UpdateSignal,
   workspaceDir: string,
   env: LinearCommandEnv,
+  workgraph?: WorkgraphRepository,
 ): Promise<IssueTargetResolution> {
   const explicitIssueIds = extractIssueIdentifiers(message.text);
   if (explicitIssueIds.length > 0) {
@@ -393,7 +425,19 @@ export async function resolveIssueTargetsFromThread(
     };
   }
 
-  const candidates = collectThreadIssueCandidates(intakeLedger, message);
+  const legacyCandidates = collectThreadIssueCandidatesFromLedger(intakeLedger, message);
+  const workgraphCandidates = workgraph
+    ? await collectThreadIssueCandidatesFromWorkgraph(workgraph, message)
+    : undefined;
+  const candidates = workgraphCandidates?.candidateIds.length
+    ? {
+        ...workgraphCandidates,
+        latestEntryIssueIds: legacyCandidates.latestEntryIssueIds.length > 0
+          ? legacyCandidates.latestEntryIssueIds
+          : workgraphCandidates.latestEntryIssueIds,
+        latestFocusIssueId: legacyCandidates.latestFocusIssueId ?? workgraphCandidates.latestFocusIssueId,
+      }
+    : legacyCandidates;
   if (candidates.candidateIds.length === 0) {
     return {
       selectedIssueIds: [],

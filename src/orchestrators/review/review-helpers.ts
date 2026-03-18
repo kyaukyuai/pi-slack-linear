@@ -1,6 +1,5 @@
 import type {
   FollowupLedgerEntry,
-  IntakeLedgerEntry,
   ManagerPolicy,
   OwnerMap,
 } from "../../state/manager-state-contract.js";
@@ -15,10 +14,6 @@ export interface ReviewHelperDeps {
   nowIso(now: Date): string;
   normalizeText(text: string): string;
   toJstDate(date: Date): Date;
-  findLatestIssueSource(
-    intakeLedger: IntakeLedgerEntry[],
-    issueId: string,
-  ): ManagerReviewFollowup["source"] | undefined;
 }
 
 export function getPrimaryRiskCategory(item: RiskAssessment): string {
@@ -100,10 +95,10 @@ function shouldMentionReviewFollowup(
 
 export function buildReviewFollowup(
   item: RiskAssessment,
-  intakeLedger: IntakeLedgerEntry[],
   ownerMap: OwnerMap,
   existingFollowup: FollowupLedgerEntry | undefined,
-  deps: Pick<ReviewHelperDeps, "normalizeText" | "findLatestIssueSource">,
+  issueSources: Record<string, ManagerReviewFollowup["source"]>,
+  deps: Pick<ReviewHelperDeps, "normalizeText">,
 ): ManagerReviewFollowup {
   const riskCategory = getPrimaryRiskCategory(item);
   const requestKind = existingFollowup?.requestKind ?? requestKindForRiskCategory(riskCategory);
@@ -129,7 +124,7 @@ export function buildReviewFollowup(
           rootThreadTs: existingFollowup.sourceThreadTs,
           sourceMessageTs: existingFollowup.sourceMessageTs,
         }
-      : deps.findLatestIssueSource(intakeLedger, item.issue.identifier),
+      : issueSources[item.issue.identifier],
   };
 }
 

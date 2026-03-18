@@ -1,7 +1,6 @@
 import type { AppConfig } from "../../lib/config.js";
 import {
   type FollowupLedgerEntry,
-  type IntakeLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
@@ -20,7 +19,7 @@ import type { ManagerReviewData } from "./review-data.js";
 export interface ReviewHelpers {
   loadManagerReviewData(
     config: AppConfig,
-    repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake" | "workgraph">,
+    repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "workgraph">,
     now: Date,
   ): Promise<ManagerReviewData>;
   isWithinBusinessHours(policy: ManagerPolicy, now: Date): boolean;
@@ -35,9 +34,9 @@ export interface ReviewHelpers {
   ): boolean;
   buildReviewFollowup(
     item: RiskAssessment,
-    intakeLedger: IntakeLedgerEntry[],
     ownerMap: OwnerMap,
     existingFollowup: FollowupLedgerEntry | undefined,
+    issueSources: ManagerReviewData["issueSources"],
   ): ManagerReviewFollowup;
   upsertFollowup(
     followups: FollowupLedgerEntry[],
@@ -62,7 +61,7 @@ export interface ReviewHelpers {
 
 export interface BuildHeartbeatReviewDecisionArgs {
   config: AppConfig;
-  repositories: Pick<ManagerRepositories, "followups" | "policy" | "ownerMap" | "planning" | "intake" | "workgraph">;
+  repositories: Pick<ManagerRepositories, "followups" | "policy" | "ownerMap" | "planning" | "workgraph">;
   now: Date;
   helpers: ReviewHelpers;
 }
@@ -77,7 +76,7 @@ export async function buildHeartbeatReviewDecision({
   now,
   helpers,
 }: BuildHeartbeatReviewDecisionArgs): Promise<HeartbeatReviewDecision> {
-  const { policy, ownerMap, followups, intakeLedger, risky } = await helpers.loadManagerReviewData(
+  const { policy, ownerMap, followups, issueSources, risky } = await helpers.loadManagerReviewData(
     config,
     repositories,
     now,
@@ -106,7 +105,7 @@ export async function buildHeartbeatReviewDecision({
 
   const top = available[0];
   const existingFollowup = followups.find((entry) => entry.issueId === top.issue.identifier);
-  const followup = helpers.buildReviewFollowup(top, intakeLedger, ownerMap, existingFollowup);
+  const followup = helpers.buildReviewFollowup(top, ownerMap, existingFollowup, issueSources);
   const nextFollowups = helpers.upsertFollowup(
     followups,
     helpers.buildAwaitingFollowupPatch(
@@ -170,9 +169,9 @@ export async function buildManagerReview({
     ownerMap,
     followups,
     planningLedger,
-    intakeLedger,
-    pendingClarificationCount,
     awaitingFollowupCount,
+    issueSources,
+    pendingClarificationCount,
     risky,
   } = await helpers.loadManagerReviewData(
     config,
@@ -197,7 +196,7 @@ export async function buildManagerReview({
     let followup: ManagerReviewFollowup | undefined;
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
+      followup = helpers.buildReviewFollowup(followupItem, ownerMap, existingFollowup, issueSources);
       const nextFollowups = helpers.upsertFollowup(
         followups,
         helpers.buildAwaitingFollowupPatch(
@@ -253,7 +252,7 @@ export async function buildManagerReview({
     let followup: ManagerReviewFollowup | undefined;
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
+      followup = helpers.buildReviewFollowup(followupItem, ownerMap, existingFollowup, issueSources);
       const nextFollowups = helpers.upsertFollowup(
         followups,
         helpers.buildAwaitingFollowupPatch(
@@ -307,7 +306,7 @@ export async function buildManagerReview({
   let followup: ManagerReviewFollowup | undefined;
   if (followupItem) {
     const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-    followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
+    followup = helpers.buildReviewFollowup(followupItem, ownerMap, existingFollowup, issueSources);
     const nextFollowups = helpers.upsertFollowup(
       followups,
       helpers.buildAwaitingFollowupPatch(

@@ -2,17 +2,18 @@ import type { AppConfig } from "../../lib/config.js";
 import { listRiskyLinearIssues } from "../../lib/linear.js";
 import {
   type FollowupLedgerEntry,
-  type IntakeLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
 } from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import {
+  buildIssueSourceIndex,
   listAwaitingFollowups,
   listPendingClarifications,
 } from "../../state/workgraph/queries.js";
 import { recordFollowupTransitions } from "../../state/workgraph/recorder.js";
+import type { ManagerFollowupSource } from "./contract.js";
 import type { RiskAssessment } from "./contract.js";
 import { assessRisk, issueMatchesCompletedState } from "./risk.js";
 
@@ -21,9 +22,9 @@ export interface ManagerReviewData {
   ownerMap: OwnerMap;
   followups: FollowupLedgerEntry[];
   planningLedger: PlanningLedgerEntry[];
-  intakeLedger: IntakeLedgerEntry[];
   pendingClarificationCount: number;
   awaitingFollowupCount: number;
+  issueSources: Record<string, ManagerFollowupSource>;
   risky: RiskAssessment[];
 }
 
@@ -86,16 +87,16 @@ function reconcileFollowupsWithRiskyIssues(
 
 export async function loadManagerReviewData(
   config: AppConfig,
-  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake" | "workgraph">,
+  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "workgraph">,
   now: Date,
 ): Promise<ManagerReviewData> {
   const policy = await repositories.policy.load();
   const ownerMap = await repositories.ownerMap.load();
   const followups = await repositories.followups.load();
   const planningLedger = await repositories.planning.load();
-  const intakeLedger = await repositories.intake.load();
   const pendingClarificationCount = (await listPendingClarifications(repositories.workgraph)).length;
   const awaitingFollowupCount = (await listAwaitingFollowups(repositories.workgraph)).length;
+  const issueSources = await buildIssueSourceIndex(repositories.workgraph);
   const env = {
     ...process.env,
     LINEAR_API_KEY: config.linearApiKey,
@@ -124,9 +125,9 @@ export async function loadManagerReviewData(
     ownerMap,
     followups: reconciled.followups,
     planningLedger,
-    intakeLedger,
     pendingClarificationCount,
     awaitingFollowupCount,
+    issueSources,
     risky,
   };
 }

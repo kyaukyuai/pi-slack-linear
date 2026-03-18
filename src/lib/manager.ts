@@ -8,7 +8,6 @@ import {
 } from "../orchestrators/review/build-review.js";
 import type {
   HeartbeatReviewDecision,
-  ManagerFollowupSource,
   ManagerReviewKind,
   ManagerReviewResult,
 } from "../orchestrators/review/contract.js";
@@ -38,7 +37,6 @@ import {
   type LinearIssue,
 } from "./linear.js";
 import {
-  type IntakeLedgerEntry,
   type ManagerPolicy,
 } from "../state/manager-state-contract.js";
 import type { SystemPaths } from "./system-workspace.js";
@@ -144,6 +142,10 @@ function getListHeading(text: string): string | undefined {
     return heading;
   }
   return undefined;
+}
+
+function unique<T>(values: T[]): T[] {
+  return Array.from(new Set(values));
 }
 
 export function fingerprintText(text: string): string {
@@ -466,35 +468,6 @@ function parseTaskSegment(text: string, now = new Date()): ParsedTaskSegment {
   };
 }
 
-function unique<T>(values: T[]): T[] {
-  return Array.from(new Set(values));
-}
-
-function collectEntryIssueIds(entry: IntakeLedgerEntry): string[] {
-  return unique([
-    entry.lastResolvedIssueId,
-    entry.parentIssueId,
-    ...entry.childIssueIds,
-  ].filter(Boolean)) as string[];
-}
-
-function findLatestIssueSource(
-  intakeLedger: IntakeLedgerEntry[],
-  issueId: string,
-): ManagerFollowupSource | undefined {
-  const entry = [...intakeLedger]
-    .reverse()
-    .find((candidate) => collectEntryIssueIds(candidate).includes(issueId));
-
-  if (!entry) return undefined;
-
-  return {
-    channelId: entry.sourceChannelId,
-    rootThreadTs: entry.sourceThreadTs,
-    sourceMessageTs: entry.sourceMessageTs,
-  };
-}
-
 function isManagerRepositories(value: unknown): value is ManagerRepositories {
   return typeof value === "object"
     && value !== null
@@ -502,7 +475,8 @@ function isManagerRepositories(value: unknown): value is ManagerRepositories {
     && "ownerMap" in value
     && "intake" in value
     && "followups" in value
-    && "planning" in value;
+    && "planning" in value
+    && "workgraph" in value;
 }
 
 export async function buildHeartbeatReviewDecision(
@@ -525,12 +499,12 @@ export async function buildHeartbeatReviewDecision(
       sortRiskyIssues,
       isUrgentRisk,
       shouldSuppressFollowup,
-      buildReviewFollowup: (item, intakeLedger, ownerMap, existingFollowup) => buildReviewFollowup(
+      buildReviewFollowup: (item, ownerMap, existingFollowup, issueSources) => buildReviewFollowup(
         item,
-        intakeLedger,
         ownerMap,
         existingFollowup,
-        { normalizeText, findLatestIssueSource },
+        issueSources,
+        { normalizeText },
       ),
       upsertFollowup,
       buildAwaitingFollowupPatch: (followups, followup, category, candidateNow) => buildAwaitingFollowupPatch(
@@ -654,12 +628,12 @@ export async function buildManagerReview(
       sortRiskyIssues,
       isUrgentRisk,
       shouldSuppressFollowup,
-      buildReviewFollowup: (item, intakeLedger, ownerMap, existingFollowup) => buildReviewFollowup(
+      buildReviewFollowup: (item, ownerMap, existingFollowup, issueSources) => buildReviewFollowup(
         item,
-        intakeLedger,
         ownerMap,
         existingFollowup,
-        { normalizeText, findLatestIssueSource },
+        issueSources,
+        { normalizeText },
       ),
       upsertFollowup,
       buildAwaitingFollowupPatch: (followups, followup, category, candidateNow) => buildAwaitingFollowupPatch(

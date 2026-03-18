@@ -21,6 +21,7 @@ export interface WorkgraphThreadProjection {
   threadKey: string;
   sourceChannelId?: string;
   sourceThreadTs?: string;
+  sourceMessageTs?: string;
   lastEventAt?: string;
   intakeStatus?: "needs-clarification" | "linked-existing" | "created";
   pendingClarification: boolean;
@@ -87,6 +88,7 @@ export function projectWorkgraph(events: WorkgraphEvent[]): WorkgraphProjection 
       thread.lastEventAt = event.occurredAt;
       thread.sourceChannelId = event.sourceChannelId ?? thread.sourceChannelId;
       thread.sourceThreadTs = event.sourceThreadTs ?? thread.sourceThreadTs;
+      thread.sourceMessageTs = thread.sourceMessageTs ?? event.sourceMessageTs;
     }
 
     switch (event.type) {

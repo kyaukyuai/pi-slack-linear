@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { createFileBackedWorkgraphRepository } from "../src/state/workgraph/file-backed-workgraph-repository.js";
 import {
+  buildIssueSourceIndex,
+  getLatestIssueSource,
   getLatestResolvedIssueForThread,
   getIssueContext,
   getThreadPlanningContext,
@@ -189,6 +191,7 @@ describe("workgraph repository", () => {
       threadKey: "C123:thread-active",
       parentIssueId: "AIC-10",
       childIssueIds: ["AIC-11"],
+      sourceMessageTs: "msg-2",
       awaitingFollowupIssueIds: ["AIC-11"],
     }));
 
@@ -225,5 +228,27 @@ describe("workgraph repository", () => {
         followupStatus: "awaiting-response",
       }),
     ]);
+
+    expect(await getLatestIssueSource(repository, "AIC-11")).toEqual({
+      channelId: "C123",
+      rootThreadTs: "thread-active",
+      sourceMessageTs: "msg-2",
+      lastEventAt: "2026-03-18T01:00:00.000Z",
+    });
+
+    expect(await buildIssueSourceIndex(repository)).toEqual({
+      "AIC-10": {
+        channelId: "C123",
+        rootThreadTs: "thread-active",
+        sourceMessageTs: "msg-2",
+        lastEventAt: "2026-03-18T01:00:00.000Z",
+      },
+      "AIC-11": {
+        channelId: "C123",
+        rootThreadTs: "thread-active",
+        sourceMessageTs: "msg-2",
+        lastEventAt: "2026-03-18T01:00:00.000Z",
+      },
+    });
   });
 });

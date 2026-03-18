@@ -187,6 +187,14 @@ planning / intake / followup を横断する work graph を導入し、append-on
 - 現在状態は projection で再構成する
 - 既存 ledger は移行期間中の互換レイヤとして扱い、急に削除しない
 
+### Current Boundary
+
+- Linear は引き続き work 自体の source of truth とする
+- work graph は cross-workflow read model の優先経路として扱う
+- 現在の read-side では、review 件数集計、issue source lookup、thread planning context、latest resolved issue、updates の target-resolution candidate discovery を work graph query から取得する
+- legacy ledger は互換レイヤとして残し、pending clarification の照合、issue focus history、未移行 helper の補助情報を保持する
+- source of truth の切り替えは dual-write と query migration を段階的に進め、ledger の削除は最後に行う
+
 ### Validation
 
 - intake / planning / followup の横断状態が単一モデルで再構成できる

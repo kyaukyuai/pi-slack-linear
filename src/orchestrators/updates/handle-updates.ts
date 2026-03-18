@@ -258,6 +258,7 @@ export async function handleManagerUpdates({
     signal,
     config.workspaceDir,
     env,
+    repositories.workgraph,
   );
   if (resolution.reason === "missing" || resolution.reason === "ambiguous") {
     return {

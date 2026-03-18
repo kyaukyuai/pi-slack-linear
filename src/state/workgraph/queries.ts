@@ -26,6 +26,7 @@ export interface WorkgraphThreadContext {
   threadKey: string;
   sourceChannelId?: string;
   sourceThreadTs?: string;
+  sourceMessageTs?: string;
   lastEventAt?: string;
   intakeStatus?: "needs-clarification" | "linked-existing" | "created";
   pendingClarification: boolean;
@@ -52,6 +53,13 @@ export interface WorkgraphThreadPlanningContext {
   latestResolvedIssue?: WorkgraphIssueContext;
 }
 
+export interface WorkgraphIssueSource {
+  channelId: string;
+  rootThreadTs: string;
+  sourceMessageTs: string;
+  lastEventAt?: string;
+}
+
 function mapIssueContext(issue: WorkgraphIssueProjection): WorkgraphIssueContext {
   return {
     issueId: issue.issueId,
@@ -76,6 +84,7 @@ function mapThreadContext(thread: WorkgraphThreadProjection): WorkgraphThreadCon
     threadKey: thread.threadKey,
     sourceChannelId: thread.sourceChannelId,
     sourceThreadTs: thread.sourceThreadTs,
+    sourceMessageTs: thread.sourceMessageTs,
     lastEventAt: thread.lastEventAt,
     intakeStatus: thread.intakeStatus,
     pendingClarification: thread.pendingClarification,
@@ -100,6 +109,35 @@ function resolveIssueContext(
   if (!issueId) return undefined;
   const issue = projection.issues[issueId];
   return issue ? mapIssueContext(issue) : undefined;
+}
+
+function resolveLatestIssueSource(
+  projection: WorkgraphProjection,
+  issueId: string | undefined,
+): WorkgraphIssueSource | undefined {
+  if (!issueId) return undefined;
+  const issue = projection.issues[issueId];
+  if (!issue) return undefined;
+
+  const candidateThreads = issue.threadKeys
+    .map((threadKey) => projection.threads[threadKey])
+    .filter((thread): thread is WorkgraphThreadProjection => Boolean(thread))
+    .filter((thread) => Boolean(thread.sourceChannelId && thread.sourceThreadTs && thread.sourceMessageTs));
+
+  const latestThread = candidateThreads.sort((left, right) => (
+    Date.parse(right.lastEventAt ?? "") - Date.parse(left.lastEventAt ?? "")
+  ))[0];
+
+  if (!latestThread?.sourceChannelId || !latestThread.sourceThreadTs || !latestThread.sourceMessageTs) {
+    return undefined;
+  }
+
+  return {
+    channelId: latestThread.sourceChannelId,
+    rootThreadTs: latestThread.sourceThreadTs,
+    sourceMessageTs: latestThread.sourceMessageTs,
+    lastEventAt: latestThread.lastEventAt,
+  };
 }
 
 export async function getThreadContext(
@@ -192,4 +230,23 @@ export async function getThreadPlanningContext(
       .filter(Boolean) as WorkgraphIssueContext[],
     latestResolvedIssue: resolveIssueContext(projection, thread.lastResolvedIssueId),
   };
+}
+
+export async function getLatestIssueSource(
+  repository: WorkgraphRepository,
+  issueId: string,
+): Promise<WorkgraphIssueSource | undefined> {
+  const projection = await loadProjection(repository);
+  return resolveLatestIssueSource(projection, issueId);
+}
+
+export async function buildIssueSourceIndex(
+  repository: WorkgraphRepository,
+): Promise<Record<string, WorkgraphIssueSource>> {
+  const projection = await loadProjection(repository);
+  return Object.fromEntries(
+    Object.keys(projection.issues)
+      .map((issueId) => [issueId, resolveLatestIssueSource(projection, issueId)] as const)
+      .filter((entry): entry is [string, WorkgraphIssueSource] => Boolean(entry[1])),
+  );
 }
