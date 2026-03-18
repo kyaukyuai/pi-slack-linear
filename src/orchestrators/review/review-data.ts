@@ -8,6 +8,7 @@ import {
   type PlanningLedgerEntry,
 } from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
+import { recordFollowupTransitions } from "../../state/workgraph/recorder.js";
 import type { RiskAssessment } from "./contract.js";
 import { assessRisk, issueMatchesCompletedState } from "./risk.js";
 
@@ -79,7 +80,7 @@ function reconcileFollowupsWithRiskyIssues(
 
 export async function loadManagerReviewData(
   config: AppConfig,
-  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake">,
+  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake" | "workgraph">,
   now: Date,
 ): Promise<ManagerReviewData> {
   const policy = await repositories.policy.load();
@@ -105,6 +106,9 @@ export async function loadManagerReviewData(
   const reconciled = reconcileFollowupsWithRiskyIssues(followups, risky, now);
   if (reconciled.changed) {
     await repositories.followups.save(reconciled.followups);
+    await recordFollowupTransitions(repositories.workgraph, followups, reconciled.followups, {
+      occurredAt: now.toISOString(),
+    });
   }
 
   return {

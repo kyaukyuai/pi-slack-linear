@@ -19,6 +19,10 @@ import {
 } from "../../lib/pi-session.js";
 import { buildThreadPaths } from "../../lib/thread-workspace.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
+import {
+  recordFollowupTransitions,
+  recordIssueSignals,
+} from "../../state/workgraph/recorder.js";
 import { issueMatchesCompletedState } from "../review/risk.js";
 import {
   applyFollowupAssessmentResult,
@@ -67,7 +71,7 @@ export interface UpdatesHelpers {
 
 export interface HandleManagerUpdatesArgs {
   config: AppConfig;
-  repositories: Pick<ManagerRepositories, "followups" | "intake">;
+  repositories: Pick<ManagerRepositories, "followups" | "intake" | "workgraph">;
   message: UpdatesMessage;
   now: Date;
   signal: ManagerSignal;
@@ -95,6 +99,12 @@ export async function handleManagerUpdates({
   const ledgerSupport: IntakeLedgerSupport = {
     fingerprintText: helpers.fingerprintText,
     nowIso: helpers.nowIso,
+  };
+  const occurredAt = ledgerSupport.nowIso(now);
+  const workgraphSource = {
+    channelId: message.channelId,
+    rootThreadTs: message.rootThreadTs,
+    messageTs: message.messageTs,
   };
 
   if (allowFollowupResolution) {
@@ -222,6 +232,10 @@ export async function handleManagerUpdates({
         ledgerSupport,
       );
       await repositories.intake.save(nextLedger);
+      await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
+        occurredAt,
+        source: workgraphSource,
+      });
 
       return {
         handled: true,
@@ -255,6 +269,7 @@ export async function handleManagerUpdates({
   const targetIssueIds = resolution.selectedIssueIds;
   const extras: string[] = [];
   const updatedIssues: LinearIssue[] = [];
+  const blockedStateByIssueId = new Map<string, boolean>();
 
   if (signal === "progress") {
     for (const issueId of targetIssueIds) {
@@ -270,6 +285,7 @@ export async function handleManagerUpdates({
     for (const issueId of targetIssueIds) {
       const result = await markLinearIssueBlocked(issueId, formatStatusSourceComment(message, "## Blocked source"), env);
       updatedIssues.push(result.issue);
+      blockedStateByIssueId.set(issueId, result.blockedStateApplied);
       if (!result.blockedStateApplied) {
         extras.push(`${issueId} は workflow に blocked state が無いため、comment のみ追加しました。`);
       }
@@ -306,9 +322,22 @@ export async function handleManagerUpdates({
     message.text,
     now,
   );
-  await repositories.followups.save(
-    await assessFollowupResponses(config, message, followupState, updatedIssues, paths, now),
-  );
+  const assessedFollowups = await assessFollowupResponses(config, message, followupState, updatedIssues, paths, now);
+  await repositories.followups.save(assessedFollowups);
+  await recordIssueSignals(repositories.workgraph, {
+    occurredAt,
+    source: workgraphSource,
+    textSnippet: message.text,
+    updates: updatedIssues.map((issue) => ({
+      issueId: issue.identifier,
+      signal,
+      blockedStateApplied: blockedStateByIssueId.get(issue.identifier),
+    })),
+  });
+  await recordFollowupTransitions(repositories.workgraph, followups, assessedFollowups, {
+    occurredAt,
+    source: workgraphSource,
+  });
 
   return {
     handled: true,

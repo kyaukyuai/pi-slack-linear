@@ -24,6 +24,12 @@ import { webFetchUrl, webSearchFetch } from "../../lib/web-research.js";
 import type { AppConfig } from "../../lib/config.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import {
+  buildPlanningChildRecord,
+  recordIntakeClarificationRequested,
+  recordIntakeLinkedExisting,
+  recordPlanningOutcome,
+} from "../../state/workgraph/recorder.js";
+import {
   compactLinearIssues,
   formatSourceComment,
   formatExistingIssueReply,
@@ -69,7 +75,7 @@ export interface IntakeHelpers {
 
 export interface HandleIntakeRequestArgs {
   config: AppConfig;
-  repositories: Pick<ManagerRepositories, "ownerMap" | "planning" | "intake">;
+  repositories: Pick<ManagerRepositories, "ownerMap" | "planning" | "intake" | "workgraph">;
   message: IntakeMessage;
   now: Date;
   policy: ManagerPolicy;
@@ -99,6 +105,12 @@ export async function handleIntakeRequest({
   const ledgerSupport: IntakeLedgerSupport = {
     fingerprintText: helpers.fingerprintText,
     nowIso: helpers.nowIso,
+  };
+  const occurredAt = ledgerSupport.nowIso(now);
+  const workgraphSource = {
+    channelId: requestMessage.channelId,
+    rootThreadTs: requestMessage.rootThreadTs,
+    messageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
   };
 
   const fingerprint = pendingClarification?.messageFingerprint ?? helpers.fingerprintText(requestMessage.text);
@@ -159,6 +171,14 @@ export async function handleIntakeRequest({
       clarificationEntry,
     ];
     await repositories.intake.save(nextLedger);
+    await recordIntakeClarificationRequested(repositories.workgraph, {
+      occurredAt,
+      source: workgraphSource,
+      messageFingerprint: fingerprint,
+      clarificationQuestion: clarificationEntry.clarificationQuestion ?? taskPlan.clarificationQuestion,
+      clarificationReasons: clarificationEntry.clarificationReasons,
+      originalText: requestMessage.text,
+    });
     return {
       handled: true,
       reply: clarificationEntry.clarificationQuestion,
@@ -209,6 +229,14 @@ export async function handleIntakeRequest({
       },
     ];
     await repositories.intake.save(nextLedger);
+    await recordIntakeLinkedExisting(repositories.workgraph, {
+      occurredAt,
+      source: workgraphSource,
+      messageFingerprint: fingerprint,
+      linkedIssueIds: duplicates.map((issue) => issue.identifier),
+      lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
+      originalText: requestMessage.text,
+    });
     return {
       handled: true,
       reply: formatExistingIssueReply(duplicates),
@@ -533,6 +561,37 @@ export async function handleIntakeRequest({
       updatedAt: ledgerSupport.nowIso(now),
     };
     await repositories.planning.save([...planningLedger, planningEntry]);
+    await recordPlanningOutcome(repositories.workgraph, {
+      occurredAt,
+      source: workgraphSource,
+      messageFingerprint: fingerprint,
+      parentIssue: createdParent
+        ? {
+            issueId: createdParent.identifier,
+            title: createdParent.title,
+            dueDate: globalDueDate,
+            assignee: parentOwner?.entry.linearAssignee,
+          }
+        : undefined,
+      parentIssueId: parent?.identifier,
+      childIssues: [
+        ...createdChildren.map((issue, index) => buildPlanningChildRecord(
+          issue,
+          plannedChildren[index]?.isResearch ? "research" : "execution",
+          {
+            dueDate: plannedChildren[index]?.dueDate,
+            assignee: plannedChildren[index]?.assignee,
+          },
+        )),
+        ...followupChildren.map((issue) => buildPlanningChildRecord(issue, "execution", {
+          dueDate: researchChild?.dueDate ?? parent?.dueDate ?? undefined,
+        })),
+      ],
+      planningReason,
+      ownerResolution: usedFallbackOwners.size > 0 ? "fallback" : "mapped",
+      lastResolvedIssueId: researchChild.identifier,
+      originalText: requestMessage.text,
+    });
 
     return {
       handled: true,
@@ -595,6 +654,32 @@ export async function handleIntakeRequest({
     updatedAt: ledgerSupport.nowIso(now),
   };
   await repositories.planning.save([...planningLedger, planningEntry]);
+  await recordPlanningOutcome(repositories.workgraph, {
+    occurredAt,
+    source: workgraphSource,
+    messageFingerprint: fingerprint,
+    parentIssue: createdParent
+      ? {
+          issueId: createdParent.identifier,
+          title: createdParent.title,
+          dueDate: globalDueDate,
+          assignee: parentOwner?.entry.linearAssignee,
+        }
+      : undefined,
+    parentIssueId: parent?.identifier,
+    childIssues: createdChildren.map((issue, index) => buildPlanningChildRecord(
+      issue,
+      plannedChildren[index]?.isResearch ? "research" : "execution",
+      {
+        dueDate: plannedChildren[index]?.dueDate,
+        assignee: plannedChildren[index]?.assignee,
+      },
+    )),
+    planningReason,
+    ownerResolution,
+    lastResolvedIssueId: nextIntakeEntry.lastResolvedIssueId,
+    originalText: requestMessage.text,
+  });
 
   return {
     handled: true,

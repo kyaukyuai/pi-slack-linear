@@ -12,6 +12,7 @@ export interface SystemPaths {
   intakeLedgerFile: string;
   followupsFile: string;
   planningLedgerFile: string;
+  workgraphEventsFile: string;
   sessionsDir: string;
 }
 
@@ -103,6 +104,7 @@ export function buildSystemPaths(workspaceDir: string): SystemPaths {
     intakeLedgerFile: join(rootDir, "intake-ledger.json"),
     followupsFile: join(rootDir, "followups.json"),
     planningLedgerFile: join(rootDir, "planning-ledger.json"),
+    workgraphEventsFile: join(rootDir, "workgraph-events.jsonl"),
     sessionsDir: join(rootDir, "sessions"),
   };
 }

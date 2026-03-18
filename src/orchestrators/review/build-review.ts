@@ -7,6 +7,7 @@ import {
   type PlanningLedgerEntry,
 } from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
+import { recordFollowupTransitions } from "../../state/workgraph/recorder.js";
 import type {
   HeartbeatReviewDecision,
   ManagerReviewFollowup,
@@ -19,7 +20,7 @@ import type { ManagerReviewData } from "./review-data.js";
 export interface ReviewHelpers {
   loadManagerReviewData(
     config: AppConfig,
-    repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake">,
+    repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake" | "workgraph">,
     now: Date,
   ): Promise<ManagerReviewData>;
   isWithinBusinessHours(policy: ManagerPolicy, now: Date): boolean;
@@ -60,7 +61,7 @@ export interface ReviewHelpers {
 
 export interface BuildHeartbeatReviewDecisionArgs {
   config: AppConfig;
-  repositories: Pick<ManagerRepositories, "followups" | "policy" | "ownerMap" | "planning" | "intake">;
+  repositories: Pick<ManagerRepositories, "followups" | "policy" | "ownerMap" | "planning" | "intake" | "workgraph">;
   now: Date;
   helpers: ReviewHelpers;
 }
@@ -115,6 +116,17 @@ export async function buildHeartbeatReviewDecision({
     ),
   );
   await repositories.followups.save(nextFollowups);
+  await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
+    occurredAt: now.toISOString(),
+    reviewKind: "heartbeat",
+    source: followup.source
+      ? {
+          channelId: followup.source.channelId,
+          rootThreadTs: followup.source.rootThreadTs,
+          messageTs: followup.source.sourceMessageTs,
+        }
+      : undefined,
+  });
 
   return {
     review: {
@@ -176,17 +188,27 @@ export async function buildManagerReview({
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
       followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await repositories.followups.save(
-        helpers.upsertFollowup(
+      const nextFollowups = helpers.upsertFollowup(
+        followups,
+        helpers.buildAwaitingFollowupPatch(
           followups,
-          helpers.buildAwaitingFollowupPatch(
-            followups,
-            followup,
-            helpers.getPrimaryRiskCategory(followupItem),
-            now,
-          ),
+          followup,
+          helpers.getPrimaryRiskCategory(followupItem),
+          now,
         ),
       );
+      await repositories.followups.save(nextFollowups);
+      await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
+        occurredAt: now.toISOString(),
+        reviewKind: kind,
+        source: followup.source
+          ? {
+              channelId: followup.source.channelId,
+              rootThreadTs: followup.source.rootThreadTs,
+              messageTs: followup.source.sourceMessageTs,
+            }
+          : undefined,
+      });
     }
     return {
       kind,
@@ -222,17 +244,27 @@ export async function buildManagerReview({
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
       followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await repositories.followups.save(
-        helpers.upsertFollowup(
+      const nextFollowups = helpers.upsertFollowup(
+        followups,
+        helpers.buildAwaitingFollowupPatch(
           followups,
-          helpers.buildAwaitingFollowupPatch(
-            followups,
-            followup,
-            helpers.getPrimaryRiskCategory(followupItem),
-            now,
-          ),
+          followup,
+          helpers.getPrimaryRiskCategory(followupItem),
+          now,
         ),
       );
+      await repositories.followups.save(nextFollowups);
+      await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
+        occurredAt: now.toISOString(),
+        reviewKind: kind,
+        source: followup.source
+          ? {
+              channelId: followup.source.channelId,
+              rootThreadTs: followup.source.rootThreadTs,
+              messageTs: followup.source.sourceMessageTs,
+            }
+          : undefined,
+      });
     }
     return {
       kind,
@@ -266,17 +298,27 @@ export async function buildManagerReview({
   if (followupItem) {
     const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
     followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-    await repositories.followups.save(
-      helpers.upsertFollowup(
+    const nextFollowups = helpers.upsertFollowup(
+      followups,
+      helpers.buildAwaitingFollowupPatch(
         followups,
-        helpers.buildAwaitingFollowupPatch(
-          followups,
-          followup,
-          helpers.getPrimaryRiskCategory(followupItem),
-          now,
-        ),
+        followup,
+        helpers.getPrimaryRiskCategory(followupItem),
+        now,
       ),
     );
+    await repositories.followups.save(nextFollowups);
+    await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
+      occurredAt: now.toISOString(),
+      reviewKind: kind,
+      source: followup.source
+        ? {
+            channelId: followup.source.channelId,
+            rootThreadTs: followup.source.rootThreadTs,
+            messageTs: followup.source.sourceMessageTs,
+          }
+        : undefined,
+    });
   }
   return {
     kind,

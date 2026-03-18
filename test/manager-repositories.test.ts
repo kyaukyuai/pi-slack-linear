@@ -27,6 +27,7 @@ describe("file-backed manager repositories", () => {
     await expect(repositories.intake.load()).resolves.toEqual([]);
     await expect(repositories.followups.load()).resolves.toEqual([]);
     await expect(repositories.planning.load()).resolves.toEqual([]);
+    await expect(repositories.workgraph.list()).resolves.toEqual([]);
   });
 
   it("persists manager state without changing compatibility reads", async () => {

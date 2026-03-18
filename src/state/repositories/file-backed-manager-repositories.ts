@@ -16,6 +16,7 @@ import {
   type OwnerMap,
   type PlanningLedgerEntry,
 } from "../manager-state-contract.js";
+import { createFileBackedWorkgraphRepository, type WorkgraphRepository } from "../workgraph/file-backed-workgraph-repository.js";
 
 export interface ReadonlyRepository<T> {
   load(): Promise<T>;
@@ -37,6 +38,7 @@ export interface ManagerRepositories {
   intake: IntakeRepository;
   followups: FollowupRepository;
   planning: PlanningRepository;
+  workgraph: WorkgraphRepository;
 }
 
 async function readJsonFile(path: string): Promise<unknown | undefined> {
@@ -89,5 +91,6 @@ export function createFileBackedManagerRepositories(paths: SystemPaths): Manager
     intake: createMutableJsonRepository(paths.intakeLedgerFile, intakeLedgerSchema, []),
     followups: createMutableJsonRepository(paths.followupsFile, followupsLedgerSchema, []),
     planning: createMutableJsonRepository(paths.planningLedgerFile, planningLedgerSchema, []),
+    workgraph: createFileBackedWorkgraphRepository(paths),
   };
 }

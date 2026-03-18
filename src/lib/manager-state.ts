@@ -41,6 +41,19 @@ async function ensureJsonFile<T>(path: string, defaultValue: T): Promise<void> {
   }
 }
 
+async function ensureTextFile(path: string, defaultValue: string): Promise<void> {
+  try {
+    await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, defaultValue, "utf8");
+      return;
+    }
+    throw error;
+  }
+}
+
 function buildManagerReviewJobs(policy: ManagerPolicy): SchedulerJob[] {
   return [
     {
@@ -98,6 +111,7 @@ export async function ensureManagerSystemFiles(paths: SystemPaths): Promise<void
   await ensureJsonFile(paths.intakeLedgerFile, []);
   await ensureJsonFile(paths.followupsFile, []);
   await ensureJsonFile(paths.planningLedgerFile, []);
+  await ensureTextFile(paths.workgraphEventsFile, "");
 
   const policy = await loadManagerPolicy(paths);
   const jobs = await loadSchedulerJobs(paths);

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHeartbeatReviewDecision, buildManagerReview, formatIssueSelectionReply, handleManagerMessage } from "../src/lib/manager.js";
 import { ensureManagerSystemFiles, loadFollowupsLedger, loadIntakeLedger } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
+import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 
 const linearMocks = vi.hoisted(() => ({
   searchLinearIssues: vi.fn(),
@@ -374,6 +375,17 @@ describe("handleManagerMessage clarification flow", () => {
     expect(ledger[0]?.status).toBe("created");
     expect(ledger[0]?.parentIssueId).toBe("AIC-100");
     expect(ledger[0]?.childIssueIds).toEqual(["AIC-101", "AIC-102"]);
+
+    const projection = await createFileBackedManagerRepositories(systemPaths).workgraph.project();
+    expect(projection.threads["C0ALAMDRB9V:thread-clarify"]).toMatchObject({
+      intakeStatus: "created",
+      parentIssueId: "AIC-100",
+      lastResolvedIssueId: "AIC-102",
+    });
+    expect(projection.issues["AIC-101"]).toMatchObject({
+      parentIssueId: "AIC-100",
+      kind: "execution",
+    });
   });
 
   it("updates a unique thread-linked issue when the user reports progress", async () => {
@@ -1544,6 +1556,14 @@ describe("handleManagerMessage clarification flow", () => {
       }),
     ]));
     expect(followups.find((entry) => entry.issueId === "AIC-301")?.resolvedAt).toBeTruthy();
+    const workgraphEvents = await createFileBackedManagerRepositories(systemPaths).workgraph.list();
+    expect(workgraphEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "followup.resolved",
+        issueId: "AIC-301",
+        reason: "answered",
+      }),
+    ]));
   });
 
   it("keeps owner-missing follow-ups unresolved until an assignee is actually set", async () => {
