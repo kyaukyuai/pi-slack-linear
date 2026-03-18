@@ -9,8 +9,6 @@ import {
   type LinearIssue,
 } from "../../lib/linear.js";
 import {
-  saveFollowupsLedger,
-  saveIntakeLedger,
   type FollowupLedgerEntry,
   type IntakeLedgerEntry,
   type ManagerPolicy,
@@ -19,8 +17,8 @@ import {
   runFollowupResolutionTurn,
   type FollowupResolutionResult,
 } from "../../lib/pi-session.js";
-import type { SystemPaths } from "../../lib/system-workspace.js";
 import { buildThreadPaths } from "../../lib/thread-workspace.js";
+import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import { issueMatchesCompletedState } from "../review/risk.js";
 import {
   applyFollowupAssessmentResult,
@@ -38,6 +36,11 @@ import {
   formatFollowupResolutionReply,
   formatStatusReply,
 } from "./reply-format.js";
+import {
+  buildIssueFocusEvent,
+  upsertThreadIntakeEntry,
+  type IntakeLedgerSupport,
+} from "../shared/intake-ledger.js";
 
 export type UpdateSignal = "progress" | "completed" | "blocked";
 export type ManagerSignal = UpdateSignal | "request" | "conversation";
@@ -58,24 +61,13 @@ export interface UpdatesHandleResult {
 export interface UpdatesHelpers {
   formatReviewFollowupPrompt(item: unknown): string;
   assessRisk(issue: LinearIssue, policy: ManagerPolicy, now: Date): unknown;
-  buildIssueFocusEvent(
-    issueId: string,
-    actionKind: string,
-    source: string,
-    textSnippet: string | undefined,
-    now: Date,
-  ): NonNullable<IntakeLedgerEntry["issueFocusHistory"]>[number];
-  upsertThreadIntakeEntry(
-    intakeLedger: IntakeLedgerEntry[],
-    message: Pick<UpdatesMessage, "channelId" | "rootThreadTs" | "messageTs" | "text">,
-    patch: Partial<IntakeLedgerEntry>,
-    now: Date,
-  ): IntakeLedgerEntry[];
+  fingerprintText(text: string): string;
+  nowIso(now: Date): string;
 }
 
 export interface HandleManagerUpdatesArgs {
   config: AppConfig;
-  systemPaths: SystemPaths;
+  repositories: Pick<ManagerRepositories, "followups" | "intake">;
   message: UpdatesMessage;
   now: Date;
   signal: ManagerSignal;
@@ -89,7 +81,7 @@ export interface HandleManagerUpdatesArgs {
 
 export async function handleManagerUpdates({
   config,
-  systemPaths,
+  repositories,
   message,
   now,
   signal,
@@ -100,6 +92,11 @@ export async function handleManagerUpdates({
   env,
   helpers,
 }: HandleManagerUpdatesArgs): Promise<UpdatesHandleResult | undefined> {
+  const ledgerSupport: IntakeLedgerSupport = {
+    fingerprintText: helpers.fingerprintText,
+    nowIso: helpers.nowIso,
+  };
+
   if (allowFollowupResolution) {
     const awaitingFollowups = findAwaitingFollowupCandidates(
       followups,
@@ -203,20 +200,28 @@ export async function handleManagerUpdates({
         now,
         resolveReason,
       );
-      await saveFollowupsLedger(systemPaths, nextFollowups);
+      await repositories.followups.save(nextFollowups);
 
-      const nextLedger = helpers.upsertThreadIntakeEntry(
+      const nextLedger = upsertThreadIntakeEntry(
         intakeLedger,
         message,
         {
           lastResolvedIssueId: updatedIssue.identifier,
           issueFocusHistory: [
-            helpers.buildIssueFocusEvent(updatedIssue.identifier, "followup-response", "followup", message.text, now),
+            buildIssueFocusEvent(
+              updatedIssue.identifier,
+              "followup-response",
+              "followup",
+              message.text,
+              now,
+              ledgerSupport,
+            ),
           ],
         },
         now,
+        ledgerSupport,
       );
-      await saveIntakeLedger(systemPaths, nextLedger);
+      await repositories.intake.save(nextLedger);
 
       return {
         handled: true,
@@ -271,19 +276,27 @@ export async function handleManagerUpdates({
     }
   }
 
-  const nextLedger = helpers.upsertThreadIntakeEntry(
+  const nextLedger = upsertThreadIntakeEntry(
     intakeLedger,
     message,
     {
       status: signal === "progress" ? "progressed" : signal,
       lastResolvedIssueId: targetIssueIds[0],
       issueFocusHistory: targetIssueIds.map((issueId) => (
-        helpers.buildIssueFocusEvent(issueId, signal, "thread-status", message.text, now)
+        buildIssueFocusEvent(
+          issueId,
+          signal,
+          "thread-status",
+          message.text,
+          now,
+          ledgerSupport,
+        )
       )),
     },
     now,
+    ledgerSupport,
   );
-  await saveIntakeLedger(systemPaths, nextLedger);
+  await repositories.intake.save(nextLedger);
 
   const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
   const followupState = updateFollowupsWithIssueResponse(
@@ -293,8 +306,7 @@ export async function handleManagerUpdates({
     message.text,
     now,
   );
-  await saveFollowupsLedger(
-    systemPaths,
+  await repositories.followups.save(
     await assessFollowupResponses(config, message, followupState, updatedIssues, paths, now),
   );
 

@@ -9,14 +9,8 @@ import {
   type LinearIssue,
 } from "../../lib/linear.js";
 import {
-  loadOwnerMap,
-  loadPlanningLedger,
-  saveIntakeLedger,
-  savePlanningLedger,
   type IntakeLedgerEntry,
   type ManagerPolicy,
-  type OwnerMap,
-  type OwnerMapEntry,
   type PlanningLedgerEntry,
 } from "../../lib/manager-state.js";
 import {
@@ -25,10 +19,34 @@ import {
   type ResearchSynthesisResult,
 } from "../../lib/pi-session.js";
 import { getRecentChannelContext, getSlackThreadContext } from "../../lib/slack-context.js";
-import type { SystemPaths } from "../../lib/system-workspace.js";
 import { buildThreadPaths } from "../../lib/thread-workspace.js";
 import { webFetchUrl, webSearchFetch } from "../../lib/web-research.js";
 import type { AppConfig } from "../../lib/config.js";
+import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
+import {
+  compactLinearIssues,
+  formatSourceComment,
+  formatExistingIssueReply,
+  formatSlackContextSummary,
+  formatRelatedIssuesSummary,
+  formatWebSummary,
+  buildFallbackResearchSynthesis,
+  buildResearchIssueDescription,
+  buildResearchComment,
+  buildResearchSlackSummary,
+  formatAutonomousCreateReply,
+  formatIssueReference,
+} from "./formatting.js";
+import {
+  buildIntakeKey,
+  buildIssueFocusEvent,
+  type IntakeLedgerSupport,
+} from "../shared/intake-ledger.js";
+import {
+  chooseExistingResearchParent,
+  chooseOwner,
+  filterResearchNextActions,
+} from "./planning-support.js";
 
 export interface IntakeMessage {
   channelId: string;
@@ -44,72 +62,14 @@ export interface IntakeHandleResult {
 }
 
 export interface IntakeHelpers {
-  unique<T>(values: T[]): T[];
-  nowIso(now: Date): string;
   toJstDate(date: Date): Date;
   fingerprintText(text: string): string;
-  buildIntakeKey(entry: Pick<IntakeLedgerEntry, "sourceChannelId" | "sourceThreadTs" | "messageFingerprint">): string;
-  buildIssueFocusEvent(
-    issueId: string,
-    actionKind: string,
-    source: string,
-    textSnippet: string | undefined,
-    now: Date,
-  ): NonNullable<IntakeLedgerEntry["issueFocusHistory"]>[number];
-  chooseExistingResearchParent(duplicates: LinearIssue[], baseTitle: string): LinearIssue | undefined;
-  chooseOwner(text: string, ownerMap: OwnerMap): { entry: OwnerMapEntry; resolution: "mapped" | "fallback" };
-  compactLinearIssues(issues: Array<LinearIssue | undefined>): LinearIssue[];
-  formatSourceComment(message: IntakeMessage, reason: string): string;
-  formatExistingIssueReply(duplicates: LinearIssue[]): string;
-  formatSlackContextSummary(entries: Awaited<ReturnType<typeof getSlackThreadContext>>["entries"]): string;
-  formatRelatedIssuesSummary(issues: LinearIssue[]): string;
-  formatWebSummary(
-    searchResults: Awaited<ReturnType<typeof webSearchFetch>>,
-    fetchedPages: Awaited<ReturnType<typeof webFetchUrl>>[],
-  ): string;
-  buildFallbackResearchSynthesis(args: {
-    slackThreadEntries: Awaited<ReturnType<typeof getSlackThreadContext>>["entries"];
-    relatedIssues: LinearIssue[];
-    searchResults: Awaited<ReturnType<typeof webSearchFetch>>;
-  }): ResearchSynthesisResult;
-  filterResearchNextActions(
-    nextActions: ResearchSynthesisResult["nextActions"],
-    existingTitles: string[],
-    policy: ManagerPolicy,
-  ): ResearchSynthesisResult["nextActions"];
-  buildResearchIssueDescription(args: {
-    sourceMessage: IntakeMessage;
-    synthesis: ResearchSynthesisResult;
-  }): string;
-  buildResearchComment(args: {
-    sourceMessage: IntakeMessage;
-    slackThreadEntries: Awaited<ReturnType<typeof getSlackThreadContext>>["entries"];
-    recentChannelContexts: Awaited<ReturnType<typeof getRecentChannelContext>>;
-    relatedIssues: LinearIssue[];
-    searchResults: Awaited<ReturnType<typeof webSearchFetch>>;
-    fetchedPages: Awaited<ReturnType<typeof webFetchUrl>>[];
-    synthesis: ResearchSynthesisResult;
-  }): string;
-  buildResearchSlackSummary(args: {
-    parent: LinearIssue;
-    researchChild: LinearIssue;
-    reusedParent: boolean;
-    synthesis: ResearchSynthesisResult;
-    followupChildren?: LinearIssue[];
-  }): string;
-  formatAutonomousCreateReply(
-    parent: LinearIssue | undefined,
-    children: LinearIssue[],
-    reason: string,
-    usedFallback: boolean,
-    options?: { reusedParent?: boolean },
-  ): string;
-  formatIssueReference(issue: Pick<LinearIssue, "identifier" | "title"> & { url?: string | null }): string;
+  nowIso(now: Date): string;
 }
 
 export interface HandleIntakeRequestArgs {
   config: AppConfig;
-  systemPaths: SystemPaths;
+  repositories: Pick<ManagerRepositories, "ownerMap" | "planning" | "intake">;
   message: IntakeMessage;
   now: Date;
   policy: ManagerPolicy;
@@ -123,7 +83,7 @@ export interface HandleIntakeRequestArgs {
 
 export async function handleIntakeRequest({
   config,
-  systemPaths,
+  repositories,
   message,
   now,
   policy,
@@ -134,13 +94,17 @@ export async function handleIntakeRequest({
   env,
   helpers,
 }: HandleIntakeRequestArgs): Promise<IntakeHandleResult> {
-  const ownerMap = await loadOwnerMap(systemPaths);
-  const planningLedger = await loadPlanningLedger(systemPaths);
+  const ownerMap = await repositories.ownerMap.load();
+  const planningLedger = await repositories.planning.load();
+  const ledgerSupport: IntakeLedgerSupport = {
+    fingerprintText: helpers.fingerprintText,
+    nowIso: helpers.nowIso,
+  };
 
   const fingerprint = pendingClarification?.messageFingerprint ?? helpers.fingerprintText(requestMessage.text);
   const existingLedgerEntry = intakeLedger.find((entry) => {
     if (entry.status === "needs-clarification") return false;
-    return helpers.buildIntakeKey(entry) === helpers.buildIntakeKey({
+    return buildIntakeKey(entry) === buildIntakeKey({
       sourceChannelId: requestMessage.channelId,
       sourceThreadTs: requestMessage.rootThreadTs,
       messageFingerprint: fingerprint,
@@ -148,7 +112,9 @@ export async function handleIntakeRequest({
   });
 
   if (existingLedgerEntry) {
-    const linkedIssues = helpers.unique([existingLedgerEntry.parentIssueId, ...existingLedgerEntry.childIssueIds].filter(Boolean)) as string[];
+    const linkedIssues = Array.from(new Set(
+      [existingLedgerEntry.parentIssueId, ...existingLedgerEntry.childIssueIds].filter(Boolean),
+    )) as string[];
     return {
       handled: true,
       reply: linkedIssues.length > 0
@@ -185,14 +151,14 @@ export async function handleIntakeRequest({
       clarificationQuestion: taskPlan.clarificationQuestion,
       clarificationReasons: taskPlan.clarificationReasons,
       issueFocusHistory: [],
-      createdAt: pendingClarification?.createdAt ?? helpers.nowIso(now),
-      updatedAt: helpers.nowIso(now),
+      createdAt: pendingClarification?.createdAt ?? ledgerSupport.nowIso(now),
+      updatedAt: ledgerSupport.nowIso(now),
     };
     const nextLedger = [
       ...intakeLedger.filter((entry) => entry !== pendingClarification),
       clarificationEntry,
     ];
-    await saveIntakeLedger(systemPaths, nextLedger);
+    await repositories.intake.save(nextLedger);
     return {
       handled: true,
       reply: clarificationEntry.clarificationQuestion,
@@ -227,31 +193,38 @@ export async function handleIntakeRequest({
         status: "linked-existing",
         lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
         issueFocusHistory: duplicates.length === 1 && duplicates[0]
-          ? [helpers.buildIssueFocusEvent(duplicates[0].identifier, "reuse", "duplicate-reuse", requestMessage.text, now)]
+          ? [buildIssueFocusEvent(
+              duplicates[0].identifier,
+              "reuse",
+              "duplicate-reuse",
+              requestMessage.text,
+              now,
+              ledgerSupport,
+            )]
           : [],
         originalText: requestMessage.text,
         clarificationReasons: [],
-        createdAt: helpers.nowIso(now),
-        updatedAt: helpers.nowIso(now),
+        createdAt: ledgerSupport.nowIso(now),
+        updatedAt: ledgerSupport.nowIso(now),
       },
     ];
-    await saveIntakeLedger(systemPaths, nextLedger);
+    await repositories.intake.save(nextLedger);
     return {
       handled: true,
-      reply: helpers.formatExistingIssueReply(duplicates),
+      reply: formatExistingIssueReply(duplicates),
     };
   }
 
-  const existingResearchParent = research ? helpers.chooseExistingResearchParent(duplicates, planningTitle) : undefined;
+  const existingResearchParent = research ? chooseExistingResearchParent(duplicates, planningTitle) : undefined;
   const needsNewParent = Boolean(taskPlan.parentTitle) && !existingResearchParent;
   const usedFallbackOwners = new Set<string>();
-  const parentOwner = needsNewParent ? helpers.chooseOwner(planningTitle, ownerMap) : undefined;
+  const parentOwner = needsNewParent ? chooseOwner(planningTitle, ownerMap) : undefined;
   if (parentOwner?.resolution === "fallback") {
     usedFallbackOwners.add(parentOwner.entry.id);
   }
 
   const plannedChildren = taskPlan.children.map((child) => {
-    const owner = helpers.chooseOwner(child.assigneeHint ?? child.title, ownerMap);
+    const owner = chooseOwner(child.assigneeHint ?? child.title, ownerMap);
     if (!child.assigneeHint && owner.resolution === "fallback") {
       usedFallbackOwners.add(owner.entry.id);
     }
@@ -325,7 +298,7 @@ export async function handleIntakeRequest({
     );
     createdParent = batch.parent;
     parent = batch.parent;
-    createdChildren = helpers.compactLinearIssues(batch.children);
+    createdChildren = compactLinearIssues(batch.children);
     if (createdChildren.length !== plannedChildren.length) {
       throw new Error(`Linear batch create returned ${createdChildren.length}/${plannedChildren.length} children`);
     }
@@ -378,11 +351,11 @@ export async function handleIntakeRequest({
   }
 
   for (const child of createdChildren) {
-    await addLinearComment(child.identifier, helpers.formatSourceComment(requestMessage, planningReason), env);
+    await addLinearComment(child.identifier, formatSourceComment(requestMessage, planningReason), env);
   }
 
   if (parent) {
-    await addLinearComment(parent.identifier, helpers.formatSourceComment(requestMessage, planningReason), env);
+    await addLinearComment(parent.identifier, formatSourceComment(requestMessage, planningReason), env);
   }
 
   if (parent && createdChildren.length > 1) {
@@ -425,31 +398,31 @@ export async function handleIntakeRequest({
         rootThreadTs: requestMessage.rootThreadTs,
         taskTitle: planningTitle,
         sourceMessage: requestMessage.text,
-        slackThreadSummary: helpers.formatSlackContextSummary(slackThreadContext.entries),
+        slackThreadSummary: formatSlackContextSummary(slackThreadContext.entries),
         recentChannelSummary: recentChannelContexts.length > 0
           ? recentChannelContexts
             .slice(0, 3)
             .map((context) => `- ${context.rootThreadTs}: ${context.entries.slice(-1)[0]?.text.replace(/\s+/g, " ").slice(0, 120) ?? "(no messages)"}`)
             .join("\n")
           : "- 直近 thread 文脈は取得できませんでした。",
-        relatedIssuesSummary: helpers.formatRelatedIssuesSummary(relatedIssues),
-        webSummary: helpers.formatWebSummary(searchResults, fetchedPages),
+        relatedIssuesSummary: formatRelatedIssuesSummary(relatedIssues),
+        webSummary: formatWebSummary(searchResults, fetchedPages),
         taskKey: researchChild.identifier,
       },
-    ).catch(() => helpers.buildFallbackResearchSynthesis({
+    ).catch(() => buildFallbackResearchSynthesis({
       slackThreadEntries: slackThreadContext.entries,
       relatedIssues,
       searchResults,
     }));
     const researchSynthesis: ResearchSynthesisResult = {
       ...rawResearchSynthesis,
-      nextActions: helpers.filterResearchNextActions(rawResearchSynthesis.nextActions, existingTitles, policy),
+      nextActions: filterResearchNextActions(rawResearchSynthesis.nextActions, existingTitles, policy),
     };
 
     await updateManagedLinearIssue(
       {
         issueId: researchChild.identifier,
-        description: helpers.buildResearchIssueDescription({
+        description: buildResearchIssueDescription({
           sourceMessage: requestMessage,
           synthesis: researchSynthesis,
         }),
@@ -459,7 +432,7 @@ export async function handleIntakeRequest({
 
     await addLinearComment(
       researchChild.identifier,
-      helpers.buildResearchComment({
+      buildResearchComment({
         sourceMessage: requestMessage,
         slackThreadEntries: slackThreadContext.entries,
         recentChannelContexts,
@@ -478,7 +451,7 @@ export async function handleIntakeRequest({
         if (nextAction.title.trim().length < 6) {
           continue;
         }
-        const owner = helpers.chooseOwner(nextAction.ownerHint ?? nextAction.title, ownerMap);
+        const owner = chooseOwner(nextAction.ownerHint ?? nextAction.title, ownerMap);
         if (owner.resolution === "fallback") {
           usedFallbackOwners.add(owner.entry.id);
         }
@@ -488,7 +461,7 @@ export async function handleIntakeRequest({
             title: nextAction.title,
             description: [
               "## Research source",
-              helpers.formatIssueReference(researchChild),
+              formatIssueReference(researchChild),
               "",
               "## Purpose",
               nextAction.purpose || "調査結果を踏まえて実行可能な状態にする",
@@ -525,19 +498,27 @@ export async function handleIntakeRequest({
       clarificationReasons: [],
       lastResolvedIssueId: researchChild.identifier,
       issueFocusHistory: [
-        ...(parent ? [helpers.buildIssueFocusEvent(parent.identifier, research ? "research-parent" : "create-parent", planningReason, requestMessage.text, now)] : []),
-        ...allCreatedChildren.map((issue) => helpers.buildIssueFocusEvent(
+        ...(parent ? [buildIssueFocusEvent(
+            parent.identifier,
+            research ? "research-parent" : "create-parent",
+            planningReason,
+            requestMessage.text,
+            now,
+            ledgerSupport,
+          )] : []),
+        ...allCreatedChildren.map((issue) => buildIssueFocusEvent(
           issue.identifier,
           issue.identifier === researchChild.identifier ? "research-child" : "create-child",
           planningReason,
           issue.title,
           now,
+          ledgerSupport,
         )),
       ],
-      createdAt: helpers.nowIso(now),
-      updatedAt: helpers.nowIso(now),
+      createdAt: ledgerSupport.nowIso(now),
+      updatedAt: ledgerSupport.nowIso(now),
     };
-    await saveIntakeLedger(systemPaths, [
+    await repositories.intake.save([
       ...intakeLedger.filter((entry) => entry !== pendingClarification),
       nextIntakeEntry,
     ]);
@@ -548,14 +529,14 @@ export async function handleIntakeRequest({
       generatedChildIssueIds: allCreatedChildren.map((issue) => issue.identifier),
       planningReason,
       ownerResolution: usedFallbackOwners.size > 0 ? "fallback" : "mapped",
-      createdAt: helpers.nowIso(now),
-      updatedAt: helpers.nowIso(now),
+      createdAt: ledgerSupport.nowIso(now),
+      updatedAt: ledgerSupport.nowIso(now),
     };
-    await savePlanningLedger(systemPaths, [...planningLedger, planningEntry]);
+    await repositories.planning.save([...planningLedger, planningEntry]);
 
     return {
       handled: true,
-      reply: helpers.buildResearchSlackSummary({
+      reply: buildResearchSlackSummary({
         parent: parent!,
         researchChild,
         reusedParent: Boolean(existingResearchParent),
@@ -579,13 +560,27 @@ export async function handleIntakeRequest({
     clarificationReasons: [],
     lastResolvedIssueId: createdChildren.length === 1 ? createdChildren[0]?.identifier : createdChildren.length === 0 ? parent?.identifier : undefined,
     issueFocusHistory: [
-      ...(parent ? [helpers.buildIssueFocusEvent(parent.identifier, "create-parent", planningReason, requestMessage.text, now)] : []),
-      ...createdChildren.map((issue) => helpers.buildIssueFocusEvent(issue.identifier, "create-child", planningReason, issue.title, now)),
+      ...(parent ? [buildIssueFocusEvent(
+          parent.identifier,
+          "create-parent",
+          planningReason,
+          requestMessage.text,
+          now,
+          ledgerSupport,
+        )] : []),
+      ...createdChildren.map((issue) => buildIssueFocusEvent(
+        issue.identifier,
+        "create-child",
+        planningReason,
+        issue.title,
+        now,
+        ledgerSupport,
+      )),
     ],
-    createdAt: helpers.nowIso(now),
-    updatedAt: helpers.nowIso(now),
+    createdAt: ledgerSupport.nowIso(now),
+    updatedAt: ledgerSupport.nowIso(now),
   };
-  await saveIntakeLedger(systemPaths, [
+  await repositories.intake.save([
     ...intakeLedger.filter((entry) => entry !== pendingClarification),
     nextIntakeEntry,
   ]);
@@ -596,14 +591,14 @@ export async function handleIntakeRequest({
     generatedChildIssueIds: createdChildren.map((issue) => issue.identifier),
     planningReason,
     ownerResolution,
-    createdAt: helpers.nowIso(now),
-    updatedAt: helpers.nowIso(now),
+    createdAt: ledgerSupport.nowIso(now),
+    updatedAt: ledgerSupport.nowIso(now),
   };
-  await savePlanningLedger(systemPaths, [...planningLedger, planningEntry]);
+  await repositories.planning.save([...planningLedger, planningEntry]);
 
   return {
     handled: true,
-    reply: helpers.formatAutonomousCreateReply(parent, createdChildren, planningReason, usedFallbackOwners.size > 0, {
+    reply: formatAutonomousCreateReply(parent, createdChildren, planningReason, usedFallbackOwners.size > 0, {
       reusedParent: Boolean(existingResearchParent),
     }),
   };

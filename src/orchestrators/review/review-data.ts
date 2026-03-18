@@ -1,19 +1,13 @@
 import type { AppConfig } from "../../lib/config.js";
 import { listRiskyLinearIssues } from "../../lib/linear.js";
 import {
-  loadFollowupsLedger,
-  loadIntakeLedger,
-  loadManagerPolicy,
-  loadOwnerMap,
-  loadPlanningLedger,
-  saveFollowupsLedger,
   type FollowupLedgerEntry,
   type IntakeLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
 } from "../../lib/manager-state.js";
-import type { SystemPaths } from "../../lib/system-workspace.js";
+import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import type { RiskAssessment } from "./contract.js";
 import { assessRisk, issueMatchesCompletedState } from "./risk.js";
 
@@ -85,14 +79,14 @@ function reconcileFollowupsWithRiskyIssues(
 
 export async function loadManagerReviewData(
   config: AppConfig,
-  systemPaths: SystemPaths,
+  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake">,
   now: Date,
 ): Promise<ManagerReviewData> {
-  const policy = await loadManagerPolicy(systemPaths);
-  const ownerMap = await loadOwnerMap(systemPaths);
-  const followups = await loadFollowupsLedger(systemPaths);
-  const planningLedger = await loadPlanningLedger(systemPaths);
-  const intakeLedger = await loadIntakeLedger(systemPaths);
+  const policy = await repositories.policy.load();
+  const ownerMap = await repositories.ownerMap.load();
+  const followups = await repositories.followups.load();
+  const planningLedger = await repositories.planning.load();
+  const intakeLedger = await repositories.intake.load();
   const env = {
     ...process.env,
     LINEAR_API_KEY: config.linearApiKey,
@@ -110,7 +104,7 @@ export async function loadManagerReviewData(
 
   const reconciled = reconcileFollowupsWithRiskyIssues(followups, risky, now);
   if (reconciled.changed) {
-    await saveFollowupsLedger(systemPaths, reconciled.followups);
+    await repositories.followups.save(reconciled.followups);
   }
 
   return {

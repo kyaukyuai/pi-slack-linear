@@ -8,12 +8,13 @@ import { HeartbeatService } from "./lib/heartbeat.js";
 import { verifyLinearCli } from "./lib/linear.js";
 import { Logger } from "./lib/logger.js";
 import { buildHeartbeatReviewDecision, buildManagerReview, formatControlRoomReviewForSlack, handleManagerMessage, type ManagerReviewResult } from "./lib/manager.js";
-import { ensureManagerSystemFiles, loadManagerPolicy } from "./lib/manager-state.js";
+import { ensureManagerSystemFiles } from "./lib/manager-state.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn, runSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
 import { formatSlackMessageText } from "./lib/slack-format.js";
 import { classifyTaskIntent, isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
 import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
+import { createFileBackedManagerRepositories } from "./state/repositories/file-backed-manager-repositories.js";
 import {
   appendThreadLog,
   buildThreadPaths,
@@ -131,7 +132,8 @@ async function main(): Promise<void> {
   await ensureSystemWorkspace(systemPaths);
   await ensureManagerSystemFiles(systemPaths);
   await verifyLinearCli(config.linearTeamKey);
-  const managerPolicy = await loadManagerPolicy(systemPaths);
+  const managerRepositories = createFileBackedManagerRepositories(systemPaths);
+  const managerPolicy = await managerRepositories.policy.load();
 
   const authTest = await webClient.auth.test();
   const botUserId = authTest.user_id;

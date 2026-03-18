@@ -1,13 +1,12 @@
 import type { AppConfig } from "../../lib/config.js";
 import {
-  saveFollowupsLedger,
   type FollowupLedgerEntry,
   type IntakeLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
 } from "../../lib/manager-state.js";
-import type { SystemPaths } from "../../lib/system-workspace.js";
+import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import type {
   HeartbeatReviewDecision,
   ManagerReviewFollowup,
@@ -20,7 +19,7 @@ import type { ManagerReviewData } from "./review-data.js";
 export interface ReviewHelpers {
   loadManagerReviewData(
     config: AppConfig,
-    systemPaths: SystemPaths,
+    repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "followups" | "planning" | "intake">,
     now: Date,
   ): Promise<ManagerReviewData>;
   isWithinBusinessHours(policy: ManagerPolicy, now: Date): boolean;
@@ -61,7 +60,7 @@ export interface ReviewHelpers {
 
 export interface BuildHeartbeatReviewDecisionArgs {
   config: AppConfig;
-  systemPaths: SystemPaths;
+  repositories: Pick<ManagerRepositories, "followups" | "policy" | "ownerMap" | "planning" | "intake">;
   now: Date;
   helpers: ReviewHelpers;
 }
@@ -72,13 +71,13 @@ export interface BuildManagerReviewArgs extends BuildHeartbeatReviewDecisionArgs
 
 export async function buildHeartbeatReviewDecision({
   config,
-  systemPaths,
+  repositories,
   now,
   helpers,
 }: BuildHeartbeatReviewDecisionArgs): Promise<HeartbeatReviewDecision> {
   const { policy, ownerMap, followups, intakeLedger, risky } = await helpers.loadManagerReviewData(
     config,
-    systemPaths,
+    repositories,
     now,
   );
 
@@ -115,7 +114,7 @@ export async function buildHeartbeatReviewDecision({
       now,
     ),
   );
-  await saveFollowupsLedger(systemPaths, nextFollowups);
+  await repositories.followups.save(nextFollowups);
 
   return {
     review: {
@@ -138,7 +137,7 @@ export async function buildHeartbeatReviewDecision({
 
 export async function buildManagerReview({
   config,
-  systemPaths,
+  repositories,
   kind,
   now,
   helpers,
@@ -146,7 +145,7 @@ export async function buildManagerReview({
   if (kind === "heartbeat") {
     const decision = await buildHeartbeatReviewDecision({
       config,
-      systemPaths,
+      repositories,
       now,
       helpers,
     });
@@ -155,7 +154,7 @@ export async function buildManagerReview({
 
   const { policy, ownerMap, followups, planningLedger, intakeLedger, risky } = await helpers.loadManagerReviewData(
     config,
-    systemPaths,
+    repositories,
     now,
   );
 
@@ -177,8 +176,7 @@ export async function buildManagerReview({
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
       followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await saveFollowupsLedger(
-        systemPaths,
+      await repositories.followups.save(
         helpers.upsertFollowup(
           followups,
           helpers.buildAwaitingFollowupPatch(
@@ -224,8 +222,7 @@ export async function buildManagerReview({
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
       followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await saveFollowupsLedger(
-        systemPaths,
+      await repositories.followups.save(
         helpers.upsertFollowup(
           followups,
           helpers.buildAwaitingFollowupPatch(
@@ -269,8 +266,7 @@ export async function buildManagerReview({
   if (followupItem) {
     const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
     followup = helpers.buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-    await saveFollowupsLedger(
-      systemPaths,
+    await repositories.followups.save(
       helpers.upsertFollowup(
         followups,
         helpers.buildAwaitingFollowupPatch(

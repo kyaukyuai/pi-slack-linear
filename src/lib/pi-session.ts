@@ -27,10 +27,11 @@ import {
   type TaskPlanningInput,
   type TaskPlanningResult,
 } from "../planners/task-intake/index.js";
+import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import type { AppConfig } from "./config.js";
 import { getLinearIssue } from "./linear.js";
 import { createLinearCustomTools } from "./linear-tools.js";
-import { loadIntakeLedger, type IntakeLedgerEntry } from "./manager-state.js";
+import type { IntakeLedgerEntry } from "./manager-state.js";
 import type { TaskIntent } from "./slack.js";
 import { buildSystemPaths } from "./system-workspace.js";
 import type { AttachmentRecord, ThreadPaths } from "./thread-workspace.js";
@@ -121,7 +122,7 @@ function findThreadLedgerEntries(
 
 async function loadThreadPromptContext(config: AppConfig, input: AgentInput): Promise<ThreadPromptContext | undefined> {
   const systemPaths = buildSystemPaths(config.workspaceDir);
-  const ledger = await loadIntakeLedger(systemPaths).catch(() => []);
+  const ledger = await createFileBackedManagerRepositories(systemPaths).intake.load().catch(() => []);
   const threadEntries = findThreadLedgerEntries(ledger, input.channelId, input.rootThreadTs);
   if (threadEntries.length === 0) {
     return undefined;

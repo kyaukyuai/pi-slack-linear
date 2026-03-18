@@ -22,10 +22,10 @@ import {
   type LinearIssueResult,
   type LinearListResult,
 } from "./linear.js";
-import { loadManagerPolicy } from "./manager-state.js";
 import { getRecentChannelContext, getSlackThreadContext } from "./slack-context.js";
 import { buildSystemPaths } from "./system-workspace.js";
 import { webFetchUrl, webSearchFetch } from "./web-research.js";
+import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 
 function buildLinearEnv(config: AppConfig): LinearCommandEnv {
   return {
@@ -80,6 +80,7 @@ function formatManagedIssue(issue: LinearIssue, prefix: string): string {
 export function createLinearCustomTools(config: AppConfig): ToolDefinition[] {
   const env = buildLinearEnv(config);
   const systemPaths = buildSystemPaths(config.workspaceDir);
+  const managerRepositories = createFileBackedManagerRepositories(systemPaths);
 
   return [
     {
@@ -281,7 +282,7 @@ export function createLinearCustomTools(config: AppConfig): ToolDefinition[] {
       ],
       parameters: Type.Object({}),
       async execute(_toolCallId, _params, signal) {
-        const policy = await loadManagerPolicy(systemPaths);
+        const policy = await managerRepositories.policy.load();
         const issues = await listRiskyLinearIssues(
           {
             staleBusinessDays: policy.staleBusinessDays,
