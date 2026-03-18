@@ -64,6 +64,13 @@ const intakeLedgerEntrySchema = z.object({
   clarificationQuestion: z.string().optional(),
   clarificationReasons: z.array(z.string()).default([]),
   lastResolvedIssueId: z.string().optional(),
+  issueFocusHistory: z.array(z.object({
+    issueId: z.string().min(1),
+    actionKind: z.string().min(1),
+    source: z.string().min(1),
+    ts: z.string().datetime(),
+    textSnippet: z.string().optional(),
+  })).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -73,18 +80,26 @@ const followupLedgerEntrySchema = z.object({
   lastPublicFollowupAt: z.string().datetime().optional(),
   lastEscalationAt: z.string().datetime().optional(),
   lastCategory: z.string().optional(),
+  requestKind: z.enum(["status", "blocked-details", "owner", "due-date"]).optional(),
   status: z.enum(["awaiting-response", "resolved"]).optional(),
   requestText: z.string().optional(),
+  acceptableAnswerHint: z.string().optional(),
   sourceChannelId: z.string().optional(),
   sourceThreadTs: z.string().optional(),
   sourceMessageTs: z.string().optional(),
   assigneeDisplayName: z.string().optional(),
   rePingCount: z.number().int().min(0).optional(),
   resolvedAt: z.string().datetime().optional(),
-  resolvedReason: z.enum(["response", "risk-cleared", "completed"]).optional(),
+  resolvedReason: z.enum(["response", "risk-cleared", "completed", "answered"]).optional(),
   lastResponseAt: z.string().datetime().optional(),
-  lastResponseKind: z.enum(["progress", "completed", "blocked"]).optional(),
+  lastResponseKind: z.enum(["progress", "completed", "blocked", "followup-response"]).optional(),
   lastResponseText: z.string().optional(),
+  resolutionAssessment: z.object({
+    answered: z.boolean(),
+    answerKind: z.string().optional(),
+    confidence: z.number().min(0).max(1),
+    extractedFields: z.record(z.string(), z.string()).optional(),
+  }).optional(),
 });
 
 const planningLedgerEntrySchema = z.object({

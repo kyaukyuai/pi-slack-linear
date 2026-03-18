@@ -47,10 +47,35 @@ export interface ResearchSynthesisInput {
   taskKey?: string;
 }
 
+export interface ResearchNextAction {
+  title: string;
+  purpose: string;
+  ownerHint?: string;
+  confidence: number;
+}
+
 export interface ResearchSynthesisResult {
   findings: string[];
   uncertainties: string[];
-  nextActions: string[];
+  nextActions: ResearchNextAction[];
+}
+
+export interface FollowupResolutionInput {
+  issueId: string;
+  issueTitle: string;
+  requestKind: "status" | "blocked-details" | "owner" | "due-date";
+  requestText: string;
+  acceptableAnswerHint?: string;
+  responseText: string;
+  taskKey?: string;
+}
+
+export interface FollowupResolutionResult {
+  answered: boolean;
+  answerKind?: string;
+  confidence: number;
+  extractedFields?: Record<string, string>;
+  reasoningSummary?: string;
 }
 
 interface SharedRuntime {
@@ -210,6 +235,52 @@ function normalizeStringList(value: unknown): string[] {
     .slice(0, 8);
 }
 
+function clampConfidence(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([key, entryValue]) => [key, typeof entryValue === "string" ? entryValue.trim() : ""] as const)
+    .filter(([, entryValue]) => entryValue.length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeResearchNextActions(value: unknown): ResearchNextAction[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        const title = item.trim();
+        return title
+          ? {
+              title,
+              purpose: "",
+              confidence: 0.5,
+            } satisfies ResearchNextAction
+          : undefined;
+      }
+      if (!item || typeof item !== "object") return undefined;
+
+      const record = item as Record<string, unknown>;
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      if (!title) return undefined;
+
+      return {
+        title,
+        purpose: typeof record.purpose === "string" ? record.purpose.trim() : "",
+        ownerHint: typeof record.ownerHint === "string" && record.ownerHint.trim() ? record.ownerHint.trim() : undefined,
+        confidence: clampConfidence(record.confidence, 0.5),
+      } satisfies ResearchNextAction;
+    })
+    .filter((item): item is ResearchNextAction => Boolean(item))
+    .slice(0, 8);
+}
+
 function extractJsonObject(text: string): string | undefined {
   const fenced = text.match(/```json\s*([\s\S]*?)```/i) ?? text.match(/```\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
@@ -230,7 +301,7 @@ function normalizeResearchSynthesisResult(value: unknown): ResearchSynthesisResu
   const record = value as Record<string, unknown>;
   const findings = normalizeStringList(record.findings);
   const uncertainties = normalizeStringList(record.uncertainties);
-  const nextActions = normalizeStringList(record.nextActions);
+  const nextActions = normalizeResearchNextActions(record.nextActions);
 
   if (findings.length === 0 && uncertainties.length === 0 && nextActions.length === 0) {
     return undefined;
@@ -260,7 +331,14 @@ export function parseResearchSynthesisReply(reply: string): ResearchSynthesisRes
     .filter(Boolean)
     .map((line) => line.replace(/^[-*・•]\s*/, "").trim());
 
-  const nextActions = lines.filter((line) => /(確認|修正|対応|実装|調査|整理|洗い出し|作成|更新|共有|再現|検証|比較)/.test(line)).slice(0, 5);
+  const nextActions = lines
+    .filter((line) => /(確認|修正|対応|実装|調査|整理|洗い出し|作成|更新|共有|再現|検証|比較)/.test(line))
+    .slice(0, 5)
+    .map((title) => ({
+      title,
+      purpose: "",
+      confidence: 0.4,
+    }));
 
   return {
     findings: lines.slice(0, 3),
@@ -273,12 +351,13 @@ export function buildResearchSynthesisPrompt(input: ResearchSynthesisInput): str
   return [
     "Summarize the following collected research evidence for a Slack-first execution manager.",
     "Reply with a single JSON object only.",
-    'Use exactly this schema: {"findings": string[], "uncertainties": string[], "nextActions": string[]}.',
+    'Use exactly this schema: {"findings": string[], "uncertainties": string[], "nextActions": [{"title": string, "purpose": string, "ownerHint"?: string, "confidence": number}]}.',
     "Keep all strings in Japanese.",
     "findings should be concrete observations grounded in the provided evidence.",
     "uncertainties should capture what is still unclear or needs confirmation.",
     "nextActions should contain only concrete executable task candidates, not questions.",
     "Only include nextActions when they are specific enough to become Linear child issues.",
+    "Each nextActions item must include a concise title, a short purpose, and a confidence between 0 and 1.",
     "Do not repeat raw evidence verbatim when a short synthesis is enough.",
     "",
     "Research request context:",
@@ -301,6 +380,61 @@ export function buildResearchSynthesisPrompt(input: ResearchSynthesisInput): str
     "",
     "Web evidence:",
     input.webSummary || "- none",
+  ].join("\n");
+}
+
+function normalizeFollowupResolutionResult(value: unknown): FollowupResolutionResult | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.answered !== "boolean") return undefined;
+
+  return {
+    answered: record.answered,
+    answerKind: typeof record.answerKind === "string" && record.answerKind.trim() ? record.answerKind.trim() : undefined,
+    confidence: clampConfidence(record.confidence, record.answered ? 0.7 : 0.3),
+    extractedFields: normalizeStringRecord(record.extractedFields),
+    reasoningSummary: typeof record.reasoningSummary === "string" && record.reasoningSummary.trim()
+      ? record.reasoningSummary.trim()
+      : undefined,
+  };
+}
+
+export function parseFollowupResolutionReply(reply: string): FollowupResolutionResult {
+  const jsonText = extractJsonObject(reply);
+  if (jsonText) {
+    try {
+      const parsed = normalizeFollowupResolutionResult(JSON.parse(jsonText));
+      if (parsed) return parsed;
+    } catch {
+      // Fall through to the conservative unresolved result below.
+    }
+  }
+
+  return {
+    answered: false,
+    confidence: 0,
+    reasoningSummary: "follow-up resolution reply could not be parsed",
+  };
+}
+
+export function buildFollowupResolutionPrompt(input: FollowupResolutionInput): string {
+  return [
+    "Assess whether the Slack reply sufficiently answers an open execution-manager follow-up request.",
+    "Reply with a single JSON object only.",
+    'Use exactly this schema: {"answered": boolean, "answerKind": string, "confidence": number, "extractedFields": {"assignee"?: string, "dueDate"?: string, "status"?: string, "nextAction"?: string, "nextUpdate"?: string, "blockedReason"?: string, "waitingOn"?: string, "resumeCondition"?: string}, "reasoningSummary": string}.',
+    "Keep reasoningSummary concise and in Japanese.",
+    "Only set answered=true if the reply actually satisfies the requested follow-up.",
+    "For requestKind=status, expect progress, next action, and next update timing when possible.",
+    "For requestKind=blocked-details, expect blocked reason, waiting party, and resume condition.",
+    "For requestKind=owner, extract exactly one assignee name if present.",
+    "For requestKind=due-date, extract exactly one dueDate in YYYY-MM-DD if present.",
+    `issueId: ${input.issueId}`,
+    `issueTitle: ${input.issueTitle}`,
+    `requestKind: ${input.requestKind}`,
+    `requestText: ${input.requestText}`,
+    `acceptableAnswerHint: ${input.acceptableAnswerHint ?? "(none)"}`,
+    "Slack reply:",
+    input.responseText,
   ].join("\n");
 }
 
@@ -616,14 +750,36 @@ export async function runResearchSynthesisTurn(
     [
       "You are a research synthesis helper for a Slack-first execution manager.",
       "Reply with valid JSON only.",
-      "The JSON schema is {\"findings\": string[], \"uncertainties\": string[], \"nextActions\": string[]}.",
+      "The JSON schema is {\"findings\": string[], \"uncertainties\": string[], \"nextActions\": [{\"title\": string, \"purpose\": string, \"ownerHint\"?: string, \"confidence\": number}]}.",
       "Keep output concise, grounded in the provided evidence, and in Japanese.",
       "nextActions must be concrete executable task candidates, not vague summaries.",
+      "Use confidence between 0 and 1.",
     ].join("\n"),
     input.taskKey ?? `${input.channelId}-${input.rootThreadTs}-research-synthesis`,
   );
 
   return parseResearchSynthesisReply(reply);
+}
+
+export async function runFollowupResolutionTurn(
+  config: AppConfig,
+  paths: ThreadPaths,
+  input: FollowupResolutionInput,
+): Promise<FollowupResolutionResult> {
+  const reply = await runIsolatedPromptTurn(
+    config,
+    paths,
+    buildFollowupResolutionPrompt(input),
+    [
+      "You are a follow-up resolution helper for a Slack-first execution manager.",
+      "Reply with valid JSON only.",
+      "Decide whether the Slack reply actually answers the requested follow-up.",
+      "Be strict: mentioning progress without satisfying the request must stay unanswered.",
+    ].join("\n"),
+    input.taskKey ?? `${input.issueId}-followup-resolution`,
+  );
+
+  return parseFollowupResolutionReply(reply);
 }
 
 async function runPromptTurn(config: AppConfig, paths: ThreadPaths, prompt: string): Promise<string> {

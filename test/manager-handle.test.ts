@@ -33,6 +33,7 @@ const webResearchMocks = vi.hoisted(() => ({
 
 const piSessionMocks = vi.hoisted(() => ({
   runResearchSynthesisTurn: vi.fn(),
+  runFollowupResolutionTurn: vi.fn(),
 }));
 
 vi.mock("../src/lib/linear.js", () => ({
@@ -62,6 +63,7 @@ vi.mock("../src/lib/web-research.js", () => ({
 
 vi.mock("../src/lib/pi-session.js", () => ({
   runResearchSynthesisTurn: piSessionMocks.runResearchSynthesisTurn,
+  runFollowupResolutionTurn: piSessionMocks.runFollowupResolutionTurn,
 }));
 
 describe("handleManagerMessage clarification flow", () => {
@@ -146,6 +148,11 @@ describe("handleManagerMessage clarification flow", () => {
       uncertainties: ["スコープや対処方針の確定が必要なら、この thread で詰めます。"],
       nextActions: [],
     });
+    piSessionMocks.runFollowupResolutionTurn.mockReset().mockResolvedValue({
+      answered: false,
+      confidence: 0.3,
+      reasoningSummary: "要求に対する返答としてはまだ不十分です。",
+    });
   });
 
   afterEach(async () => {
@@ -224,10 +231,11 @@ describe("handleManagerMessage clarification flow", () => {
     expect(second.handled).toBe(true);
     expect(second.reply).toContain("Linear に登録しました");
     expect(second.reply).toContain("AIC-100");
-    expect(second.reply).toContain("- AIC-101 / API レート制限の確認 / 担当: y.kakui");
-    expect(second.reply).toContain("- AIC-102 / 修正対応 / 担当: y.kakui");
+    expect(second.reply).toContain("対象: AIC-100 来週のリリースに向けた対応");
+    expect(second.reply).toContain("子task: AIC-101 API レート制限の確認 / AIC-102 修正対応");
     expect(second.reply).not.toContain("暫定で kyaukyuai に寄せています");
-    expect(second.reply).toContain("この thread で進捗・完了・blocked をそのまま返してください");
+    expect(second.reply).toContain("次アクション: この thread で進捗・完了・blocked を続けてください。");
+    expect(second.reply).not.toContain("URL:");
 
     expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
     expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledTimes(1);
@@ -392,9 +400,9 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("親 issue は AIC-200 2ヶ月版の見積もり書作成 ほか1件 です。");
-    expect(result.reply).toContain("- AIC-201 / 2ヶ月版の見積もり書作成 / 担当: 角井 勇哉");
-    expect(result.reply).toContain("- AIC-202 / 4月・5月の2ヶ月間でのクローン成果物の作成 / 担当: 角井 勇哉 / 期限: 2026-05-31");
+    expect(result.reply).toContain("Linear に登録しました。");
+    expect(result.reply).toContain("対象: AIC-200 2ヶ月版の見積もり書作成 ほか1件");
+    expect(result.reply).toContain("子task: AIC-201 2ヶ月版の見積もり書作成 / AIC-202 4月・5月の2ヶ月間でのクローン成果物の作成");
     expect(result.reply).not.toContain("暫定で kyaukyuai に寄せています");
 
     expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledWith(
@@ -489,10 +497,12 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("対象の issue ID を 1 つ指定してください");
-    expect(result.reply).toContain("AIC-121");
-    expect(result.reply).toContain("AIC-122");
-    expect(linearMocks.updateLinearIssueState).not.toHaveBeenCalled();
+    expect(result.reply).toContain("完了を Linear に反映しました。");
+    expect(linearMocks.updateLinearIssueState).toHaveBeenCalledWith(
+      "AIC-122",
+      "completed",
+      expect.any(Object),
+    );
   });
 
   it("prefers a matching child issue in a multi-issue thread", async () => {
@@ -799,12 +809,12 @@ describe("handleManagerMessage clarification flow", () => {
 
   it("includes latest action labels in ambiguity replies", async () => {
     const reply = formatIssueSelectionReply("progress", [
-      { issueId: "AIC-431", title: "設計整理", latestActionLabel: "進捗" },
-      { issueId: "AIC-432", title: "設計検証", latestActionLabel: "blocked" },
+      { issueId: "AIC-431", title: "設計整理", latestActionLabel: "進捗", focusReason: "直近 thread focus" },
+      { issueId: "AIC-432", title: "設計検証", latestActionLabel: "blocked", focusReason: "最新 intake entry" },
     ]);
 
-    expect(reply).toContain("AIC-431 / 設計整理 / 最新: 進捗");
-    expect(reply).toContain("AIC-432 / 設計検証 / 最新: blocked");
+    expect(reply).toContain("AIC-431 / 設計整理 / 最新: 進捗 / 理由: 直近 thread focus");
+    expect(reply).toContain("AIC-432 / 設計検証 / 最新: blocked / 理由: 最新 intake entry");
   });
 
   it("writes a structured research comment for research-first requests", async () => {
@@ -863,7 +873,7 @@ describe("handleManagerMessage clarification flow", () => {
     piSessionMocks.runResearchSynthesisTurn.mockResolvedValue({
       findings: ["関連 issue として AIC-050 過去のログイン不具合 を確認しました。"],
       uncertainties: ["スコープや対処方針の確定が必要なら、この thread で詰めます。"],
-      nextActions: ["API 仕様の確認"],
+      nextActions: [{ title: "API 仕様の確認", purpose: "API の差分を確認する", confidence: 0.82 }],
     });
 
     const result = await handleManagerMessage(
@@ -881,14 +891,10 @@ describe("handleManagerMessage clarification flow", () => {
 
     expect(result.handled).toBe(true);
     expect(result.reply).toContain("調査内容を Linear に記録しました");
-    expect(result.reply).toContain("調べた範囲: Slack thread / 関連 Linear issue / Web");
     expect(result.reply).toContain("分かったこと: 関連 issue として AIC-050 過去のログイン不具合 を確認しました。");
+    expect(result.reply).toContain("未確定事項: スコープや対処方針の確定が必要なら、この thread で詰めます。");
     expect(result.reply).toContain("次アクション: API 仕様の確認");
-    expect(linearMocks.addLinearComment).toHaveBeenCalledWith(
-      "AIC-141",
-      expect.stringContaining("関連 issue として AIC-050 過去のログイン不具合 を確認しました。"),
-      expect.any(Object),
-    );
+    expect(result.reply).not.toContain("調べた範囲:");
     expect(linearMocks.addLinearComment).toHaveBeenCalledWith(
       "AIC-141",
       expect.stringContaining("### Web results"),
@@ -897,7 +903,7 @@ describe("handleManagerMessage clarification flow", () => {
     expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
       expect.objectContaining({
         issueId: "AIC-141",
-        description: expect.stringContaining("## 分かったこと"),
+        description: expect.stringContaining("関連 issue として AIC-050 過去のログイン不具合 を確認しました。"),
       }),
       expect.any(Object),
     );
@@ -955,7 +961,10 @@ describe("handleManagerMessage clarification flow", () => {
     piSessionMocks.runResearchSynthesisTurn.mockResolvedValue({
       findings: ["API 仕様の確認と修正方針の整理が必要です。"],
       uncertainties: ["仕様の確定が必要です。"],
-      nextActions: ["API 仕様の確認", "修正方針の整理"],
+      nextActions: [
+        { title: "API 仕様の確認", purpose: "API 差分を洗い出す", confidence: 0.88 },
+        { title: "修正方針の整理", purpose: "修正方針を具体化する", confidence: 0.81 },
+      ],
     });
 
     const result = await handleManagerMessage(
@@ -973,8 +982,7 @@ describe("handleManagerMessage clarification flow", () => {
 
     expect(result.handled).toBe(true);
     expect(result.reply).toContain("追加 task を 2 件作成しました");
-    expect(result.reply).toContain("AIC-242 / API 仕様の確認");
-    expect(result.reply).toContain("AIC-243 / 修正方針の整理");
+    expect(result.reply).toContain("子task: AIC-242 API 仕様の確認 / AIC-243 修正方針の整理");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(4);
 
     const ledger = await loadIntakeLedger(systemPaths);
@@ -1034,8 +1042,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("既存の親 issue AIC-11 ログイン画面の不具合修正 配下");
-    expect(result.reply).toContain("調査 task AIC-150 調査: ログイン画面の不具合");
+    expect(result.reply).toContain("対象: AIC-11 ログイン画面の不具合修正 配下 / AIC-150 調査: ログイン画面の不具合");
+    expect(result.reply).toContain("次アクション: 調査結果をもとに必要なら実行 task を追加します。");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(1);
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1100,7 +1108,9 @@ describe("handleManagerMessage clarification flow", () => {
     expect(morning?.text).toContain("AIC-300");
     expect(morning?.followup).toEqual(expect.objectContaining({
       issueId: "AIC-300",
-      request: "次の一手と完了見込みを共有してください。",
+      request: "現在の進捗と次アクション、次回更新予定を共有してください。",
+      requestKind: "status",
+      acceptableAnswerHint: "進捗 / 次アクション / 次回更新予定",
       source: expect.objectContaining({
         channelId: "C0ALAMDRB9V",
         rootThreadTs: "thread-review-followup",
@@ -1171,14 +1181,30 @@ describe("handleManagerMessage clarification flow", () => {
       "morning-review",
       new Date("2026-03-17T01:00:00.000Z"),
     );
-    linearMocks.getLinearIssue.mockResolvedValueOnce({
+    linearMocks.getLinearIssue.mockImplementationOnce(async () => ({
       id: "issue-1",
       identifier: "AIC-301",
       title: "期限超過のタスク",
       assignee: { id: "user-1", displayName: "y.kakui" },
       relations: [],
       inverseRelations: [],
-    });
+    })).mockImplementationOnce(async () => ({
+      id: "issue-1",
+      identifier: "AIC-301",
+      title: "期限超過のタスク",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+      comments: [
+        {
+          id: "comment-1",
+          body: "## Progress update\n進捗です。原因は再現できています",
+          createdAt: "2026-03-17T01:10:00.000Z",
+        },
+      ],
+      latestActionKind: "progress",
+      latestActionAt: "2026-03-17T01:10:00.000Z",
+    }));
 
     let followups = await loadFollowupsLedger(systemPaths);
     expect(followups).toEqual(expect.arrayContaining([
@@ -1187,6 +1213,18 @@ describe("handleManagerMessage clarification flow", () => {
         status: "awaiting-response",
       }),
     ]));
+
+    piSessionMocks.runFollowupResolutionTurn.mockResolvedValueOnce({
+      answered: true,
+      answerKind: "status",
+      confidence: 0.82,
+      extractedFields: {
+        status: "原因は再現できています",
+        nextAction: "修正方針の整理",
+        nextUpdate: "本日中",
+      },
+      reasoningSummary: "進捗と次アクションが示されているため、要求に答えています。",
+    });
 
     const result = await handleManagerMessage(
       { ...config, workspaceDir },
@@ -1207,9 +1245,13 @@ describe("handleManagerMessage clarification flow", () => {
       expect.objectContaining({
         issueId: "AIC-301",
         status: "resolved",
-        resolvedReason: "response",
-        lastResponseKind: "progress",
+        resolvedReason: "answered",
+        lastResponseKind: "followup-response",
         lastResponseText: "進捗です。原因は再現できています",
+        resolutionAssessment: expect.objectContaining({
+          answered: true,
+          confidence: 0.82,
+        }),
       }),
     ]));
     expect(followups.find((entry) => entry.issueId === "AIC-301")?.resolvedAt).toBeTruthy();
@@ -1268,6 +1310,100 @@ describe("handleManagerMessage clarification flow", () => {
         issueId: "AIC-305",
         status: "awaiting-response",
         lastResponseKind: "progress",
+      }),
+    ]));
+  });
+
+  it("keeps a status follow-up unresolved when the reply lacks a next action", async () => {
+    await writeFile(systemPaths.intakeLedgerFile, `${JSON.stringify([
+      {
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-status-followup",
+        sourceMessageTs: "msg-1",
+        messageFingerprint: "status-followup",
+        childIssueIds: ["AIC-306"],
+        status: "created",
+        clarificationReasons: [],
+        lastResolvedIssueId: "AIC-306",
+        createdAt: "2026-03-17T00:00:00.000Z",
+        updatedAt: "2026-03-17T00:00:00.000Z",
+      },
+    ], null, 2)}\n`);
+    await writeFile(systemPaths.followupsFile, `${JSON.stringify([
+      {
+        issueId: "AIC-306",
+        lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
+        lastCategory: "stale",
+        requestKind: "status",
+        requestText: "現在の進捗と次アクション、次回更新予定を共有してください。",
+        acceptableAnswerHint: "進捗 / 次アクション / 次回更新予定",
+        status: "awaiting-response",
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-status-followup",
+        sourceMessageTs: "msg-1",
+      },
+    ], null, 2)}\n`);
+
+    linearMocks.getLinearIssue.mockImplementationOnce(async () => ({
+      id: "issue-306",
+      identifier: "AIC-306",
+      title: "進捗確認待ち task",
+      relations: [],
+      inverseRelations: [],
+    })).mockImplementationOnce(async () => ({
+      id: "issue-306",
+      identifier: "AIC-306",
+      title: "進捗確認待ち task",
+      relations: [],
+      inverseRelations: [],
+      comments: [
+        {
+          id: "comment-1",
+          body: "## Progress update\n進捗です。原因は再現できています",
+          createdAt: "2026-03-17T01:20:00.000Z",
+        },
+      ],
+      latestActionKind: "progress",
+      latestActionAt: "2026-03-17T01:20:00.000Z",
+    }));
+    piSessionMocks.runFollowupResolutionTurn.mockResolvedValueOnce({
+      answered: false,
+      answerKind: "status",
+      confidence: 0.42,
+      extractedFields: {
+        status: "原因は再現できています",
+      },
+      reasoningSummary: "進捗はあるが、次アクションと次回更新予定が不足しています。",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-status-followup",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "進捗です。原因は再現できています",
+      },
+      new Date("2026-03-17T01:20:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("follow-up への返答を受け取りました。");
+    expect(result.reply).toContain("引き続き必要な返答");
+
+    const followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-306",
+        status: "awaiting-response",
+        lastResponseKind: "followup-response",
+        lastResponseText: "進捗です。原因は再現できています",
+        resolutionAssessment: expect.objectContaining({
+          answered: false,
+          confidence: 0.42,
+        }),
       }),
     ]));
   });
@@ -1410,7 +1546,7 @@ describe("handleManagerMessage clarification flow", () => {
         lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
         lastCategory: "overdue",
         status: "awaiting-response",
-        requestText: "次の一手と完了見込みを共有してください。",
+        requestText: "最新状況と次アクション、次回更新予定を共有してください。",
       },
     ], null, 2)}\n`);
 
@@ -1432,7 +1568,7 @@ describe("handleManagerMessage clarification flow", () => {
         lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
         lastCategory: "overdue",
         status: "awaiting-response",
-        requestText: "次の一手と完了見込みを共有してください。",
+        requestText: "最新状況と次アクション、次回更新予定を共有してください。",
       },
     ], null, 2)}\n`);
 
@@ -1497,6 +1633,72 @@ describe("handleManagerMessage clarification flow", () => {
     ]));
   });
 
+  it("applies a due-date follow-up reply from the source thread and resolves it as risk-cleared", async () => {
+    await writeFile(systemPaths.followupsFile, `${JSON.stringify([
+      {
+        issueId: "AIC-404",
+        lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
+        lastCategory: "due_missing",
+        requestKind: "due-date",
+        requestText: "期限を YYYY-MM-DD で共有してください。",
+        acceptableAnswerHint: "YYYY-MM-DD",
+        status: "awaiting-response",
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-due-followup",
+        sourceMessageTs: "msg-1",
+      },
+    ], null, 2)}\n`);
+    linearMocks.getLinearIssue.mockResolvedValueOnce({
+      id: "issue-404",
+      identifier: "AIC-404",
+      title: "期限未設定の task",
+      relations: [],
+      inverseRelations: [],
+    });
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-404",
+      identifier: "AIC-404",
+      title: "期限未設定の task",
+      dueDate: "2026-03-20",
+      relations: [],
+      inverseRelations: [],
+    });
+    piSessionMocks.runFollowupResolutionTurn.mockResolvedValueOnce({
+      answered: true,
+      answerKind: "due-date",
+      confidence: 0.92,
+      extractedFields: {
+        dueDate: "2026-03-20",
+      },
+      reasoningSummary: "期限が YYYY-MM-DD で指定されています。",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-due-followup",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "期限は 2026-03-20 です",
+      },
+      new Date("2026-03-17T01:30:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("期限: 2026-03-20");
+
+    const followups = await loadFollowupsLedger(systemPaths);
+    expect(followups).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        issueId: "AIC-404",
+        status: "resolved",
+        resolvedReason: "risk-cleared",
+      }),
+    ]));
+  });
+
   it("does not resolve a follow-up only because the issue remains risky with a different primary category", async () => {
     linearMocks.listRiskyLinearIssues.mockResolvedValue([
       {
@@ -1518,7 +1720,7 @@ describe("handleManagerMessage clarification flow", () => {
         lastPublicFollowupAt: "2026-03-17T00:30:00.000Z",
         lastCategory: "overdue",
         status: "awaiting-response",
-        requestText: "次の一手と完了見込みを共有してください。",
+        requestText: "最新状況と次アクション、次回更新予定を共有してください。",
       },
     ], null, 2)}\n`);
 

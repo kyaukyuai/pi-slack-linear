@@ -8,7 +8,10 @@ import {
   deriveIssueTitle,
   extractTaskSegments,
   fingerprintText,
+  formatControlRoomFollowupForSlack,
+  formatControlRoomReviewForSlack,
   formatClarificationReply,
+  formatIssueLineForSlack,
   needsResearchTask,
 } from "../src/lib/manager.js";
 import type { ManagerPolicy, OwnerMap } from "../src/lib/manager-state.js";
@@ -186,5 +189,71 @@ describe("manager helpers", () => {
 
     expect(result.blocked).toBe(true);
     expect(result.riskCategories).toContain("blocked");
+  });
+
+  it("formats compact issue lines for control room posts", () => {
+    expect(formatIssueLineForSlack({
+      issueId: "AIC-1",
+      title: "ログイン画面の不具合修正",
+      assigneeDisplayName: "y.kakui",
+      riskSummary: "overdue, blocked",
+    })).toBe("- AIC-1 | ログイン画面の不具合修正 | y.kakui | overdue, blocked");
+  });
+
+  it("mentions assignees only for important follow-ups when slack user ids are available", () => {
+    expect(formatControlRoomFollowupForSlack({
+      issueId: "AIC-1",
+      issueTitle: "ログイン画面の不具合修正",
+      request: "原因と、誰の返答待ちか、何がそろえば再開できるかを共有してください。",
+      requestKind: "blocked-details",
+      acceptableAnswerHint: "原因 / 待ち先 / 再開条件",
+      assigneeDisplayName: "y.kakui",
+      slackUserId: "U123",
+      riskCategory: "blocked",
+      shouldMention: true,
+    }, "https://slack.example/thread")).toContain("<@U123>");
+
+    expect(formatControlRoomFollowupForSlack({
+      issueId: "AIC-2",
+      issueTitle: "期限確認待ち task",
+      request: "期限を YYYY-MM-DD で共有してください。",
+      requestKind: "due-date",
+      acceptableAnswerHint: "YYYY-MM-DD",
+      assigneeDisplayName: "y.kakui",
+      riskCategory: "due_missing",
+      shouldMention: false,
+    }, "https://slack.example/thread")).not.toContain("<@");
+  });
+
+  it("formats control room reviews with a heading, at most three issue lines, and one follow-up", () => {
+    const review = formatControlRoomReviewForSlack({
+      kind: "morning-review",
+      text: "fallback text",
+      summaryLines: ["今日やるべきこと", "期限リスク", "stale"],
+      issueLines: [
+        { issueId: "AIC-1", title: "task 1", assigneeDisplayName: "a", riskSummary: "overdue" },
+        { issueId: "AIC-2", title: "task 2", assigneeDisplayName: "b", riskSummary: "blocked" },
+        { issueId: "AIC-3", title: "task 3", assigneeDisplayName: "c", riskSummary: "stale" },
+        { issueId: "AIC-4", title: "task 4", assigneeDisplayName: "d", riskSummary: "due_today" },
+      ],
+      followup: {
+        issueId: "AIC-2",
+        issueTitle: "task 2",
+        request: "原因と、誰の返答待ちか、何がそろえば再開できるかを共有してください。",
+        requestKind: "blocked-details",
+        acceptableAnswerHint: "原因 / 待ち先 / 再開条件",
+        assigneeDisplayName: "b",
+        slackUserId: "U456",
+        riskCategory: "blocked",
+        shouldMention: true,
+      },
+    }, "https://slack.example/thread");
+
+    expect(review).toContain("朝の execution review");
+    expect(review).toContain("- AIC-1 | task 1 | a | overdue");
+    expect(review).toContain("- AIC-2 | task 2 | b | blocked");
+    expect(review).toContain("- AIC-3 | task 3 | c | stale");
+    expect(review).not.toContain("- AIC-4 | task 4 | d | due_today");
+    expect(review).toContain("要返信: | AIC-2 | <@U456> |");
   });
 });

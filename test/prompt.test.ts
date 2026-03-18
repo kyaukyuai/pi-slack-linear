@@ -4,8 +4,10 @@ import { DEFAULT_HEARTBEAT_PROMPT } from "../src/lib/heartbeat.js";
 import { createLinearCustomTools } from "../src/lib/linear-tools.js";
 import {
   buildAgentPrompt,
+  buildFollowupResolutionPrompt,
   buildResearchSynthesisPrompt,
   buildSystemPrompt,
+  parseFollowupResolutionReply,
   parseResearchSynthesisReply,
   type ThreadPromptContext,
 } from "../src/lib/pi-session.js";
@@ -146,13 +148,46 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Related Linear issues:");
 
     const parsed = parseResearchSynthesisReply(`\`\`\`json
-{"findings":["関連 issue を確認しました。"],"uncertainties":["対処方針の確定が必要です。"],"nextActions":["API 仕様の確認","修正方針の整理"]}
+{"findings":["関連 issue を確認しました。"],"uncertainties":["対処方針の確定が必要です。"],"nextActions":[{"title":"API 仕様の確認","purpose":"仕様差分を確認する","confidence":0.8},{"title":"修正方針の整理","purpose":"方針を整理する","confidence":0.7}]}
 \`\`\``);
 
     expect(parsed).toEqual({
       findings: ["関連 issue を確認しました。"],
       uncertainties: ["対処方針の確定が必要です。"],
-      nextActions: ["API 仕様の確認", "修正方針の整理"],
+      nextActions: [
+        { title: "API 仕様の確認", purpose: "仕様差分を確認する", confidence: 0.8 },
+        { title: "修正方針の整理", purpose: "方針を整理する", confidence: 0.7 },
+      ],
+    });
+  });
+
+  it("builds and parses follow-up resolution prompts", () => {
+    const prompt = buildFollowupResolutionPrompt({
+      issueId: "AIC-123",
+      issueTitle: "ログイン画面の不具合修正",
+      requestKind: "blocked-details",
+      requestText: "原因と、誰の返答待ちか、何がそろえば再開できるかを共有してください。",
+      acceptableAnswerHint: "原因 / 待ち先 / 再開条件",
+      responseText: "原因は API 仕様差分です。田平さんの返答待ちで、仕様確定したら再開できます。",
+    });
+
+    expect(prompt).toContain("requestKind: blocked-details");
+    expect(prompt).toContain("acceptableAnswerHint: 原因 / 待ち先 / 再開条件");
+
+    const parsed = parseFollowupResolutionReply(`\`\`\`json
+{"answered":true,"answerKind":"blocked-details","confidence":0.9,"extractedFields":{"blockedReason":"API 仕様差分","waitingOn":"田平さん","resumeCondition":"仕様確定"},"reasoningSummary":"要求された blocked 詳細を満たしています。"}
+\`\`\``);
+
+    expect(parsed).toEqual({
+      answered: true,
+      answerKind: "blocked-details",
+      confidence: 0.9,
+      extractedFields: {
+        blockedReason: "API 仕様差分",
+        waitingOn: "田平さん",
+        resumeCondition: "仕様確定",
+      },
+      reasoningSummary: "要求された blocked 詳細を満たしています。",
     });
   });
 });

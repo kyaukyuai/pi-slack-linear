@@ -7,7 +7,7 @@ import { loadConfig } from "./lib/config.js";
 import { HeartbeatService } from "./lib/heartbeat.js";
 import { verifyLinearCli } from "./lib/linear.js";
 import { Logger } from "./lib/logger.js";
-import { buildHeartbeatReviewDecision, buildManagerReview, formatManagerReviewFollowupLine, handleManagerMessage, type ManagerReviewResult } from "./lib/manager.js";
+import { buildHeartbeatReviewDecision, buildManagerReview, formatControlRoomReviewForSlack, handleManagerMessage, type ManagerReviewResult } from "./lib/manager.js";
 import { ensureManagerSystemFiles, loadManagerPolicy } from "./lib/manager-state.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn, runSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
@@ -44,7 +44,7 @@ async function formatManagerReviewForSlack(
   result: ManagerReviewResult,
 ): Promise<string> {
   if (!result.followup) {
-    return result.text;
+    return formatControlRoomReviewForSlack(result);
   }
 
   const fallbackThreadRef = result.followup.source
@@ -69,7 +69,7 @@ async function formatManagerReviewForSlack(
     }
   }
 
-  return `${result.text}\n${formatManagerReviewFollowupLine(result.followup, threadReference)}`;
+  return formatControlRoomReviewForSlack(result, threadReference);
 }
 
 async function downloadAttachments(

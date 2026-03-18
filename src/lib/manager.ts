@@ -29,7 +29,13 @@ import {
   type OwnerMapEntry,
   type PlanningLedgerEntry,
 } from "./manager-state.js";
-import { runResearchSynthesisTurn, type ResearchSynthesisResult } from "./pi-session.js";
+import {
+  runFollowupResolutionTurn,
+  runResearchSynthesisTurn,
+  type FollowupResolutionResult,
+  type ResearchNextAction,
+  type ResearchSynthesisResult,
+} from "./pi-session.js";
 import { getRecentChannelContext, getSlackThreadContext } from "./slack-context.js";
 import type { SystemPaths } from "./system-workspace.js";
 import { buildThreadPaths } from "./thread-workspace.js";
@@ -62,13 +68,27 @@ export interface ManagerReviewFollowup {
   issueId: string;
   issueTitle: string;
   request: string;
+  requestKind: "status" | "blocked-details" | "owner" | "due-date";
+  acceptableAnswerHint?: string;
   assigneeDisplayName?: string;
+  slackUserId?: string;
+  riskCategory: string;
+  shouldMention: boolean;
   source?: ManagerFollowupSource;
+}
+
+export interface ManagerReviewIssueLine {
+  issueId: string;
+  title: string;
+  assigneeDisplayName?: string;
+  riskSummary: string;
 }
 
 export interface ManagerReviewResult {
   kind: ManagerReviewKind;
   text: string;
+  summaryLines?: string[];
+  issueLines?: ManagerReviewIssueLine[];
   followup?: ManagerReviewFollowup;
 }
 
@@ -504,6 +524,7 @@ interface ThreadIssueCandidates {
   parentIssueIds: Set<string>;
   latestEntryIssueIds: string[];
   lastResolvedIssueId?: string;
+  latestFocusIssueId?: string;
 }
 
 interface ScoredIssueTarget {
@@ -520,6 +541,7 @@ interface ResolvedIssueCandidate {
   issueId: string;
   title?: string;
   latestActionLabel?: string;
+  focusReason?: string;
 }
 
 interface IssueTargetResolution {
@@ -547,6 +569,7 @@ function collectThreadIssueCandidates(
     parentIssueIds,
     latestEntryIssueIds: latestEntry ? collectEntryIssueIds(latestEntry) : [],
     lastResolvedIssueId: latestEntry?.lastResolvedIssueId ?? threadEntries.find((entry) => entry.lastResolvedIssueId)?.lastResolvedIssueId,
+    latestFocusIssueId: latestEntry?.issueFocusHistory?.slice(-1)[0]?.issueId,
   };
 }
 
@@ -556,6 +579,14 @@ function formatLatestActionLabel(issue: LinearIssue): string | undefined {
   if (issue.latestActionKind === "blocked") return "blocked";
   if (issue.latestActionKind === "slack-source") return "Slack source";
   return "その他";
+}
+
+function describeFocusReason(issue: LinearIssue, candidates: ThreadIssueCandidates): string | undefined {
+  if (candidates.latestFocusIssueId === issue.identifier) return "直近 thread focus";
+  if (candidates.lastResolvedIssueId === issue.identifier) return "直近解決対象";
+  if (candidates.latestEntryIssueIds.includes(issue.identifier)) return "最新 intake entry";
+  if (candidates.childIssueIds.has(issue.identifier)) return "thread child issue";
+  return undefined;
 }
 
 function issueMatchesCompletedState(issue: LinearIssue): boolean {
@@ -640,6 +671,9 @@ function scoreIssueTargetCandidate(
 
   if (candidates.childIssueIds.has(issue.identifier)) {
     score += 22;
+  }
+  if (candidates.latestFocusIssueId === issue.identifier) {
+    score += 28;
   }
   if (candidates.latestEntryIssueIds.includes(issue.identifier)) {
     score += 16;
@@ -787,6 +821,7 @@ async function resolveIssueTargetsFromThread(
         issueId: item.issue.identifier,
         title: item.issue.title,
         latestActionLabel: formatLatestActionLabel(item.issue),
+        focusReason: describeFocusReason(item.issue, candidates),
       })),
       reason: "thread",
     };
@@ -798,6 +833,7 @@ async function resolveIssueTargetsFromThread(
       issueId: item.issue.identifier,
       title: item.issue.title,
       latestActionLabel: formatLatestActionLabel(item.issue),
+      focusReason: describeFocusReason(item.issue, candidates),
     })),
     reason: "ambiguous",
   };
@@ -817,7 +853,7 @@ export function formatIssueSelectionReply(
   if (issues.length > 0) {
     lines.push("対象の issue ID を 1 つ指定してください。候補:");
     for (const issue of issues.slice(0, 5)) {
-      lines.push(`- ${issue.issueId}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}`);
+      lines.push(`- ${issue.issueId}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}${issue.focusReason ? ` / 理由: ${issue.focusReason}` : ""}`);
     }
   } else {
     lines.push("同じ thread に紐づく issue が無かったため、`AIC-123` のように issue ID を含めてください。");
@@ -853,6 +889,29 @@ function formatStatusSourceComment(message: ManagerSlackMessage, heading: string
   ].join("\n");
 }
 
+function buildIssueFocusEvent(
+  issueId: string,
+  actionKind: string,
+  source: string,
+  textSnippet: string | undefined,
+  now: Date,
+): NonNullable<IntakeLedgerEntry["issueFocusHistory"]>[number] {
+  return {
+    issueId,
+    actionKind,
+    source,
+    ts: nowIso(now),
+    textSnippet: textSnippet?.replace(/\s+/g, " ").trim().slice(0, 140) || undefined,
+  };
+}
+
+function appendIssueFocusHistory(
+  existing: IntakeLedgerEntry["issueFocusHistory"] | undefined,
+  nextEvents: NonNullable<IntakeLedgerEntry["issueFocusHistory"]>,
+): NonNullable<IntakeLedgerEntry["issueFocusHistory"]> {
+  return [...(existing ?? []), ...nextEvents].slice(-20);
+}
+
 function upsertThreadIntakeEntry(
   intakeLedger: IntakeLedgerEntry[],
   message: Pick<ManagerSlackMessage, "channelId" | "rootThreadTs" | "messageTs" | "text">,
@@ -863,6 +922,9 @@ function upsertThreadIntakeEntry(
   const latest = threadEntries[threadEntries.length - 1];
 
   if (!latest) {
+    const issueFocusHistory = patch.issueFocusHistory
+      ? appendIssueFocusHistory([], patch.issueFocusHistory)
+      : [];
     return [
       ...intakeLedger,
       {
@@ -877,6 +939,7 @@ function upsertThreadIntakeEntry(
         createdAt: nowIso(now),
         updatedAt: nowIso(now),
         ...patch,
+        issueFocusHistory,
       },
     ];
   }
@@ -885,6 +948,9 @@ function upsertThreadIntakeEntry(
     ? {
         ...entry,
         ...patch,
+        issueFocusHistory: patch.issueFocusHistory
+          ? appendIssueFocusHistory(entry.issueFocusHistory, patch.issueFocusHistory)
+          : entry.issueFocusHistory,
         updatedAt: nowIso(now),
       }
     : entry);
@@ -955,32 +1021,38 @@ function buildFallbackResearchSynthesis(args: {
   };
 }
 
-function formatResearchNextActions(nextActions: string[]): string {
-  return extractTopLines(nextActions, "調査結果をもとに必要な実行子 issue を追加する。");
+function formatResearchNextActions(nextActions: ResearchNextAction[]): string {
+  return extractTopLines(nextActions.map((action) => action.title), "調査結果をもとに必要な実行子 issue を追加する。");
 }
 
 function filterResearchNextActions(
-  nextActions: string[],
+  nextActions: ResearchNextAction[],
   existingTitles: string[],
   policy: ManagerPolicy,
-): string[] {
+): ResearchNextAction[] {
   const existingNormalizedTitles = new Set(existingTitles.map((title) => normalizeText(title)));
-  return unique(
-    nextActions
-      .map((action) => deriveIssueTitle(action))
-      .map((action) => trimJapaneseParticles(action))
-      .filter((action) => action.length >= 6)
-      .filter((action) => ACTIONABLE_RESEARCH_PATTERN.test(action))
-      .filter((action) => {
-        const normalizedCandidate = normalizeText(action);
-        for (const existing of existingNormalizedTitles) {
-          if (existing.includes(normalizedCandidate) || normalizedCandidate.includes(existing)) {
-            return false;
-          }
+  const seen = new Set<string>();
+
+  return nextActions
+    .map((action) => ({
+      ...action,
+      title: trimJapaneseParticles(deriveIssueTitle(action.title)),
+    }))
+    .filter((action) => action.title.length >= 6)
+    .filter((action) => action.confidence >= 0.6)
+    .filter((action) => ACTIONABLE_RESEARCH_PATTERN.test(action.title))
+    .filter((action) => {
+      const normalizedCandidate = normalizeText(action.title);
+      if (seen.has(normalizedCandidate)) return false;
+      for (const existing of existingNormalizedTitles) {
+        if (existing.includes(normalizedCandidate) || normalizedCandidate.includes(existing)) {
+          return false;
         }
-        return true;
-      }),
-  ).slice(0, policy.researchAutoPlanMaxChildren);
+      }
+      seen.add(normalizedCandidate);
+      return true;
+    })
+    .slice(0, policy.researchAutoPlanMaxChildren);
 }
 
 function buildResearchIssueDescription(args: {
@@ -1027,11 +1099,6 @@ function buildResearchComment(args: {
     : "- 直近 thread 文脈は取得できませんでした。";
 
   return [
-    buildResearchIssueDescription({
-      sourceMessage: args.sourceMessage,
-      synthesis: args.synthesis,
-    }),
-    "",
     "## Evidence",
     "### Slack thread context",
     formatSlackContextSummary(args.slackThreadEntries),
@@ -1062,15 +1129,112 @@ function formatIssueReference(issue: Pick<LinearIssue, "identifier" | "title">):
   return `${issue.identifier} ${issue.title}`;
 }
 
+function truncateSlackText(text: string, maxLength = 80): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function buildSlackTargetLabel(issue: Pick<LinearIssue, "identifier" | "title">): string {
+  return `${issue.identifier} ${truncateSlackText(issue.title)}`;
+}
+
+function formatChildIssueSummaryForSlack(children: LinearIssue[], limit = 2): string | undefined {
+  if (children.length === 0) return undefined;
+  const visible = children.slice(0, limit).map((issue) => buildSlackTargetLabel(issue));
+  const suffix = children.length > limit ? ` (+${children.length - limit}件)` : "";
+  return `子task: ${visible.join(" / ")}${suffix}`;
+}
+
+function formatThreadReplyForSlack(args: {
+  headline: string;
+  target?: string;
+  lines?: string[];
+  url?: string;
+  maxLines?: number;
+}): string {
+  const maxLines = args.maxLines ?? 4;
+  const bodyLines = (args.lines ?? []).filter((line) => line.trim().length > 0);
+  const lines = [args.headline];
+  if (args.target) {
+    lines.push(`対象: ${args.target}`);
+  }
+
+  const urlLine = args.url ? `URL: ${args.url}` : undefined;
+  const reservedForUrl = urlLine ? 1 : 0;
+  const remaining = Math.max(0, maxLines - lines.length - reservedForUrl);
+  lines.push(...bodyLines.slice(0, remaining));
+  if (urlLine && lines.length < maxLines) {
+    lines.push(urlLine);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatIssueLineForSlack(issue: ManagerReviewIssueLine): string {
+  const title = truncateSlackText(issue.title);
+  const assignee = issue.assigneeDisplayName ?? "未割当";
+  return `- ${issue.issueId} | ${title} | ${assignee} | ${issue.riskSummary}`;
+}
+
+function formatSlackAssigneeLabel(followup: ManagerReviewFollowup): string {
+  if (followup.shouldMention && followup.slackUserId) {
+    return `<@${followup.slackUserId}>`;
+  }
+  return followup.assigneeDisplayName ?? "未割当";
+}
+
+export function formatControlRoomFollowupForSlack(followup: ManagerReviewFollowup, threadReference: string): string {
+  const answerFormat = followup.acceptableAnswerHint ?? acceptableAnswerHintForRequestKind(followup.requestKind);
+  return [
+    "要返信:",
+    followup.issueId,
+    formatSlackAssigneeLabel(followup),
+    followup.request,
+    `返答フォーマット: ${answerFormat}`,
+    `戻る thread: ${threadReference}`,
+  ].join(" | ");
+}
+
 export function formatManagerReviewFollowupLine(followup: ManagerReviewFollowup, threadReference: string): string {
-  const assignee = followup.assigneeDisplayName ?? "未割当";
-  return `確認依頼: ${followup.issueId} / 担当: ${assignee} / ${followup.request} / 戻る thread: ${threadReference}`;
+  return formatControlRoomFollowupForSlack(followup, threadReference);
+}
+
+export function formatControlRoomReviewForSlack(result: ManagerReviewResult, threadReference?: string): string {
+  const lines: string[] = [];
+
+  if (result.kind === "morning-review") {
+    lines.push("朝の execution review");
+  } else if (result.kind === "evening-review") {
+    lines.push("夕方の execution review");
+  } else if (result.kind === "weekly-review") {
+    lines.push("週次 planning review");
+  } else {
+    lines.push("緊急フォロー");
+  }
+
+  for (const summary of result.summaryLines ?? []) {
+    lines.push(summary.startsWith("- ") ? summary : `- ${summary}`);
+  }
+  for (const issueLine of (result.issueLines ?? []).slice(0, 3)) {
+    lines.push(formatIssueLineForSlack(issueLine));
+  }
+  if (result.followup) {
+    lines.push(formatControlRoomFollowupForSlack(result.followup, threadReference ?? "source thread unavailable"));
+  }
+
+  if (lines.length === 1) {
+    return result.text;
+  }
+  return lines.join("\n");
 }
 
 function resolveFollowupEntry(
   entry: FollowupLedgerEntry,
   now: Date,
-  reason: "response" | "risk-cleared" | "completed",
+  reason: "response" | "risk-cleared" | "completed" | "answered",
 ): FollowupLedgerEntry {
   return {
     ...entry,
@@ -1080,10 +1244,36 @@ function resolveFollowupEntry(
   };
 }
 
+function issueNeedsFollowupResponse(
+  followups: FollowupLedgerEntry[],
+  issueId: string,
+): FollowupLedgerEntry | undefined {
+  return followups.find((entry) => entry.issueId === issueId && entry.status === "awaiting-response");
+}
+
+function requestKindToSignalKind(
+  requestKind: ManagerReviewFollowup["requestKind"] | undefined,
+): Exclude<ManagerMessageKind, "conversation" | "request"> {
+  return requestKind === "blocked-details" ? "blocked" : "progress";
+}
+
+function buildFollowupResponseComment(message: ManagerSlackMessage, followup: FollowupLedgerEntry): string {
+  return [
+    "## Follow-up response",
+    `- requestKind: ${followup.requestKind ?? "status"}`,
+    `- requestText: ${followup.requestText ?? "(none)"}`,
+    `- channelId: ${message.channelId}`,
+    `- rootThreadTs: ${message.rootThreadTs}`,
+    `- sourceMessageTs: ${message.messageTs}`,
+    "",
+    message.text.trim(),
+  ].join("\n");
+}
+
 function updateFollowupsWithIssueResponse(
   followups: FollowupLedgerEntry[],
   issues: LinearIssue[],
-  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
+  kind: Exclude<ManagerMessageKind, "conversation" | "request"> | "followup-response",
   responseText: string,
   now: Date,
 ): FollowupLedgerEntry[] {
@@ -1105,23 +1295,131 @@ function updateFollowupsWithIssueResponse(
       return resolveFollowupEntry(next, now, "completed");
     }
 
-    if (entry.lastCategory === "owner_missing") {
-      return issue.assignee ? resolveFollowupEntry(next, now, "risk-cleared") : next;
-    }
-
-    if (entry.lastCategory === "due_missing") {
-      return issue.dueDate ? resolveFollowupEntry(next, now, "risk-cleared") : next;
-    }
-
-    if (entry.lastCategory === "blocked") {
-      return next.lastResponseText ? resolveFollowupEntry(next, now, "response") : next;
-    }
-
-    if (["overdue", "due_today", "due_soon", "stale"].includes(entry.lastCategory ?? "")) {
-      return next.lastResponseText ? resolveFollowupEntry(next, now, "response") : next;
-    }
-
     return next;
+  });
+}
+
+async function assessFollowupResponses(
+  config: AppConfig,
+  message: ManagerSlackMessage,
+  followups: FollowupLedgerEntry[],
+  issues: LinearIssue[],
+  paths: ReturnType<typeof buildThreadPaths>,
+  now: Date,
+): Promise<FollowupLedgerEntry[]> {
+  let nextFollowups = [...followups];
+
+  for (const issue of issues) {
+    const entry = issueNeedsFollowupResponse(nextFollowups, issue.identifier);
+    if (!entry?.requestText || !entry.requestKind) continue;
+
+    if (issueMatchesCompletedState(issue)) {
+      nextFollowups = nextFollowups.map((candidate) => candidate.issueId === issue.identifier
+        ? resolveFollowupEntry(candidate, now, "completed")
+        : candidate);
+      continue;
+    }
+
+    const assessment = await runFollowupResolutionTurn(
+      config,
+      paths,
+      {
+        issueId: issue.identifier,
+        issueTitle: issue.title,
+        requestKind: entry.requestKind,
+        requestText: entry.requestText,
+        acceptableAnswerHint: entry.acceptableAnswerHint,
+        responseText: message.text,
+        taskKey: `${issue.identifier}-${entry.requestKind}`,
+      },
+    ).catch<FollowupResolutionResult>(() => ({
+      answered: false,
+      confidence: 0,
+      reasoningSummary: "follow-up resolution failed",
+    }));
+
+    nextFollowups = nextFollowups.map((candidate) => {
+      if (candidate.issueId !== issue.identifier || candidate.status === "resolved") return candidate;
+      const patched: FollowupLedgerEntry = {
+        ...candidate,
+        resolutionAssessment: {
+          answered: assessment.answered,
+          answerKind: assessment.answerKind,
+          confidence: assessment.confidence,
+          extractedFields: assessment.extractedFields,
+        },
+      };
+
+      if (assessment.answered && assessment.confidence >= 0.7) {
+        return resolveFollowupEntry(patched, now, "answered");
+      }
+      return patched;
+    });
+  }
+
+  return nextFollowups;
+}
+
+async function applyFollowupExtractedFields(
+  followup: FollowupLedgerEntry,
+  issue: LinearIssue,
+  assessment: FollowupResolutionResult,
+  message: ManagerSlackMessage,
+  env: Record<string, string | undefined>,
+): Promise<LinearIssue> {
+  const extracted = assessment.extractedFields ?? {};
+  if (followup.requestKind === "owner" && extracted.assignee) {
+    return updateManagedLinearIssue(
+      {
+        issueId: issue.identifier,
+        assignee: extracted.assignee,
+      },
+      env,
+    );
+  }
+
+  if (followup.requestKind === "due-date" && extracted.dueDate) {
+    return updateManagedLinearIssue(
+      {
+        issueId: issue.identifier,
+        dueDate: extracted.dueDate,
+      },
+      env,
+    );
+  }
+
+  if (followup.requestKind === "status") {
+    await addLinearProgressComment(issue.identifier, buildFollowupResponseComment(message, followup), env);
+    return getLinearIssue(issue.identifier, env, undefined, { includeComments: true });
+  }
+
+  await addLinearComment(issue.identifier, buildFollowupResponseComment(message, followup), env);
+  return getLinearIssue(issue.identifier, env, undefined, { includeComments: true });
+}
+
+function applyFollowupAssessmentResult(
+  followups: FollowupLedgerEntry[],
+  issueId: string,
+  assessment: FollowupResolutionResult,
+  now: Date,
+  reason: "answered" | "risk-cleared" | "completed" | undefined,
+): FollowupLedgerEntry[] {
+  return followups.map((entry) => {
+    if (entry.issueId !== issueId) return entry;
+    const patched: FollowupLedgerEntry = {
+      ...entry,
+      resolutionAssessment: {
+        answered: assessment.answered,
+        answerKind: assessment.answerKind,
+        confidence: assessment.confidence,
+        extractedFields: assessment.extractedFields,
+      },
+    };
+
+    if (reason) {
+      return resolveFollowupEntry(patched, now, reason);
+    }
+    return patched;
   });
 }
 
@@ -1133,52 +1431,45 @@ function formatAutonomousCreateReply(
   options?: { reusedParent?: boolean },
 ): string {
   const primary = parent ?? children[0];
-  const lines = ["Linear に登録しました。"];
+  const detailLines: string[] = ["次アクション: この thread で進捗・完了・blocked を続けてください。"];
+  let includeUrl = true;
 
   if (reason === "research-first" && parent && children[0]) {
-    if (options?.reusedParent) {
-      lines.push(`既存の親 issue ${formatIssueReference(parent)} 配下に、調査 task ${formatIssueReference(children[0])} を追加しました。`);
-    } else {
-      lines.push(`親 issue ${formatIssueReference(parent)} と、調査 task ${formatIssueReference(children[0])} を作成しました。`);
-    }
-  } else if (parent && children.length > 0) {
-    lines.push(`親 issue は ${formatIssueReference(parent)} です。`);
-    lines.push("今回の実行 task:");
-    for (const child of children) {
-      lines.push(formatIssueLine(child));
-    }
-  } else if (children.length === 1) {
-    lines.push(`今回の task は ${formatIssueReference(children[0])} です。`);
-  } else if (children.length > 1) {
-    lines.push("実行 task:");
-    for (const child of children) {
-      lines.push(formatIssueLine(child));
+    detailLines.unshift(options?.reusedParent
+      ? `調査 task: ${buildSlackTargetLabel(children[0])} を既存の親 issue 配下に追加しました。`
+      : `調査 task: ${buildSlackTargetLabel(children[0])} を作成しました。`);
+  } else {
+    const childSummary = formatChildIssueSummaryForSlack(children);
+    if (childSummary) {
+      detailLines.push(childSummary);
+      includeUrl = false;
     }
   }
 
   if (usedFallback) {
-    lines.push("担当が未定義だったため、暫定で kyaukyuai に寄せています。");
+    detailLines.push("補足: 担当未定義の task は暫定で kyaukyuai に寄せています。");
   }
 
-  lines.push("この thread で進捗・完了・blocked をそのまま返してください。");
-  if (primary?.url) {
-    lines.push(`URL: ${primary.url}`);
-  }
-
-  return lines.join("\n");
+  return formatThreadReplyForSlack({
+    headline: "Linear に登録しました。",
+    target: primary ? buildSlackTargetLabel(primary) : undefined,
+    lines: detailLines,
+    url: includeUrl ? primary?.url ?? undefined : undefined,
+    maxLines: usedFallback ? 5 : 4,
+  });
 }
 
 function formatExistingIssueReply(duplicates: LinearIssue[]): string {
-  const lines = ["既存の Linear issue が見つかったため、新規起票は行いませんでした。"];
   if (duplicates.length === 1) {
-    lines.push(`この thread では ${formatIssueReference(duplicates[0])} を扱います。`);
-    lines.push("進捗・完了・blocked はこのまま thread に返してください。");
-    if (duplicates[0]?.url) {
-      lines.push(`URL: ${duplicates[0].url}`);
-    }
-    return lines.join("\n");
+    return formatThreadReplyForSlack({
+      headline: "既存の Linear issue を再利用します。",
+      target: buildSlackTargetLabel(duplicates[0]),
+      lines: ["次アクション: 進捗・完了・blocked はこの thread にそのまま返してください。"],
+      url: duplicates[0]?.url ?? undefined,
+    });
   }
 
+  const lines = ["既存の Linear issue が見つかったため、新規起票は行いませんでした。"];
   lines.push("候補が複数あるため、必要なら対象 issue を明示してください。");
   for (const issue of duplicates.slice(0, 3)) {
     lines.push(`- ${formatIssueReference(issue)}`);
@@ -1191,27 +1482,55 @@ function formatStatusReply(
   issues: LinearIssue[],
   extras: string[] = [],
 ): string {
-  const references = issues.map((issue) => formatIssueReference(issue)).join(" / ");
-  const lines =
-    kind === "completed"
-      ? [
-          "完了を Linear に反映しました。",
-          `対象: ${references}`,
-          "残っている作業や次に進めることがあれば、この thread で続けてください。",
-        ]
-      : kind === "blocked"
-        ? [
-            "blocked 状態を Linear に反映しました。",
-            `対象: ${references}`,
-            "誰の返答待ちか、何がそろえば再開できるかが分かったら、この thread で追記してください。",
-          ]
-        : [
-            "進捗を Linear に反映しました。",
-            `対象: ${references}`,
-            "次に進めることや追加で詰まっている点があれば、この thread で続けてください。",
-          ];
+  const target = issues.map((issue) => buildSlackTargetLabel(issue)).join(" / ");
+  const headline = kind === "completed"
+    ? "完了を Linear に反映しました。"
+    : kind === "blocked"
+      ? "blocked 状態を Linear に反映しました。"
+      : "進捗を Linear に反映しました。";
+  const nextAction = kind === "completed"
+    ? "次アクション: 残っている作業があれば、この thread で続けてください。"
+    : kind === "blocked"
+      ? "次アクション: 原因 / 待ち先 / 再開条件 が分かったら、この thread で追記してください。"
+      : "次アクション: 必要ならこの thread で続きの進捗を共有してください。";
 
-  return [...lines, ...extras].join("\n");
+  return formatThreadReplyForSlack({
+    headline,
+    target,
+    lines: [nextAction, ...extras],
+    maxLines: extras.length > 0 ? 5 : 4,
+  });
+}
+
+function formatFollowupResolutionReply(
+  followup: FollowupLedgerEntry,
+  issue: LinearIssue,
+  assessment: FollowupResolutionResult,
+): string {
+  const answered = assessment.answered && assessment.confidence >= 0.7;
+  const lines: string[] = [];
+  if (assessment.reasoningSummary) {
+    lines.push(`判定: ${truncateSlackText(assessment.reasoningSummary, 90)}`);
+  }
+
+  if (!answered) {
+    lines.push(`引き続き必要な返答: ${followup.requestText ?? "追加情報をお願いします。"}`);
+    if (followup.acceptableAnswerHint) {
+      lines.push(`返答フォーマット: ${followup.acceptableAnswerHint}`);
+    }
+  } else if (followup.requestKind === "owner" && assessment.extractedFields?.assignee) {
+    lines.push(`担当: ${assessment.extractedFields.assignee}`);
+  } else if (followup.requestKind === "due-date" && assessment.extractedFields?.dueDate) {
+    lines.push(`期限: ${assessment.extractedFields.dueDate}`);
+  } else {
+    lines.push("次アクション: 追加情報があればこの thread で続けてください。");
+  }
+  return formatThreadReplyForSlack({
+    headline: answered ? "follow-up への返答を Linear に反映しました。" : "follow-up への返答を受け取りました。",
+    target: buildSlackTargetLabel(issue),
+    lines,
+    maxLines: 5,
+  });
 }
 
 function buildResearchSlackSummary(args: {
@@ -1221,31 +1540,30 @@ function buildResearchSlackSummary(args: {
   synthesis: ResearchSynthesisResult;
   followupChildren?: LinearIssue[];
 }): string {
-  const lines = ["調査内容を Linear に記録しました。"];
-
-  if (args.reusedParent) {
-    lines.push(`既存の親 issue ${formatIssueReference(args.parent)} 配下に、調査 task ${formatIssueReference(args.researchChild)} を追加しています。`);
-  } else {
-    lines.push(`親 issue は ${formatIssueReference(args.parent)}、調査 task は ${formatIssueReference(args.researchChild)} です。`);
-  }
-
-  lines.push("調べた範囲: Slack thread / 関連 Linear issue / Web");
-  lines.push(`分かったこと: ${args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。"}`);
-  lines.push(`未確定事項: ${args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。"}`);
+  const lines = [
+    `分かったこと: ${truncateSlackText(args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。", 90)}`,
+    `未確定事項: ${truncateSlackText(args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。", 90)}`,
+  ];
   if ((args.followupChildren?.length ?? 0) > 0) {
     lines.push(`次アクション: 調査結果をもとに追加 task を ${args.followupChildren!.length} 件作成しました。`);
-    for (const child of args.followupChildren ?? []) {
-      lines.push(formatIssueLine(child));
+    const childSummary = formatChildIssueSummaryForSlack(args.followupChildren ?? []);
+    if (childSummary) {
+      lines.push(childSummary);
     }
   } else if (args.synthesis.nextActions.length > 0) {
-    lines.push(`次アクション: ${args.synthesis.nextActions[0]}`);
+    lines.push(`次アクション: ${args.synthesis.nextActions[0]?.title}`);
   } else {
     lines.push("次アクション: 調査結果をもとに必要なら実行 task を追加します。");
   }
-  if (args.parent.url) {
-    lines.push(`URL: ${args.parent.url}`);
-  }
-  return lines.join("\n");
+
+  return formatThreadReplyForSlack({
+    headline: "調査内容を Linear に記録しました。",
+    target: args.reusedParent
+      ? `${buildSlackTargetLabel(args.parent)} 配下 / ${buildSlackTargetLabel(args.researchChild)}`
+      : buildSlackTargetLabel(args.parent),
+    lines,
+    maxLines: 6,
+  });
 }
 
 function getPrimaryRiskCategory(item: RiskAssessment): string {
@@ -1265,30 +1583,81 @@ function getPrimaryRiskCategory(item: RiskAssessment): string {
 function formatReviewFollowupPrompt(item: RiskAssessment): string {
   const primaryCategory = getPrimaryRiskCategory(item);
   if (primaryCategory === "blocked") {
-    return "何待ちかと、再開条件を共有してください。";
+    return "原因と、誰の返答待ちか、何がそろえば再開できるかを共有してください。";
   }
   if (primaryCategory === "overdue" || primaryCategory === "due_today" || primaryCategory === "due_soon") {
-    return "次の一手と完了見込みを共有してください。";
+    return "現在の進捗と次アクション、次回更新予定を共有してください。";
   }
   if (primaryCategory === "owner_missing") {
-    return "担当を決めて共有してください。";
+    return "担当者を 1 人決めて共有してください。";
   }
   if (primaryCategory === "due_missing") {
-    return "期限が必要なら共有してください。";
+    return "期限を YYYY-MM-DD で共有してください。";
   }
-  return "最新状況と次に進める作業を共有してください。";
+  return "最新状況と次アクション、次回更新予定を共有してください。";
+}
+
+function requestKindForRiskCategory(category: string): ManagerReviewFollowup["requestKind"] {
+  if (category === "blocked") return "blocked-details";
+  if (category === "owner_missing") return "owner";
+  if (category === "due_missing") return "due-date";
+  return "status";
+}
+
+function acceptableAnswerHintForRequestKind(requestKind: ManagerReviewFollowup["requestKind"]): string {
+  if (requestKind === "blocked-details") {
+    return "原因 / 待ち先 / 再開条件";
+  }
+  if (requestKind === "owner") {
+    return "担当者名";
+  }
+  if (requestKind === "due-date") {
+    return "YYYY-MM-DD";
+  }
+  return "進捗 / 次アクション / 次回更新予定";
+}
+
+function resolveSlackUserIdForReview(
+  ownerMap: OwnerMap,
+  assigneeDisplayName: string | undefined,
+): string | undefined {
+  if (!assigneeDisplayName) return undefined;
+  const normalizedAssignee = normalizeText(assigneeDisplayName);
+  return ownerMap.entries.find((entry) => {
+    if (!entry.slackUserId) return false;
+    return normalizeText(entry.linearAssignee) === normalizedAssignee || normalizeText(entry.id) === normalizedAssignee;
+  })?.slackUserId;
+}
+
+function shouldMentionReviewFollowup(
+  category: string,
+  existingFollowup?: FollowupLedgerEntry,
+): boolean {
+  if (["blocked", "overdue", "due_today"].includes(category)) {
+    return true;
+  }
+  return existingFollowup?.status === "awaiting-response" && Boolean(existingFollowup.lastPublicFollowupAt);
 }
 
 function buildReviewFollowup(
   item: RiskAssessment,
   intakeLedger: IntakeLedgerEntry[],
+  ownerMap: OwnerMap,
   existingFollowup?: FollowupLedgerEntry,
 ): ManagerReviewFollowup {
+  const riskCategory = getPrimaryRiskCategory(item);
+  const requestKind = existingFollowup?.requestKind ?? requestKindForRiskCategory(riskCategory);
+  const assigneeDisplayName = existingFollowup?.assigneeDisplayName ?? item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined;
   return {
     issueId: item.issue.identifier,
     issueTitle: item.issue.title,
     request: existingFollowup?.requestText ?? formatReviewFollowupPrompt(item),
-    assigneeDisplayName: existingFollowup?.assigneeDisplayName ?? item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
+    requestKind,
+    acceptableAnswerHint: existingFollowup?.acceptableAnswerHint ?? acceptableAnswerHintForRequestKind(requestKind),
+    assigneeDisplayName,
+    slackUserId: resolveSlackUserIdForReview(ownerMap, assigneeDisplayName),
+    riskCategory,
+    shouldMention: shouldMentionReviewFollowup(riskCategory, existingFollowup),
     source: existingFollowup?.sourceChannelId && existingFollowup?.sourceThreadTs && existingFollowup?.sourceMessageTs
       ? {
           channelId: existingFollowup.sourceChannelId,
@@ -1310,8 +1679,10 @@ function buildAwaitingFollowupPatch(
     issueId: followup.issueId,
     lastPublicFollowupAt: nowIso(now),
     lastCategory: category,
+    requestKind: followup.requestKind,
     status: "awaiting-response",
     requestText: followup.request,
+    acceptableAnswerHint: followup.acceptableAnswerHint,
     sourceChannelId: followup.source?.channelId,
     sourceThreadTs: followup.source?.rootThreadTs,
     sourceMessageTs: followup.source?.sourceMessageTs,
@@ -1322,6 +1693,7 @@ function buildAwaitingFollowupPatch(
     lastResponseAt: existing?.status === "awaiting-response" ? existing.lastResponseAt : undefined,
     lastResponseKind: existing?.status === "awaiting-response" ? existing.lastResponseKind : undefined,
     lastResponseText: existing?.status === "awaiting-response" ? existing.lastResponseText : undefined,
+    resolutionAssessment: existing?.status === "awaiting-response" ? existing.resolutionAssessment : undefined,
   };
 }
 
@@ -1348,6 +1720,20 @@ function selectReviewFollowupItem(
       .map((entry) => entry.issueId),
   );
   return eligible.find((item) => awaitingIssueIds.has(item.issue.identifier)) ?? eligible[0];
+}
+
+function findAwaitingFollowupCandidates(
+  followups: FollowupLedgerEntry[],
+  message: ManagerSlackMessage,
+  controlRoomChannelId: string,
+): FollowupLedgerEntry[] {
+  const explicitIssueIds = new Set(extractIssueIdentifiers(message.text));
+  return followups.filter((entry) => {
+    if (entry.status !== "awaiting-response") return false;
+    if (entry.sourceChannelId === message.channelId && entry.sourceThreadTs === message.rootThreadTs) return true;
+    if (message.channelId === controlRoomChannelId && explicitIssueIds.has(entry.issueId)) return true;
+    return false;
+  });
 }
 
 function getJstDayString(date: Date): string {
@@ -1525,6 +1911,7 @@ function reconcileFollowupsWithRiskyIssues(
 
 interface ManagerReviewData {
   policy: ManagerPolicy;
+  ownerMap: OwnerMap;
   followups: FollowupLedgerEntry[];
   planningLedger: PlanningLedgerEntry[];
   intakeLedger: IntakeLedgerEntry[];
@@ -1537,6 +1924,7 @@ async function loadManagerReviewData(
   now: Date,
 ): Promise<ManagerReviewData> {
   const policy = await loadManagerPolicy(systemPaths);
+  const ownerMap = await loadOwnerMap(systemPaths);
   const followups = await loadFollowupsLedger(systemPaths);
   const planningLedger = await loadPlanningLedger(systemPaths);
   const intakeLedger = await loadIntakeLedger(systemPaths);
@@ -1562,6 +1950,7 @@ async function loadManagerReviewData(
 
   return {
     policy,
+    ownerMap,
     followups: reconciled.followups,
     planningLedger,
     intakeLedger,
@@ -1574,7 +1963,7 @@ export async function buildHeartbeatReviewDecision(
   systemPaths: SystemPaths,
   now = new Date(),
 ): Promise<HeartbeatReviewDecision> {
-  const { policy, followups, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
+  const { policy, ownerMap, followups, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
 
   if (!isWithinBusinessHours(policy, now)) {
     return { reason: "outside-business-hours" };
@@ -1599,7 +1988,7 @@ export async function buildHeartbeatReviewDecision(
 
   const top = available[0];
   const existingFollowup = followups.find((entry) => entry.issueId === top.issue.identifier);
-  const followup = buildReviewFollowup(top, intakeLedger, existingFollowup);
+  const followup = buildReviewFollowup(top, intakeLedger, ownerMap, existingFollowup);
   const nextFollowups = upsertFollowup(
     followups,
     buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(top), now),
@@ -1613,6 +2002,13 @@ export async function buildHeartbeatReviewDecision(
         "緊急フォローが必要です。",
         formatRiskLine(top),
       ].join("\n"),
+      summaryLines: ["blocked / overdue / due today の優先確認が必要です。"],
+      issueLines: [{
+        issueId: top.issue.identifier,
+        title: top.issue.title,
+        assigneeDisplayName: top.issue.assignee?.displayName ?? top.issue.assignee?.name ?? undefined,
+        riskSummary: top.riskCategories.join(", "),
+      }],
       followup,
     },
   };
@@ -1626,6 +2022,7 @@ export async function handleManagerMessage(
 ): Promise<ManagerHandleResult> {
   const policy = await loadManagerPolicy(systemPaths);
   const intakeLedger = await loadIntakeLedger(systemPaths);
+  const followups = await loadFollowupsLedger(systemPaths);
   const pendingClarification = findPendingClarification(intakeLedger, message);
   const originalRequestText = pendingClarification?.originalText ?? message.text;
   const followupText = pendingClarification ? message.text : "";
@@ -1640,13 +2037,99 @@ export async function handleManagerMessage(
       }
     : message;
   const signal = pendingClarification ? "request" : classifyManagerSignal(message.text);
+  const env = {
+    ...process.env,
+    LINEAR_API_KEY: config.linearApiKey,
+    LINEAR_WORKSPACE: config.linearWorkspace,
+    LINEAR_TEAM_KEY: config.linearTeamKey,
+  };
+
+  if (!pendingClarification) {
+    const awaitingFollowups = findAwaitingFollowupCandidates(followups, message, policy.controlRoomChannelId);
+    if (awaitingFollowups.length > 0) {
+      let selectedFollowup = awaitingFollowups.length === 1 ? awaitingFollowups[0] : undefined;
+
+      if (!selectedFollowup) {
+        const explicitIssueIds = extractIssueIdentifiers(message.text);
+        if (explicitIssueIds.length === 1) {
+          selectedFollowup = awaitingFollowups.find((entry) => entry.issueId === explicitIssueIds[0]);
+        }
+      }
+
+      if (!selectedFollowup) {
+        return {
+          handled: true,
+          reply: formatIssueSelectionReply("progress", awaitingFollowups.map((entry) => ({
+            issueId: entry.issueId,
+            title: undefined,
+          }))),
+        };
+      }
+
+      if (selectedFollowup) {
+        const issue = await getLinearIssue(selectedFollowup.issueId, env, undefined, { includeComments: true });
+        const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
+        const assessment = await runFollowupResolutionTurn(
+          config,
+          paths,
+          {
+            issueId: issue.identifier,
+            issueTitle: issue.title,
+            requestKind: selectedFollowup.requestKind ?? "status",
+            requestText: selectedFollowup.requestText ?? formatReviewFollowupPrompt(assessRisk(issue, policy, now)),
+            acceptableAnswerHint: selectedFollowup.acceptableAnswerHint,
+            responseText: message.text,
+            taskKey: `${issue.identifier}-followup`,
+          },
+        ).catch<FollowupResolutionResult>(() => ({
+          answered: false,
+          confidence: 0,
+          reasoningSummary: "follow-up resolution failed",
+        }));
+
+        let updatedIssue = issue;
+        let resolveReason: "answered" | "risk-cleared" | "completed" | undefined;
+        if (selectedFollowup.requestKind === "owner" && assessment.extractedFields?.assignee) {
+          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
+          resolveReason = updatedIssue.assignee ? "risk-cleared" : undefined;
+        } else if (selectedFollowup.requestKind === "due-date" && assessment.extractedFields?.dueDate) {
+          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
+          resolveReason = updatedIssue.dueDate ? "risk-cleared" : undefined;
+        } else if (
+          selectedFollowup.requestKind === "status"
+          || selectedFollowup.requestKind === "blocked-details"
+          || (assessment.answered && assessment.confidence >= 0.7)
+        ) {
+          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
+          if (assessment.answered && assessment.confidence >= 0.7) {
+            resolveReason = issueMatchesCompletedState(updatedIssue) ? "completed" : "answered";
+          }
+        }
+
+        let nextFollowups = updateFollowupsWithIssueResponse(followups, [updatedIssue], "followup-response", message.text, now);
+        nextFollowups = applyFollowupAssessmentResult(nextFollowups, updatedIssue.identifier, assessment, now, resolveReason);
+        await saveFollowupsLedger(systemPaths, nextFollowups);
+
+        const nextLedger = upsertThreadIntakeEntry(
+          intakeLedger,
+          message,
+          {
+            lastResolvedIssueId: updatedIssue.identifier,
+            issueFocusHistory: [buildIssueFocusEvent(updatedIssue.identifier, "followup-response", "followup", message.text, now)],
+          },
+          now,
+        );
+        await saveIntakeLedger(systemPaths, nextLedger);
+
+        return {
+          handled: true,
+          reply: formatFollowupResolutionReply(selectedFollowup, updatedIssue, assessment),
+        };
+      }
+    }
+  }
+
   if (signal !== "request" && signal !== "conversation") {
-    const env = {
-      ...process.env,
-      LINEAR_API_KEY: config.linearApiKey,
-      LINEAR_WORKSPACE: config.linearWorkspace,
-      LINEAR_TEAM_KEY: config.linearTeamKey,
-    };
     if (!policy.autoStatusUpdate) {
       return { handled: false };
     }
@@ -1688,12 +2171,14 @@ export async function handleManagerMessage(
       {
         status: signal === "progress" ? "progressed" : signal,
         lastResolvedIssueId: targetIssueIds[0],
+        issueFocusHistory: targetIssueIds.map((issueId) => buildIssueFocusEvent(issueId, signal, "thread-status", message.text, now)),
       },
       now,
     );
     await saveIntakeLedger(systemPaths, nextLedger);
-    const followups = await loadFollowupsLedger(systemPaths);
-    await saveFollowupsLedger(systemPaths, updateFollowupsWithIssueResponse(followups, updatedIssues, signal, message.text, now));
+    const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
+    const followupState = updateFollowupsWithIssueResponse(followups, updatedIssues, signal, message.text, now);
+    await saveFollowupsLedger(systemPaths, await assessFollowupResponses(config, message, followupState, updatedIssues, paths, now));
 
     return {
       handled: true,
@@ -1711,12 +2196,6 @@ export async function handleManagerMessage(
 
   const ownerMap = await loadOwnerMap(systemPaths);
   const planningLedger = await loadPlanningLedger(systemPaths);
-  const env = {
-    ...process.env,
-    LINEAR_API_KEY: config.linearApiKey,
-    LINEAR_WORKSPACE: config.linearWorkspace,
-    LINEAR_TEAM_KEY: config.linearTeamKey,
-  };
 
   const fingerprint = pendingClarification?.messageFingerprint ?? fingerprintText(requestMessage.text);
   const existingLedgerEntry = intakeLedger.find((entry) => {
@@ -1751,6 +2230,7 @@ export async function handleManagerMessage(
       originalText: requestMessage.text,
       clarificationQuestion: formatClarificationReply(primaryTitle, clarificationNeeds),
       clarificationReasons: clarificationNeeds,
+      issueFocusHistory: [],
       createdAt: pendingClarification?.createdAt ?? nowIso(now),
       updatedAt: nowIso(now),
     };
@@ -1791,6 +2271,9 @@ export async function handleManagerMessage(
         childIssueIds: duplicates.map((issue) => issue.identifier),
         status: "linked-existing",
         lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
+        issueFocusHistory: duplicates.length === 1 && duplicates[0]
+          ? [buildIssueFocusEvent(duplicates[0].identifier, "reuse", "duplicate-reuse", requestMessage.text, now)]
+          : [],
         originalText: requestMessage.text,
         clarificationReasons: [],
         createdAt: nowIso(now),
@@ -2037,20 +2520,23 @@ export async function handleManagerMessage(
     if (policy.autoPlan && researchSynthesis.nextActions.length >= policy.researchAutoPlanMinActions) {
       const parentAssignee = parent?.assignee?.displayName ?? parent?.assignee?.name;
       for (const nextAction of researchSynthesis.nextActions.slice(0, policy.researchAutoPlanMaxChildren)) {
-        if (nextAction.trim().length < 6) {
+        if (nextAction.title.trim().length < 6) {
           continue;
         }
-        const owner = chooseOwner(nextAction, ownerMap);
+        const owner = chooseOwner(nextAction.ownerHint ?? nextAction.title, ownerMap);
         if (owner.resolution === "fallback") {
           usedFallbackOwners.add(owner.entry.id);
         }
 
         const followupChild = await createManagedLinearIssue(
           {
-            title: nextAction,
+            title: nextAction.title,
             description: [
               "## Research source",
               formatIssueReference(researchChild),
+              "",
+              "## Purpose",
+              nextAction.purpose || "調査結果を踏まえて実行可能な状態にする",
               "",
               "## Slack source",
               requestMessage.text,
@@ -2083,6 +2569,16 @@ export async function handleManagerMessage(
       originalText: requestMessage.text,
       clarificationReasons: [],
       lastResolvedIssueId: researchChild.identifier,
+      issueFocusHistory: [
+        ...(parent ? [buildIssueFocusEvent(parent.identifier, research ? "research-parent" : "create-parent", planningReason, requestMessage.text, now)] : []),
+        ...allCreatedChildren.map((issue) => buildIssueFocusEvent(
+          issue.identifier,
+          issue.identifier === researchChild.identifier ? "research-child" : "create-child",
+          planningReason,
+          issue.title,
+          now,
+        )),
+      ],
       createdAt: nowIso(now),
       updatedAt: nowIso(now),
     };
@@ -2127,6 +2623,10 @@ export async function handleManagerMessage(
     originalText: requestMessage.text,
     clarificationReasons: [],
     lastResolvedIssueId: createdChildren.length === 1 ? createdChildren[0]?.identifier : createdChildren.length === 0 ? parent?.identifier : undefined,
+    issueFocusHistory: [
+      ...(parent ? [buildIssueFocusEvent(parent.identifier, "create-parent", planningReason, requestMessage.text, now)] : []),
+      ...createdChildren.map((issue) => buildIssueFocusEvent(issue.identifier, "create-child", planningReason, issue.title, now)),
+    ],
     createdAt: nowIso(now),
     updatedAt: nowIso(now),
   };
@@ -2172,16 +2672,17 @@ export async function buildManagerReview(
     return decision.review;
   }
 
-  const { policy, followups, planningLedger, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
+  const { policy, ownerMap, followups, planningLedger, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
 
   const sorted = sortRiskyIssues(risky);
   if (kind === "morning-review") {
     const lines = ["朝の execution review です。"];
-    const items = sorted.filter((item) => !item.riskCategories.includes("due_missing")).slice(0, 5);
+    const items = sorted.filter((item) => !item.riskCategories.includes("due_missing")).slice(0, 3);
     if (items.length === 0) {
       return {
         kind,
         text: "朝の execution review です。\n- 今日すぐに共有すべきリスクはありません。",
+        summaryLines: ["今日すぐに共有すべきリスクはありません。"],
       };
     }
     lines.push("今日やるべきこと / 期限リスク / stale:");
@@ -2190,7 +2691,7 @@ export async function buildManagerReview(
     let followup: ManagerReviewFollowup | undefined;
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = buildReviewFollowup(followupItem, intakeLedger, existingFollowup);
+      followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
       await saveFollowupsLedger(systemPaths, upsertFollowup(
         followups,
         buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
@@ -2199,6 +2700,13 @@ export async function buildManagerReview(
     return {
       kind,
       text: lines.join("\n"),
+      summaryLines: ["今日やるべきこと / 期限リスク / stale"],
+      issueLines: items.map((item) => ({
+        issueId: item.issue.identifier,
+        title: item.issue.title,
+        assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
+        riskSummary: item.riskCategories.join(", "),
+      })),
       followup,
     };
   }
@@ -2207,11 +2715,12 @@ export async function buildManagerReview(
     const lines = ["夕方の進捗 review です。"];
     const items = sorted
       .filter((item) => item.riskCategories.some((category) => ["due_today", "blocked", "overdue", "stale"].includes(category)))
-      .slice(0, 5);
+      .slice(0, 3);
     if (items.length === 0) {
       return {
         kind,
         text: "夕方の進捗 review です。\n- 今日の残タスクで強いリスクは見当たりません。",
+        summaryLines: ["今日の残タスクで強いリスクは見当たりません。"],
       };
     }
     lines.push("今日残っていること / blocked / due today:");
@@ -2220,7 +2729,7 @@ export async function buildManagerReview(
     let followup: ManagerReviewFollowup | undefined;
     if (followupItem) {
       const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = buildReviewFollowup(followupItem, intakeLedger, existingFollowup);
+      followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
       await saveFollowupsLedger(systemPaths, upsertFollowup(
         followups,
         buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
@@ -2229,6 +2738,13 @@ export async function buildManagerReview(
     return {
       kind,
       text: lines.join("\n"),
+      summaryLines: ["残タスク / blocked / due today"],
+      issueLines: items.map((item) => ({
+        issueId: item.issue.identifier,
+        title: item.issue.title,
+        assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
+        riskSummary: item.riskCategories.join(", "),
+      })),
       followup,
     };
   }
@@ -2241,14 +2757,15 @@ export async function buildManagerReview(
   lines.push(`- 長期 stale: ${staleItems.length}`);
   lines.push(`- owner map gap: ${fallbackCount}`);
   lines.push(`- 未処理 clarification: ${unresolvedClarifications}`);
-  for (const item of staleItems) {
+  for (const item of staleItems.slice(0, 3)) {
     lines.push(formatRiskLine(item));
   }
-  const followupItem = selectReviewFollowupItem(staleItems, followups, policy, now);
+  const weeklyItems = staleItems.slice(0, 3);
+  const followupItem = selectReviewFollowupItem(weeklyItems, followups, policy, now);
   let followup: ManagerReviewFollowup | undefined;
   if (followupItem) {
     const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-    followup = buildReviewFollowup(followupItem, intakeLedger, existingFollowup);
+    followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
     await saveFollowupsLedger(systemPaths, upsertFollowup(
       followups,
       buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
@@ -2257,6 +2774,18 @@ export async function buildManagerReview(
   return {
     kind,
     text: lines.join("\n"),
+    summaryLines: [
+      `未整備 issue: ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length}`,
+      `長期 stale: ${staleItems.length}`,
+      `owner map gap: ${fallbackCount}`,
+      `未処理 clarification: ${unresolvedClarifications}`,
+    ],
+    issueLines: weeklyItems.map((item) => ({
+      issueId: item.issue.identifier,
+      title: item.issue.title,
+      assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
+      riskSummary: item.riskCategories.join(", "),
+    })),
     followup,
   };
 }
