@@ -74,6 +74,14 @@ export interface LinearIssue {
     type?: string | null;
     issue?: Pick<LinearIssue, "identifier" | "title" | "url"> | null;
   }>;
+  comments?: Array<{
+    id: string;
+    body: string;
+    createdAt?: string | null;
+    user?: Pick<LinearUser, "name" | "displayName"> | null;
+  }>;
+  latestActionKind?: "progress" | "blocked" | "slack-source" | "other";
+  latestActionAt?: string | null;
 }
 
 export interface SearchIssuesInput {
@@ -170,6 +178,12 @@ interface CliIssuePayload extends CliIssueRef {
   parent?: CliIssueRef | null;
   children?: CliIssueRef[] | { nodes?: CliIssueRef[] } | null;
   relations?: unknown;
+  comments?: Array<{
+    id?: string;
+    body?: string | null;
+    createdAt?: string | null;
+    user?: CliIssueUser | null;
+  }> | null;
 }
 
 interface CliRelationListPayload {
@@ -219,6 +233,10 @@ interface BatchIssueSpec {
   dueDate?: string;
   priority?: number;
   state?: string;
+}
+
+export interface GetLinearIssueOptions {
+  includeComments?: boolean;
 }
 
 function stripAnsi(text: string): string {
@@ -305,6 +323,32 @@ function normalizeLinearState(raw: unknown): LinearWorkflowState | undefined {
     name,
     type: toNullableString(raw.type),
   };
+}
+
+function normalizeLinearComment(raw: unknown): NonNullable<LinearIssue["comments"]>[number] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const id = toStringOrUndefined(raw.id);
+  const body = toStringOrUndefined(raw.body);
+  if (!id || !body) return undefined;
+  return {
+    id,
+    body,
+    createdAt: toNullableString(raw.createdAt),
+    user: normalizeLinearUser(raw.user)
+      ? {
+          name: normalizeLinearUser(raw.user)?.name ?? undefined,
+          displayName: normalizeLinearUser(raw.user)?.displayName ?? undefined,
+        }
+      : null,
+  };
+}
+
+function deriveLatestActionKind(body: string): LinearIssue["latestActionKind"] {
+  const trimmed = body.trim();
+  if (trimmed.startsWith("## Progress update")) return "progress";
+  if (trimmed.startsWith("## Blocked update")) return "blocked";
+  if (trimmed.startsWith("## Slack source")) return "slack-source";
+  return "other";
 }
 
 function normalizeEmbeddedRelations(raw: unknown): Pick<LinearIssue, "relations" | "inverseRelations"> {
@@ -415,6 +459,12 @@ export function normalizeLinearIssuePayload(raw: unknown): LinearIssue | undefin
 
   const children = childrenSource.map((child) => toIssueRef(child)).filter(Boolean) as NonNullable<LinearIssue["children"]>;
   const embeddedRelations = normalizeEmbeddedRelations(raw.relations);
+  const comments = Array.isArray(raw.comments)
+    ? raw.comments.map((comment) => normalizeLinearComment(comment)).filter(Boolean) as NonNullable<LinearIssue["comments"]>
+    : [];
+  const latestComment = [...comments].sort((left, right) => {
+    return Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? "");
+  })[0];
 
   return {
     id,
@@ -431,6 +481,9 @@ export function normalizeLinearIssuePayload(raw: unknown): LinearIssue | undefin
     children,
     relations: embeddedRelations.relations,
     inverseRelations: embeddedRelations.inverseRelations,
+    comments,
+    latestActionKind: latestComment ? deriveLatestActionKind(latestComment.body) : undefined,
+    latestActionAt: latestComment?.createdAt ?? null,
   };
 }
 
@@ -697,10 +750,18 @@ export function buildIssueUrlArgs(issueId: string, env: LinearCommandEnv = proce
   return ["issue", "url", ...workspaceArgs(env), trimmed];
 }
 
-export function buildGetIssueArgs(issueId: string, env: LinearCommandEnv = process.env): string[] {
+export function buildGetIssueArgs(
+  issueId: string,
+  env: LinearCommandEnv = process.env,
+  options: GetLinearIssueOptions = {},
+): string[] {
   const trimmed = issueId.trim();
   if (!trimmed) throw new Error("Issue ID is required");
-  return ["issue", "view", ...workspaceArgs(env), trimmed, "--json", "--no-comments"];
+  const args = ["issue", "view", ...workspaceArgs(env), trimmed, "--json"];
+  if (!options.includeComments) {
+    args.push("--no-comments");
+  }
+  return args;
 }
 
 export function buildSearchIssuesArgs(input: SearchIssuesInput, env: LinearCommandEnv = process.env): string[] {
@@ -882,8 +943,9 @@ export async function getLinearIssue(
   issueId: string,
   env: LinearCommandEnv = process.env,
   signal?: AbortSignal,
+  options: GetLinearIssueOptions = {},
 ): Promise<LinearIssue> {
-  const payload = await execLinearJson<CliIssuePayload>(buildGetIssueArgs(issueId, env), env, signal);
+  const payload = await execLinearJson<CliIssuePayload>(buildGetIssueArgs(issueId, env, options), env, signal);
   const issue = normalizeLinearIssuePayload(payload);
   if (!issue) {
     throw new Error(`Issue not found: ${issueId}`);

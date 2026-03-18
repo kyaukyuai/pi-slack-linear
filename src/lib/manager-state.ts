@@ -81,6 +81,10 @@ const followupLedgerEntrySchema = z.object({
   assigneeDisplayName: z.string().optional(),
   rePingCount: z.number().int().min(0).optional(),
   resolvedAt: z.string().datetime().optional(),
+  resolvedReason: z.enum(["response", "risk-cleared", "completed"]).optional(),
+  lastResponseAt: z.string().datetime().optional(),
+  lastResponseKind: z.enum(["progress", "completed", "blocked"]).optional(),
+  lastResponseText: z.string().optional(),
 });
 
 const planningLedgerEntrySchema = z.object({

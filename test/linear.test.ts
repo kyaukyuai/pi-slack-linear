@@ -4,6 +4,7 @@ import {
   buildCreateBatchArgs,
   buildIssueChildrenArgs,
   buildIssueCommentAddArgs,
+  buildGetIssueArgs,
   buildIssueUrlArgs,
   buildListActiveIssuesArgs,
   buildSearchIssuesArgs,
@@ -126,6 +127,16 @@ describe("linear command builders", () => {
     expect(args).toEqual(["issue", "url", "KYA-123"]);
   });
 
+  it("builds issue view args with and without comments", () => {
+    expect(buildGetIssueArgs("KYA-123", {
+      LINEAR_API_KEY: "lin_api_test",
+    })).toEqual(["issue", "view", "KYA-123", "--json", "--no-comments"]);
+
+    expect(buildGetIssueArgs("KYA-123", {
+      LINEAR_API_KEY: "lin_api_test",
+    }, { includeComments: true })).toEqual(["issue", "view", "KYA-123", "--json"]);
+  });
+
   it("builds JSON search args with parent and date filters", () => {
     const args = buildSearchIssuesArgs(
       {
@@ -237,6 +248,17 @@ describe("linear command builders", () => {
           },
         ],
       },
+      comments: [
+        {
+          id: "comment-1",
+          body: "## Progress update\nAPI 実装を進めています",
+          createdAt: "2025-08-16T15:31:00Z",
+          user: {
+            id: "user-1",
+            displayName: "Jane Doe",
+          },
+        },
+      ],
     });
 
     expect(issue).toMatchObject({
@@ -266,7 +288,9 @@ describe("linear command builders", () => {
           },
         },
       ],
+      latestActionKind: "progress",
     });
+    expect(issue?.comments?.[0]?.body).toContain("API 実装");
   });
 
   it("normalizes relation-list and team-members payloads", () => {

@@ -9,6 +9,7 @@ import {
   listRiskyLinearIssues,
   markLinearIssueBlocked,
   searchLinearIssues,
+  updateManagedLinearIssue,
   updateLinearIssueState,
   type LinearIssue,
 } from "./linear.js";
@@ -518,6 +519,7 @@ interface RecentFocusText {
 interface ResolvedIssueCandidate {
   issueId: string;
   title?: string;
+  latestActionLabel?: string;
 }
 
 interface IssueTargetResolution {
@@ -546,6 +548,14 @@ function collectThreadIssueCandidates(
     latestEntryIssueIds: latestEntry ? collectEntryIssueIds(latestEntry) : [],
     lastResolvedIssueId: latestEntry?.lastResolvedIssueId ?? threadEntries.find((entry) => entry.lastResolvedIssueId)?.lastResolvedIssueId,
   };
+}
+
+function formatLatestActionLabel(issue: LinearIssue): string | undefined {
+  if (!issue.latestActionKind) return undefined;
+  if (issue.latestActionKind === "progress") return "進捗";
+  if (issue.latestActionKind === "blocked") return "blocked";
+  if (issue.latestActionKind === "slack-source") return "Slack source";
+  return "その他";
 }
 
 function issueMatchesCompletedState(issue: LinearIssue): boolean {
@@ -608,6 +618,15 @@ async function loadRecentThreadFocusTexts(
     .filter((entry) => entry.text.length >= 2);
 }
 
+function getRecentLinearCommentBodies(issue: LinearIssue, limit = 3): string[] {
+  return (issue.comments ?? [])
+    .slice()
+    .sort((left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""))
+    .slice(0, limit)
+    .map((comment) => deriveStatusFocusText(comment.body))
+    .filter((text) => text.length >= 2);
+}
+
 function scoreIssueTargetCandidate(
   issue: LinearIssue,
   focusText: string,
@@ -619,17 +638,14 @@ function scoreIssueTargetCandidate(
   const normalizedIssueTitle = normalizeText(issue.title);
   const normalizedFocus = normalizeText(focusText);
 
-  if (candidates.lastResolvedIssueId === issue.identifier) {
-    score += 18;
-  }
   if (candidates.childIssueIds.has(issue.identifier)) {
-    score += 18;
-  }
-  if (candidates.parentIssueIds.has(issue.identifier) && candidates.childIssueIds.size > 0) {
-    score -= 10;
+    score += 22;
   }
   if (candidates.latestEntryIssueIds.includes(issue.identifier)) {
-    score += 10;
+    score += 16;
+  }
+  if (candidates.parentIssueIds.has(issue.identifier) && candidates.childIssueIds.size > 0) {
+    score -= 12;
   }
 
   if (normalizedFocus.length >= 2) {
@@ -648,12 +664,28 @@ function scoreIssueTargetCandidate(
   for (const recentFocus of recentFocusTexts) {
     if (!recentFocus.text) continue;
     const normalizedRecent = normalizeText(recentFocus.text);
-    const weight = recentFocus.type === "assistant" ? 6 : 8;
+    const weight = recentFocus.type === "assistant" ? 5 : 10;
     if (normalizedRecent.length >= 3 && (normalizedIssueTitle.includes(normalizedRecent) || normalizedRecent.includes(normalizedIssueTitle))) {
-      score += recentFocus.type === "assistant" ? 10 : 12;
+      score += recentFocus.type === "assistant" ? 8 : 14;
       continue;
     }
-    score += Math.min(countTokenOverlap(issue.title, recentFocus.text) * weight, recentFocus.type === "assistant" ? 12 : 16);
+    score += Math.min(countTokenOverlap(issue.title, recentFocus.text) * weight, recentFocus.type === "assistant" ? 10 : 18);
+  }
+
+  for (const commentText of getRecentLinearCommentBodies(issue)) {
+    const normalizedComment = normalizeText(commentText);
+    if (normalizedComment.length >= 3 && (normalizedComment.includes(normalizedFocus) || normalizedFocus.includes(normalizedComment))) {
+      score += 12;
+      continue;
+    }
+    score += Math.min(countTokenOverlap(commentText, focusText) * 9, 18);
+    for (const recentFocus of recentFocusTexts) {
+      score += Math.min(countTokenOverlap(commentText, recentFocus.text) * (recentFocus.type === "assistant" ? 3 : 4), 8);
+    }
+  }
+
+  if (candidates.lastResolvedIssueId === issue.identifier) {
+    score += 10;
   }
 
   const completedState = issueMatchesCompletedState(issue);
@@ -664,12 +696,21 @@ function scoreIssueTargetCandidate(
     score -= 45;
   }
   if ((kind === "progress" || kind === "blocked" || kind === "completed") && candidates.childIssueIds.size > 0 && candidates.parentIssueIds.has(issue.identifier)) {
-    score -= 8;
+    score -= 10;
   }
   if ((kind === "progress" || kind === "blocked") && candidates.childIssueIds.has(issue.identifier)) {
-    score += 6;
+    score += 10;
   }
   if (kind === "blocked" && issue.state?.name?.toLowerCase().includes("block")) {
+    score += 4;
+  }
+  if (kind === "progress" && issue.latestActionKind === "progress") {
+    score += 8;
+  }
+  if (kind === "blocked" && issue.latestActionKind === "blocked") {
+    score += 10;
+  }
+  if (kind === "completed" && (issue.latestActionKind === "progress" || issue.latestActionKind === "blocked")) {
     score += 4;
   }
 
@@ -714,7 +755,7 @@ async function resolveIssueTargetsFromThread(
   const candidateIssues = (await Promise.all(
     candidates.candidateIds.map(async (issueId) => {
       try {
-        const issue = await getLinearIssue(issueId, env);
+        const issue = await getLinearIssue(issueId, env, undefined, { includeComments: true });
         return {
           issue,
           score: scoreIssueTargetCandidate(issue, focusText, candidates, kind, recentFocusTexts),
@@ -745,6 +786,7 @@ async function resolveIssueTargetsFromThread(
       candidates: candidateIssues.map((item) => ({
         issueId: item.issue.identifier,
         title: item.issue.title,
+        latestActionLabel: formatLatestActionLabel(item.issue),
       })),
       reason: "thread",
     };
@@ -755,6 +797,7 @@ async function resolveIssueTargetsFromThread(
     candidates: candidateIssues.map((item) => ({
       issueId: item.issue.identifier,
       title: item.issue.title,
+      latestActionLabel: formatLatestActionLabel(item.issue),
     })),
     reason: "ambiguous",
   };
@@ -774,7 +817,7 @@ export function formatIssueSelectionReply(
   if (issues.length > 0) {
     lines.push("対象の issue ID を 1 つ指定してください。候補:");
     for (const issue of issues.slice(0, 5)) {
-      lines.push(`- ${issue.issueId}${issue.title ? ` / ${issue.title}` : ""}`);
+      lines.push(`- ${issue.issueId}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}`);
     }
   } else {
     lines.push("同じ thread に紐づく issue が無かったため、`AIC-123` のように issue ID を含めてください。");
@@ -940,6 +983,33 @@ function filterResearchNextActions(
   ).slice(0, policy.researchAutoPlanMaxChildren);
 }
 
+function buildResearchIssueDescription(args: {
+  sourceMessage: ManagerSlackMessage;
+  synthesis: ResearchSynthesisResult;
+}): string {
+  return [
+    "## Slack source",
+    `- channelId: ${args.sourceMessage.channelId}`,
+    `- rootThreadTs: ${args.sourceMessage.rootThreadTs}`,
+    `- sourceMessageTs: ${args.sourceMessage.messageTs}`,
+    "",
+    "## 分かったこと",
+    extractTopLines(args.synthesis.findings, "まず関連情報の洗い出しを開始しました。"),
+    "",
+    "## 未確定事項",
+    extractTopLines(args.synthesis.uncertainties, "スコープ・期限・実行順の確定が必要なら control room で確認する。"),
+    "",
+    "## 次アクション",
+    formatResearchNextActions(args.synthesis.nextActions),
+    "",
+    "## 調べた範囲",
+    "- Slack thread context",
+    "- Slack recent channel context",
+    "- Linear related issues / comments / relations",
+    "- Lightweight web search",
+  ].join("\n");
+}
+
 function buildResearchComment(args: {
   sourceMessage: ManagerSlackMessage;
   slackThreadEntries: Awaited<ReturnType<typeof getSlackThreadContext>>["entries"];
@@ -957,25 +1027,10 @@ function buildResearchComment(args: {
     : "- 直近 thread 文脈は取得できませんでした。";
 
   return [
-    "## Slack source",
-    `- channelId: ${args.sourceMessage.channelId}`,
-    `- rootThreadTs: ${args.sourceMessage.rootThreadTs}`,
-    `- sourceMessageTs: ${args.sourceMessage.messageTs}`,
-    "",
-    "## 調べた範囲",
-    "- Slack thread context",
-    "- Slack recent channel context",
-    "- Linear related issues / comments / relations",
-    "- Lightweight web search",
-    "",
-    "## 分かったこと",
-    extractTopLines(args.synthesis.findings, "まず関連情報の洗い出しを開始しました。"),
-    "",
-    "## 未確定事項",
-    extractTopLines(args.synthesis.uncertainties, "スコープ・期限・実行順の確定が必要なら control room で確認する。"),
-    "",
-    "## 次アクション",
-    formatResearchNextActions(args.synthesis.nextActions),
+    buildResearchIssueDescription({
+      sourceMessage: args.sourceMessage,
+      synthesis: args.synthesis,
+    }),
     "",
     "## Evidence",
     "### Slack thread context",
@@ -1012,25 +1067,61 @@ export function formatManagerReviewFollowupLine(followup: ManagerReviewFollowup,
   return `確認依頼: ${followup.issueId} / 担当: ${assignee} / ${followup.request} / 戻る thread: ${threadReference}`;
 }
 
-function resolveFollowupEntry(entry: FollowupLedgerEntry, now: Date): FollowupLedgerEntry {
+function resolveFollowupEntry(
+  entry: FollowupLedgerEntry,
+  now: Date,
+  reason: "response" | "risk-cleared" | "completed",
+): FollowupLedgerEntry {
   return {
     ...entry,
     status: "resolved",
     resolvedAt: nowIso(now),
+    resolvedReason: reason,
   };
 }
 
-function markIssueFollowupsResolved(
+function updateFollowupsWithIssueResponse(
   followups: FollowupLedgerEntry[],
-  issueIds: string[],
+  issues: LinearIssue[],
+  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
+  responseText: string,
   now: Date,
 ): FollowupLedgerEntry[] {
-  const issueIdSet = new Set(issueIds);
+  const issueById = new Map(issues.map((issue) => [issue.identifier, issue]));
   return followups.map((entry) => {
-    if (!issueIdSet.has(entry.issueId) || entry.status === "resolved") {
+    const issue = issueById.get(entry.issueId);
+    if (!issue || entry.status === "resolved") {
       return entry;
     }
-    return resolveFollowupEntry(entry, now);
+
+    const next: FollowupLedgerEntry = {
+      ...entry,
+      lastResponseAt: nowIso(now),
+      lastResponseKind: kind,
+      lastResponseText: responseText.trim() || entry.lastResponseText,
+    };
+
+    if (issueMatchesCompletedState(issue)) {
+      return resolveFollowupEntry(next, now, "completed");
+    }
+
+    if (entry.lastCategory === "owner_missing") {
+      return issue.assignee ? resolveFollowupEntry(next, now, "risk-cleared") : next;
+    }
+
+    if (entry.lastCategory === "due_missing") {
+      return issue.dueDate ? resolveFollowupEntry(next, now, "risk-cleared") : next;
+    }
+
+    if (entry.lastCategory === "blocked") {
+      return next.lastResponseText ? resolveFollowupEntry(next, now, "response") : next;
+    }
+
+    if (["overdue", "due_today", "due_soon", "stale"].includes(entry.lastCategory ?? "")) {
+      return next.lastResponseText ? resolveFollowupEntry(next, now, "response") : next;
+    }
+
+    return next;
   });
 }
 
@@ -1227,6 +1318,10 @@ function buildAwaitingFollowupPatch(
     assigneeDisplayName: followup.assigneeDisplayName,
     rePingCount: existing?.status === "awaiting-response" ? (existing.rePingCount ?? 0) + 1 : 0,
     resolvedAt: undefined,
+    resolvedReason: undefined,
+    lastResponseAt: existing?.status === "awaiting-response" ? existing.lastResponseAt : undefined,
+    lastResponseKind: existing?.status === "awaiting-response" ? existing.lastResponseKind : undefined,
+    lastResponseText: existing?.status === "awaiting-response" ? existing.lastResponseText : undefined,
   };
 }
 
@@ -1397,15 +1492,29 @@ function reconcileFollowupsWithRiskyIssues(
     }
 
     const current = riskyByIssueId.get(entry.issueId);
-    if (!current || issueMatchesCompletedState(current.issue)) {
+    if (!current) {
       changed = true;
-      return resolveFollowupEntry(entry, now);
+      return resolveFollowupEntry(entry, now, "risk-cleared");
     }
 
-    const currentCategory = getPrimaryRiskCategory(current);
-    if (entry.lastCategory && currentCategory !== entry.lastCategory) {
+    if (issueMatchesCompletedState(current.issue)) {
       changed = true;
-      return resolveFollowupEntry(entry, now);
+      return resolveFollowupEntry(entry, now, "completed");
+    }
+
+    if (entry.lastCategory === "owner_missing" && !current.ownerMissing) {
+      changed = true;
+      return resolveFollowupEntry(entry, now, "risk-cleared");
+    }
+
+    if (entry.lastCategory === "due_missing" && !current.dueMissing) {
+      changed = true;
+      return resolveFollowupEntry(entry, now, "risk-cleared");
+    }
+
+    if (entry.lastCategory === "blocked" && !current.blocked) {
+      changed = true;
+      return resolveFollowupEntry(entry, now, "risk-cleared");
     }
 
     return entry;
@@ -1584,7 +1693,7 @@ export async function handleManagerMessage(
     );
     await saveIntakeLedger(systemPaths, nextLedger);
     const followups = await loadFollowupsLedger(systemPaths);
-    await saveFollowupsLedger(systemPaths, markIssueFollowupsResolved(followups, targetIssueIds, now));
+    await saveFollowupsLedger(systemPaths, updateFollowupsWithIssueResponse(followups, updatedIssues, signal, message.text, now));
 
     return {
       handled: true,
@@ -1898,6 +2007,17 @@ export async function handleManagerMessage(
       ...rawResearchSynthesis,
       nextActions: filterResearchNextActions(rawResearchSynthesis.nextActions, existingTitles, policy),
     };
+
+    await updateManagedLinearIssue(
+      {
+        issueId: researchChild.identifier,
+        description: buildResearchIssueDescription({
+          sourceMessage: requestMessage,
+          synthesis: researchSynthesis,
+        }),
+      },
+      env,
+    );
 
     await addLinearComment(
       researchChild.identifier,
