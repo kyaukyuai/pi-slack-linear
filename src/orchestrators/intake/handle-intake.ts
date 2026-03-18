@@ -51,6 +51,7 @@ import {
   formatIssueReference,
 } from "./formatting.js";
 import {
+  replaceThreadPendingClarificationEntries,
   type IntakeLedgerSupport,
 } from "../shared/intake-ledger.js";
 import {
@@ -84,23 +85,11 @@ export interface HandleIntakeRequestArgs {
   message: IntakeMessage;
   now: Date;
   policy: ManagerPolicy;
-  intakeLedger: IntakeLedgerEntry[];
   pendingClarification?: PendingClarificationContext;
   originalRequestText: string;
   requestMessage: IntakeMessage;
   env: LinearCommandEnv;
   helpers: IntakeHelpers;
-}
-
-function dropPendingClarificationEntries(
-  intakeLedger: IntakeLedgerEntry[],
-  message: Pick<IntakeMessage, "channelId" | "rootThreadTs">,
-): IntakeLedgerEntry[] {
-  return intakeLedger.filter((entry) => !(
-    entry.sourceChannelId === message.channelId
-    && entry.sourceThreadTs === message.rootThreadTs
-    && entry.status === "needs-clarification"
-  ));
 }
 
 function getPendingClarificationCreatedAt(
@@ -115,7 +104,6 @@ export async function handleIntakeRequest({
   message,
   now,
   policy,
-  intakeLedger,
   pendingClarification,
   originalRequestText,
   requestMessage,
@@ -175,7 +163,7 @@ export async function handleIntakeRequest({
   );
 
   if (taskPlan.action === "clarify") {
-    const clarificationEntry: IntakeLedgerEntry = {
+    const clarificationEntry = {
       sourceChannelId: requestMessage.channelId,
       sourceThreadTs: requestMessage.rootThreadTs,
       sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
@@ -189,11 +177,7 @@ export async function handleIntakeRequest({
       createdAt: getPendingClarificationCreatedAt(pendingClarification) ?? ledgerSupport.nowIso(now),
       updatedAt: ledgerSupport.nowIso(now),
     };
-    const nextLedger = [
-      ...dropPendingClarificationEntries(intakeLedger, requestMessage),
-      clarificationEntry,
-    ];
-    await repositories.intake.save(nextLedger);
+    await replaceThreadPendingClarificationEntries(repositories.intake, requestMessage, [clarificationEntry]);
     await recordIntakeClarificationRequested(repositories.workgraph, {
       occurredAt,
       source: workgraphSource,
@@ -225,24 +209,20 @@ export async function handleIntakeRequest({
   );
 
   if (duplicates.length > 0 && !research) {
-    const nextLedger = [
-      ...dropPendingClarificationEntries(intakeLedger, requestMessage),
-      {
-        sourceChannelId: requestMessage.channelId,
-        sourceThreadTs: requestMessage.rootThreadTs,
-        sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
-        messageFingerprint: fingerprint,
-        childIssueIds: duplicates.map((issue) => issue.identifier),
-        status: "linked-existing",
-        lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
-        issueFocusHistory: [],
-        originalText: requestMessage.text,
-        clarificationReasons: [],
-        createdAt: ledgerSupport.nowIso(now),
-        updatedAt: ledgerSupport.nowIso(now),
-      },
-    ];
-    await repositories.intake.save(nextLedger);
+    await replaceThreadPendingClarificationEntries(repositories.intake, requestMessage, [{
+      sourceChannelId: requestMessage.channelId,
+      sourceThreadTs: requestMessage.rootThreadTs,
+      sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
+      messageFingerprint: fingerprint,
+      childIssueIds: duplicates.map((issue) => issue.identifier),
+      status: "linked-existing",
+      lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
+      issueFocusHistory: [],
+      originalText: requestMessage.text,
+      clarificationReasons: [],
+      createdAt: ledgerSupport.nowIso(now),
+      updatedAt: ledgerSupport.nowIso(now),
+    }]);
     await recordIntakeLinkedExisting(repositories.workgraph, {
       occurredAt,
       source: workgraphSource,
@@ -543,10 +523,7 @@ export async function handleIntakeRequest({
       createdAt: ledgerSupport.nowIso(now),
       updatedAt: ledgerSupport.nowIso(now),
     };
-    await repositories.intake.save([
-      ...dropPendingClarificationEntries(intakeLedger, requestMessage),
-      nextIntakeEntry,
-    ]);
+    await replaceThreadPendingClarificationEntries(repositories.intake, requestMessage, [nextIntakeEntry]);
 
     const planningEntry: PlanningLedgerEntry = {
       sourceThread: `${message.channelId}:${message.rootThreadTs}`,
@@ -619,10 +596,7 @@ export async function handleIntakeRequest({
     createdAt: ledgerSupport.nowIso(now),
     updatedAt: ledgerSupport.nowIso(now),
   };
-  await repositories.intake.save([
-    ...dropPendingClarificationEntries(intakeLedger, requestMessage),
-    nextIntakeEntry,
-  ]);
+  await replaceThreadPendingClarificationEntries(repositories.intake, requestMessage, [nextIntakeEntry]);
 
   const planningEntry: PlanningLedgerEntry = {
     sourceThread: `${message.channelId}:${message.rootThreadTs}`,

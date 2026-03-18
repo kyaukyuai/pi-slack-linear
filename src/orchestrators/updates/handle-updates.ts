@@ -10,7 +10,6 @@ import {
 } from "../../lib/linear.js";
 import {
   type FollowupLedgerEntry,
-  type IntakeLedgerEntry,
   type ManagerPolicy,
 } from "../../state/manager-state-contract.js";
 import {
@@ -41,7 +40,7 @@ import {
   formatStatusReply,
 } from "./reply-format.js";
 import {
-  upsertThreadIntakeEntry,
+  savePatchedThreadIntakeEntry,
   type IntakeLedgerSupport,
 } from "../shared/intake-ledger.js";
 
@@ -75,7 +74,6 @@ export interface HandleManagerUpdatesArgs {
   now: Date;
   signal: ManagerSignal;
   policy: ManagerPolicy;
-  intakeLedger: IntakeLedgerEntry[];
   followups: FollowupLedgerEntry[];
   allowFollowupResolution: boolean;
   env: LinearCommandEnv;
@@ -89,7 +87,6 @@ export async function handleManagerUpdates({
   now,
   signal,
   policy,
-  intakeLedger,
   followups,
   allowFollowupResolution,
   env,
@@ -211,8 +208,8 @@ export async function handleManagerUpdates({
       );
       await repositories.followups.save(nextFollowups);
 
-      const nextLedger = upsertThreadIntakeEntry(
-        intakeLedger,
+      await savePatchedThreadIntakeEntry(
+        repositories.intake,
         message,
         {
           lastResolvedIssueId: updatedIssue.identifier,
@@ -220,7 +217,6 @@ export async function handleManagerUpdates({
         now,
         ledgerSupport,
       );
-      await repositories.intake.save(nextLedger);
       await recordFollowupTransitions(repositories.workgraph, followups, nextFollowups, {
         occurredAt,
         source: workgraphSource,
@@ -281,8 +277,8 @@ export async function handleManagerUpdates({
     }
   }
 
-  const nextLedger = upsertThreadIntakeEntry(
-    intakeLedger,
+  await savePatchedThreadIntakeEntry(
+    repositories.intake,
     message,
     {
       status: signal === "progress" ? "progressed" : signal,
@@ -291,7 +287,6 @@ export async function handleManagerUpdates({
     now,
     ledgerSupport,
   );
-  await repositories.intake.save(nextLedger);
 
   const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
   const followupState = updateFollowupsWithIssueResponse(

@@ -1,7 +1,6 @@
 import type { AppConfig } from "./config.js";
 import { handleIntakeRequest } from "../orchestrators/intake/handle-intake.js";
 import { chooseOwner } from "../orchestrators/intake/planning-support.js";
-import { findPendingClarification } from "../orchestrators/shared/intake-ledger.js";
 import {
   buildHeartbeatReviewDecision as buildHeartbeatReviewDecisionOrchestrator,
   buildManagerReview as buildManagerReviewOrchestrator,
@@ -38,12 +37,10 @@ import {
 } from "./linear.js";
 import {
   type ManagerPolicy,
-  type IntakeLedgerEntry,
 } from "../state/manager-state-contract.js";
 import { buildWorkgraphThreadKey } from "../state/workgraph/events.js";
 import {
   getPendingClarificationForThread,
-  type PendingClarificationContext,
 } from "../state/workgraph/queries.js";
 import type { SystemPaths } from "./system-workspace.js";
 
@@ -485,31 +482,6 @@ function isManagerRepositories(value: unknown): value is ManagerRepositories {
     && "workgraph" in value;
 }
 
-function toPendingClarificationContext(entry: IntakeLedgerEntry): PendingClarificationContext {
-  return {
-    threadKey: buildWorkgraphThreadKey(entry.sourceChannelId, entry.sourceThreadTs),
-    sourceChannelId: entry.sourceChannelId,
-    sourceThreadTs: entry.sourceThreadTs,
-    sourceMessageTs: entry.sourceMessageTs,
-    messageFingerprint: entry.messageFingerprint,
-    originalText: entry.originalText,
-    clarificationQuestion: entry.clarificationQuestion,
-    clarificationReasons: [...(entry.clarificationReasons ?? [])],
-    clarificationRequestedAt: entry.createdAt,
-    lastEventAt: entry.updatedAt,
-    intakeStatus: "needs-clarification",
-    pendingClarification: true,
-    parentIssueId: entry.parentIssueId,
-    childIssueIds: [...entry.childIssueIds],
-    linkedIssueIds: [],
-    planningReason: undefined,
-    lastResolvedIssueId: entry.lastResolvedIssueId,
-    latestFocusIssueId: undefined,
-    awaitingFollowupIssueIds: [],
-    issueStatuses: {},
-  };
-}
-
 export async function buildHeartbeatReviewDecision(
   config: AppConfig,
   systemPaths: SystemPaths,
@@ -565,15 +537,11 @@ export async function handleManagerMessage(
     : createFileBackedManagerRepositories(systemPaths);
   const now = repositoriesOrNow instanceof Date ? repositoriesOrNow : (maybeNow ?? new Date());
   const policy = await repositories.policy.load();
-  const intakeLedger = await repositories.intake.load();
   const followups = await repositories.followups.load();
   const pendingClarification = await getPendingClarificationForThread(
     repositories.workgraph,
     buildWorkgraphThreadKey(message.channelId, message.rootThreadTs),
-  ) ?? (() => {
-    const legacy = findPendingClarification(intakeLedger, message);
-    return legacy ? toPendingClarificationContext(legacy) : undefined;
-  })();
+  );
   const originalRequestText = pendingClarification?.originalText ?? message.text;
   const followupText = pendingClarification ? message.text : "";
   const combinedRequestText = pendingClarification
@@ -601,7 +569,6 @@ export async function handleManagerMessage(
     now,
     signal,
     policy,
-    intakeLedger,
     followups,
     allowFollowupResolution: !pendingClarification,
     env,
@@ -630,7 +597,6 @@ export async function handleManagerMessage(
     message,
     now,
     policy,
-    intakeLedger,
     pendingClarification,
     originalRequestText,
     requestMessage,

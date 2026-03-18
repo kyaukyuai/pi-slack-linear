@@ -15,6 +15,11 @@ export interface IntakeLedgerSupport {
   nowIso(now: Date): string;
 }
 
+interface IntakeLedgerRepository {
+  load(): Promise<IntakeLedgerEntry[]>;
+  save(value: IntakeLedgerEntry[]): Promise<void>;
+}
+
 function findThreadEntries(
   intakeLedger: IntakeLedgerEntry[],
   message: ThreadScopedMessage,
@@ -24,17 +29,15 @@ function findThreadEntries(
   ));
 }
 
-export function findPendingClarification(
+function dropPendingClarificationEntries(
   intakeLedger: IntakeLedgerEntry[],
   message: ThreadScopedMessage,
-): IntakeLedgerEntry | undefined {
-  return [...intakeLedger]
-    .reverse()
-    .find((entry) => (
-      entry.sourceChannelId === message.channelId
-      && entry.sourceThreadTs === message.rootThreadTs
-      && entry.status === "needs-clarification"
-    ));
+): IntakeLedgerEntry[] {
+  return intakeLedger.filter((entry) => !(
+    entry.sourceChannelId === message.channelId
+    && entry.sourceThreadTs === message.rootThreadTs
+    && entry.status === "needs-clarification"
+  ));
 }
 
 export function buildIntakeKey(
@@ -83,4 +86,31 @@ export function upsertThreadIntakeEntry(
         }
       : entry
   ));
+}
+
+export async function savePatchedThreadIntakeEntry(
+  repository: IntakeLedgerRepository,
+  message: ThreadMessage,
+  patch: Partial<IntakeLedgerEntry>,
+  now: Date,
+  support: IntakeLedgerSupport,
+): Promise<IntakeLedgerEntry[]> {
+  const intakeLedger = await repository.load();
+  const nextLedger = upsertThreadIntakeEntry(intakeLedger, message, patch, now, support);
+  await repository.save(nextLedger);
+  return nextLedger;
+}
+
+export async function replaceThreadPendingClarificationEntries(
+  repository: IntakeLedgerRepository,
+  message: ThreadScopedMessage,
+  replacements: IntakeLedgerEntry[],
+): Promise<IntakeLedgerEntry[]> {
+  const intakeLedger = await repository.load();
+  const nextLedger = [
+    ...dropPendingClarificationEntries(intakeLedger, message),
+    ...replacements,
+  ];
+  await repository.save(nextLedger);
+  return nextLedger;
 }
