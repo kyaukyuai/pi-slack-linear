@@ -1,50 +1,82 @@
 import type { AppConfig } from "./config.js";
+import { handleIntakeRequest } from "../orchestrators/intake/handle-intake.js";
 import {
-  addLinearComment,
-  addLinearProgressComment,
+  buildHeartbeatReviewDecision as buildHeartbeatReviewDecisionOrchestrator,
+  buildManagerReview as buildManagerReviewOrchestrator,
+} from "../orchestrators/review/build-review.js";
+import type {
+  HeartbeatReviewDecision,
+  ManagerFollowupSource,
+  ManagerReviewKind,
+  ManagerReviewResult,
+} from "../orchestrators/review/contract.js";
+import { loadManagerReviewData } from "../orchestrators/review/review-data.js";
+import {
+  buildAwaitingFollowupPatch,
+  buildReviewFollowup,
+  formatReviewFollowupPrompt,
+  formatRiskLine,
+  getPrimaryRiskCategory,
+  isUrgentRisk,
+  isWithinBusinessHours,
+  selectReviewFollowupItem,
+  shouldSuppressFollowup,
+  sortRiskyIssues,
+  upsertFollowup,
+} from "../orchestrators/review/review-helpers.js";
+import {
+  assessRisk,
+  businessDaysSince,
+} from "../orchestrators/review/risk.js";
+import { handleManagerUpdates } from "../orchestrators/updates/handle-updates.js";
+import {
   addLinearRelation,
   createManagedLinearIssue,
   createManagedLinearIssueBatch,
-  getLinearIssue,
-  listRiskyLinearIssues,
-  markLinearIssueBlocked,
   searchLinearIssues,
-  updateManagedLinearIssue,
-  updateLinearIssueState,
   type LinearIssue,
 } from "./linear.js";
 import {
   loadFollowupsLedger,
   loadIntakeLedger,
   loadManagerPolicy,
-  loadOwnerMap,
-  loadPlanningLedger,
-  saveFollowupsLedger,
   saveIntakeLedger,
   savePlanningLedger,
-  type FollowupLedgerEntry,
   type IntakeLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type OwnerMapEntry,
-  type PlanningLedgerEntry,
 } from "./manager-state.js";
 import {
-  runFollowupResolutionTurn,
   runResearchSynthesisTurn,
   runTaskPlanningTurn,
-  type FollowupResolutionResult,
   type ResearchNextAction,
   type ResearchSynthesisResult,
 } from "./pi-session.js";
 import { getRecentChannelContext, getSlackThreadContext } from "./slack-context.js";
 import type { SystemPaths } from "./system-workspace.js";
-import { buildThreadPaths } from "./thread-workspace.js";
 import { webFetchUrl, webSearchFetch } from "./web-research.js";
 
 export type ManagerMessageKind = "request" | "progress" | "completed" | "blocked" | "conversation";
-export type ManagerReviewKind = "morning-review" | "evening-review" | "weekly-review" | "heartbeat";
 export type ClarificationNeed = "scope" | "due_date" | "execution_plan";
+export type {
+  HeartbeatNoopReason,
+  HeartbeatReviewDecision,
+  ManagerFollowupSource,
+  ManagerReviewFollowup,
+  ManagerReviewIssueLine,
+  ManagerReviewKind,
+  ManagerReviewResult,
+  RiskAssessment,
+} from "../orchestrators/review/contract.js";
+export {
+  formatControlRoomFollowupForSlack,
+  formatControlRoomReviewForSlack,
+  formatIssueLineForSlack,
+  formatManagerReviewFollowupLine,
+} from "../orchestrators/review/review-helpers.js";
+export { assessRisk, businessDaysSince } from "../orchestrators/review/risk.js";
+export { formatIssueSelectionReply } from "../orchestrators/updates/target-resolution.js";
 
 export interface ManagerSlackMessage {
   channelId: string;
@@ -57,62 +89,6 @@ export interface ManagerSlackMessage {
 export interface ManagerHandleResult {
   handled: boolean;
   reply?: string;
-}
-
-export interface ManagerFollowupSource {
-  channelId: string;
-  rootThreadTs: string;
-  sourceMessageTs: string;
-}
-
-export interface ManagerReviewFollowup {
-  issueId: string;
-  issueTitle: string;
-  issueUrl?: string | null;
-  request: string;
-  requestKind: "status" | "blocked-details" | "owner" | "due-date";
-  acceptableAnswerHint?: string;
-  assigneeDisplayName?: string;
-  slackUserId?: string;
-  riskCategory: string;
-  shouldMention: boolean;
-  source?: ManagerFollowupSource;
-}
-
-export interface ManagerReviewIssueLine {
-  issueId: string;
-  title: string;
-  issueUrl?: string | null;
-  assigneeDisplayName?: string;
-  riskSummary: string;
-}
-
-export interface ManagerReviewResult {
-  kind: ManagerReviewKind;
-  text: string;
-  summaryLines?: string[];
-  issueLines?: ManagerReviewIssueLine[];
-  followup?: ManagerReviewFollowup;
-}
-
-export type HeartbeatNoopReason =
-  | "outside-business-hours"
-  | "no-active-channels"
-  | "no-urgent-items"
-  | "suppressed-by-cooldown";
-
-export interface HeartbeatReviewDecision {
-  review?: ManagerReviewResult;
-  reason?: HeartbeatNoopReason;
-}
-
-export interface RiskAssessment {
-  issue: LinearIssue;
-  riskCategories: string[];
-  ownerMissing: boolean;
-  dueMissing: boolean;
-  blocked: boolean;
-  businessDaysSinceUpdate: number;
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -134,28 +110,6 @@ const AMBIGUOUS_EXECUTION_PATTERN = /(進めておいて|進めて|よしなに|
 const ACTIONABLE_RESEARCH_PATTERN = /(確認|修正|対応|実装|調査|整理|洗い出し|作成|更新|共有|再現|検証|比較)/i;
 const LIST_MARKER_PATTERN = /^\s*(?:[-*・•]\s+|\d+[.)]\s+)/;
 const LIST_HEADING_PATTERN = /^(?:タスク|todo|issue|イシュー)?\s*一覧$/i;
-const SIGNAL_TERM_STOPWORDS = new Set([
-  "進捗",
-  "完了",
-  "更新",
-  "確認",
-  "対応",
-  "調査",
-  "整理",
-  "作業",
-  "原因",
-  "必要",
-  "共有",
-  "待ち",
-  "本日中",
-  "今日",
-  "明日",
-  "状態",
-  "issue",
-  "task",
-  "linear",
-]);
-
 interface ParsedTaskSegment {
   raw: string;
   title: string;
@@ -621,12 +575,8 @@ function unique<T>(values: T[]): T[] {
   return Array.from(new Set(values));
 }
 
-function normalizeRelationType(type: string | null | undefined): string {
-  return (type ?? "").toLowerCase().replace(/[^a-z]/g, "");
-}
-
-function extractIssueIdentifiers(text: string): string[] {
-  return unique(Array.from(text.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g)).map((match) => match[1] ?? "").filter(Boolean));
+function compactLinearIssues(issues: Array<LinearIssue | undefined>): LinearIssue[] {
+  return issues.filter((issue): issue is LinearIssue => Boolean(issue));
 }
 
 function collectEntryIssueIds(entry: IntakeLedgerEntry): string[] {
@@ -644,409 +594,8 @@ function findThreadEntries(
   return intakeLedger.filter((entry) => entry.sourceChannelId === message.channelId && entry.sourceThreadTs === message.rootThreadTs);
 }
 
-interface ThreadIssueCandidates {
-  candidateIds: string[];
-  childIssueIds: Set<string>;
-  parentIssueIds: Set<string>;
-  latestEntryIssueIds: string[];
-  lastResolvedIssueId?: string;
-  latestFocusIssueId?: string;
-}
-
-interface ScoredIssueTarget {
-  issue: LinearIssue;
-  score: number;
-  signalMatches: number;
-}
-
-interface RecentFocusText {
-  type: "user" | "assistant";
-  text: string;
-}
-
-interface ResolvedIssueCandidate {
-  issueId: string;
-  title?: string;
-  issueUrl?: string | null;
-  latestActionLabel?: string;
-  focusReason?: string;
-}
-
-interface IssueTargetResolution {
-  selectedIssueIds: string[];
-  candidates: ResolvedIssueCandidate[];
-  reason: "explicit" | "thread" | "missing" | "ambiguous";
-}
-
-function compactLinearIssues(issues: Array<LinearIssue | undefined>): LinearIssue[] {
-  return issues.filter((issue): issue is LinearIssue => Boolean(issue));
-}
-
-function collectThreadIssueCandidates(
-  intakeLedger: IntakeLedgerEntry[],
-  message: Pick<ManagerSlackMessage, "channelId" | "rootThreadTs">,
-): ThreadIssueCandidates {
-  const threadEntries = [...findThreadEntries(intakeLedger, message)].reverse();
-  const latestEntry = threadEntries[0];
-  const childIssueIds = new Set(
-    threadEntries.flatMap((entry) => entry.childIssueIds ?? []).filter(Boolean),
-  );
-  const parentIssueIds = new Set(
-    threadEntries.map((entry) => entry.parentIssueId).filter(Boolean) as string[],
-  );
-
-  return {
-    candidateIds: unique(threadEntries.flatMap((entry) => collectEntryIssueIds(entry))),
-    childIssueIds,
-    parentIssueIds,
-    latestEntryIssueIds: latestEntry ? collectEntryIssueIds(latestEntry) : [],
-    lastResolvedIssueId: latestEntry?.lastResolvedIssueId ?? threadEntries.find((entry) => entry.lastResolvedIssueId)?.lastResolvedIssueId,
-    latestFocusIssueId: latestEntry?.issueFocusHistory?.slice(-1)[0]?.issueId,
-  };
-}
-
-function formatLatestActionLabel(issue: LinearIssue): string | undefined {
-  if (!issue.latestActionKind) return undefined;
-  if (issue.latestActionKind === "progress") return "進捗";
-  if (issue.latestActionKind === "blocked") return "blocked";
-  if (issue.latestActionKind === "slack-source") return "Slack source";
-  return "その他";
-}
-
-function describeFocusReason(issue: LinearIssue, candidates: ThreadIssueCandidates): string | undefined {
-  if (candidates.latestFocusIssueId === issue.identifier) return "直近 thread focus";
-  if (candidates.lastResolvedIssueId === issue.identifier) return "直近解決対象";
-  if (candidates.latestEntryIssueIds.includes(issue.identifier)) return "最新 intake entry";
-  if (candidates.childIssueIds.has(issue.identifier)) return "thread child issue";
-  return undefined;
-}
-
-function issueMatchesCompletedState(issue: LinearIssue): boolean {
-  const stateName = issue.state?.name?.toLowerCase() ?? "";
-  const stateType = issue.state?.type?.toLowerCase() ?? "";
-  return ["done", "completed", "canceled", "cancelled"].some((token) => stateName.includes(token) || stateType.includes(token));
-}
-
 function trimJapaneseParticles(text: string): string {
   return text.replace(/(?:は|を|が|に|で|と|へ|も|の)+$/u, "").trim();
-}
-
-function deriveStatusFocusText(text: string): string {
-  let focus = text.trim();
-  focus = focus.replace(/^<@[^>]+>\s*/, "");
-  focus = focus.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, " ");
-  focus = focus.replace(
-    /(進捗です|進捗|完了しました|完了した|終わりました|終わった|blocked です|blocked|ブロックされています|ブロックです|ブロック|詰まっています|詰まってます|対応中です|対応中|やっています|着手しました|着手中|です)/gi,
-    " ",
-  );
-  focus = focus.replace(/[。！!？?,、]+/g, " ");
-  focus = focus.replace(/\s+/g, " ").trim();
-  return trimJapaneseParticles(focus);
-}
-
-function tokenizeForMatching(text: string): string[] {
-  return normalizeText(text)
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/)
-    .map((token) => trimJapaneseParticles(token))
-    .filter((token) => token.length >= 2);
-}
-
-function extractSignalTerms(text: string): string[] {
-  const normalized = text
-    .replace(/[。！!？?,、/()（）[\]{}「」『』:：]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return [];
-
-  return unique(
-    normalized
-      .split(/\s+/)
-      .flatMap((segment) => segment.split(/[ぁ-ん]+/))
-      .map((token) => trimJapaneseParticles(token).toLowerCase())
-      .filter((token) => token.length >= 2)
-      .filter((token) => !SIGNAL_TERM_STOPWORDS.has(token)),
-  ).slice(0, 8);
-}
-
-function countLooseSignalOverlap(leftTerms: string[], rightTerms: string[]): number {
-  let overlap = 0;
-  for (const left of leftTerms) {
-    if (rightTerms.some((right) => right === left || right.includes(left) || left.includes(right))) {
-      overlap += 1;
-    }
-  }
-  return overlap;
-}
-
-function countTokenOverlap(left: string, right: string): number {
-  const leftTokens = new Set(tokenizeForMatching(left));
-  const rightTokens = new Set(tokenizeForMatching(right));
-  let overlap = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) {
-      overlap += 1;
-    }
-  }
-  return overlap;
-}
-
-async function loadRecentThreadFocusTexts(
-  workspaceDir: string,
-  message: Pick<ManagerSlackMessage, "channelId" | "rootThreadTs">,
-): Promise<RecentFocusText[]> {
-  const context = await getSlackThreadContext(workspaceDir, message.channelId, message.rootThreadTs, 12).catch(() => undefined);
-  if (!context) return [];
-
-  return context.entries
-    .filter((entry): entry is (typeof context.entries)[number] & { type: "user" | "assistant" } => entry.type === "user" || entry.type === "assistant")
-    .slice(-6)
-    .map((entry) => ({
-      type: entry.type,
-      text: deriveStatusFocusText(entry.text),
-    }))
-    .filter((entry) => entry.text.length >= 2);
-}
-
-function getRecentLinearCommentBodies(issue: LinearIssue, limit = 3): string[] {
-  return (issue.comments ?? [])
-    .slice()
-    .sort((left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""))
-    .slice(0, limit)
-    .map((comment) => deriveStatusFocusText(comment.body))
-    .filter((text) => text.length >= 2);
-}
-
-function scoreIssueTargetCandidate(
-  issue: LinearIssue,
-  focusText: string,
-  candidates: ThreadIssueCandidates,
-  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
-  recentFocusTexts: RecentFocusText[],
-): ScoredIssueTarget {
-  let score = 0;
-  const normalizedIssueTitle = normalizeText(issue.title);
-  const normalizedFocus = normalizeText(focusText);
-  const focusTerms = extractSignalTerms(focusText);
-  const titleSignalMatches = countLooseSignalOverlap(focusTerms, extractSignalTerms(issue.title));
-  const commentSignalMatches = Math.max(
-    0,
-    ...getRecentLinearCommentBodies(issue).map((commentText) => countLooseSignalOverlap(focusTerms, extractSignalTerms(commentText))),
-  );
-  const recentSlackSignalMatches = Math.max(
-    0,
-    ...recentFocusTexts.map((recentFocus) => countLooseSignalOverlap(focusTerms, extractSignalTerms(recentFocus.text))),
-  );
-  const signalMatches = Math.max(titleSignalMatches, commentSignalMatches, recentSlackSignalMatches);
-
-  if (candidates.childIssueIds.has(issue.identifier)) {
-    score += 22;
-  }
-  if (candidates.latestFocusIssueId === issue.identifier) {
-    score += 28;
-  }
-  if (candidates.latestEntryIssueIds.includes(issue.identifier)) {
-    score += 16;
-  }
-  if (candidates.parentIssueIds.has(issue.identifier) && candidates.childIssueIds.size > 0) {
-    score -= 12;
-  }
-
-  if (normalizedFocus.length >= 2) {
-    if (normalizedIssueTitle === normalizedFocus) {
-      score += 60;
-    } else if (
-      normalizedFocus.length >= 4
-      && (normalizedIssueTitle.includes(normalizedFocus) || normalizedFocus.includes(normalizedIssueTitle))
-    ) {
-      score += 35;
-    } else {
-      score += Math.min(countTokenOverlap(issue.title, focusText) * 12, 24);
-    }
-  }
-
-  score += titleSignalMatches * 16;
-  score += commentSignalMatches * 10;
-  score += recentSlackSignalMatches * 6;
-
-  for (const recentFocus of recentFocusTexts) {
-    if (!recentFocus.text) continue;
-    const normalizedRecent = normalizeText(recentFocus.text);
-    const weight = recentFocus.type === "assistant" ? 5 : 10;
-    if (normalizedRecent.length >= 3 && (normalizedIssueTitle.includes(normalizedRecent) || normalizedRecent.includes(normalizedIssueTitle))) {
-      score += recentFocus.type === "assistant" ? 8 : 14;
-      continue;
-    }
-    score += Math.min(countTokenOverlap(issue.title, recentFocus.text) * weight, recentFocus.type === "assistant" ? 10 : 18);
-  }
-
-  for (const commentText of getRecentLinearCommentBodies(issue)) {
-    const normalizedComment = normalizeText(commentText);
-    if (normalizedComment.length >= 3 && (normalizedComment.includes(normalizedFocus) || normalizedFocus.includes(normalizedComment))) {
-      score += 12;
-      continue;
-    }
-    score += Math.min(countTokenOverlap(commentText, focusText) * 9, 18);
-    for (const recentFocus of recentFocusTexts) {
-      score += Math.min(countTokenOverlap(commentText, recentFocus.text) * (recentFocus.type === "assistant" ? 3 : 4), 8);
-    }
-  }
-
-  if (candidates.lastResolvedIssueId === issue.identifier) {
-    score += 10;
-  }
-
-  const completedState = issueMatchesCompletedState(issue);
-  if (kind === "completed" && completedState) {
-    score -= 35;
-  }
-  if ((kind === "progress" || kind === "blocked") && completedState) {
-    score -= 45;
-  }
-  if ((kind === "progress" || kind === "blocked" || kind === "completed") && candidates.childIssueIds.size > 0 && candidates.parentIssueIds.has(issue.identifier)) {
-    score -= 10;
-  }
-  if ((kind === "progress" || kind === "blocked") && candidates.childIssueIds.has(issue.identifier)) {
-    score += 10;
-  }
-  if (kind === "blocked" && issue.state?.name?.toLowerCase().includes("block")) {
-    score += 4;
-  }
-  if (kind === "progress" && issue.latestActionKind === "progress") {
-    score += 8;
-  }
-  if (kind === "blocked" && issue.latestActionKind === "blocked") {
-    score += 10;
-  }
-  if (kind === "completed" && (issue.latestActionKind === "progress" || issue.latestActionKind === "blocked")) {
-    score += 4;
-  }
-
-  if (focusTerms.length > 0 && signalMatches === 0) {
-    score -= 20;
-  }
-
-  return {
-    issue,
-    score,
-    signalMatches,
-  };
-}
-
-async function resolveIssueTargetsFromThread(
-  intakeLedger: IntakeLedgerEntry[],
-  message: Pick<ManagerSlackMessage, "channelId" | "rootThreadTs" | "text">,
-  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
-  workspaceDir: string,
-  env: Record<string, string | undefined>,
-): Promise<IssueTargetResolution> {
-  const explicitIssueIds = extractIssueIdentifiers(message.text);
-  if (explicitIssueIds.length > 0) {
-    return {
-      selectedIssueIds: explicitIssueIds,
-      candidates: explicitIssueIds.map((issueId) => ({ issueId })),
-      reason: "explicit",
-    };
-  }
-
-  const candidates = collectThreadIssueCandidates(intakeLedger, message);
-  if (candidates.candidateIds.length === 0) {
-    return {
-      selectedIssueIds: [],
-      candidates: [],
-      reason: "missing",
-    };
-  }
-
-  if (candidates.candidateIds.length === 1) {
-    return {
-      selectedIssueIds: candidates.candidateIds,
-      candidates: candidates.candidateIds.map((issueId) => ({ issueId })),
-      reason: "thread",
-    };
-  }
-
-  const focusText = deriveStatusFocusText(message.text);
-  const focusTerms = extractSignalTerms(focusText);
-  const recentFocusTexts = await loadRecentThreadFocusTexts(workspaceDir, message);
-  const candidateIssues = (await Promise.all(
-    candidates.candidateIds.map(async (issueId) => {
-      try {
-        const issue = await getLinearIssue(issueId, env, undefined, { includeComments: true });
-        return {
-          ...scoreIssueTargetCandidate(issue, focusText, candidates, kind, recentFocusTexts),
-        };
-      } catch {
-        return undefined;
-      }
-    }),
-  )).filter(Boolean) as ScoredIssueTarget[];
-
-  if (candidateIssues.length === 0) {
-    return {
-      selectedIssueIds: [],
-      candidates: candidates.candidateIds.map((issueId) => ({ issueId })),
-      reason: "ambiguous",
-    };
-  }
-
-  candidateIssues.sort((left, right) => right.score - left.score);
-  const top = candidateIssues[0];
-  const second = candidateIssues[1];
-  const topScore = top?.score ?? 0;
-  const secondScore = second?.score ?? Number.NEGATIVE_INFINITY;
-  const requiredSignalMatches = focusTerms.length >= 2 ? 2 : focusTerms.length === 1 ? 1 : 0;
-  const hasStrongSignalMatch = requiredSignalMatches === 0 || (top?.signalMatches ?? 0) >= requiredSignalMatches;
-
-  if (top && topScore >= 24 && topScore - secondScore >= 8 && hasStrongSignalMatch) {
-    return {
-      selectedIssueIds: [top.issue.identifier],
-      candidates: candidateIssues.map((item) => ({
-        issueId: item.issue.identifier,
-        title: item.issue.title,
-        issueUrl: item.issue.url,
-        latestActionLabel: formatLatestActionLabel(item.issue),
-        focusReason: describeFocusReason(item.issue, candidates),
-      })),
-      reason: "thread",
-    };
-  }
-
-  return {
-    selectedIssueIds: [],
-    candidates: candidateIssues.map((item) => ({
-      issueId: item.issue.identifier,
-      title: item.issue.title,
-      issueUrl: item.issue.url,
-      latestActionLabel: formatLatestActionLabel(item.issue),
-      focusReason: describeFocusReason(item.issue, candidates),
-    })),
-    reason: "ambiguous",
-  };
-}
-
-export function formatIssueSelectionReply(
-  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
-  issues: ResolvedIssueCandidate[],
-): string {
-  const prefix = kind === "completed"
-    ? "完了を反映したい issue を特定できませんでした。"
-    : kind === "blocked"
-      ? "blocked 状態を反映したい issue を特定できませんでした。"
-      : "進捗を反映したい issue を特定できませんでした。";
-
-  const lines = [prefix];
-  if (issues.length > 0) {
-    lines.push("対象の issue ID を 1 つ指定してください。候補:");
-    for (const issue of issues.slice(0, 5)) {
-      const issueLabel = issue.issueUrl ? `<${issue.issueUrl}|${issue.issueId}>` : issue.issueId;
-      lines.push(`- ${issueLabel}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}${issue.focusReason ? ` / 理由: ${issue.focusReason}` : ""}`);
-    }
-    lines.push("当てはまるものが無ければ `新規 task` と返してください。");
-  } else {
-    lines.push("同じ thread に紐づく issue が無かったため、`AIC-123` のように issue ID を含めてください。");
-  }
-  return lines.join("\n");
 }
 
 function findLatestIssueSource(
@@ -1064,17 +613,6 @@ function findLatestIssueSource(
     rootThreadTs: entry.sourceThreadTs,
     sourceMessageTs: entry.sourceMessageTs,
   };
-}
-
-function formatStatusSourceComment(message: ManagerSlackMessage, heading: string): string {
-  return [
-    heading,
-    `- channelId: ${message.channelId}`,
-    `- rootThreadTs: ${message.rootThreadTs}`,
-    `- sourceMessageTs: ${message.messageTs}`,
-    "",
-    message.text.trim(),
-  ].join("\n");
 }
 
 function buildIssueFocusEvent(
@@ -1371,259 +909,6 @@ function formatThreadReplyForSlack(args: {
   return [lines[0], "", ...lines.slice(1)].join("\n");
 }
 
-export function formatIssueLineForSlack(issue: ManagerReviewIssueLine): string {
-  const title = truncateSlackText(issue.title);
-  const assignee = issue.assigneeDisplayName ?? "未割当";
-  const issueLabel = issue.issueUrl ? `<${issue.issueUrl}|${issue.issueId}>` : issue.issueId;
-  return `- ${issueLabel} | ${title} | ${assignee} | ${issue.riskSummary}`;
-}
-
-function formatSlackAssigneeLabel(followup: ManagerReviewFollowup): string {
-  if (followup.shouldMention && followup.slackUserId) {
-    return `<@${followup.slackUserId}>`;
-  }
-  return followup.assigneeDisplayName ?? "未割当";
-}
-
-export function formatControlRoomFollowupForSlack(followup: ManagerReviewFollowup, threadReference: string): string {
-  const answerFormat = followup.acceptableAnswerHint ?? acceptableAnswerHintForRequestKind(followup.requestKind);
-  const issueLabel = followup.issueUrl ? `<${followup.issueUrl}|${followup.issueId}>` : followup.issueId;
-  return [
-    "要返信:",
-    issueLabel,
-    formatSlackAssigneeLabel(followup),
-    followup.request,
-    `返答フォーマット: ${answerFormat}`,
-    `戻る thread: ${threadReference}`,
-  ].join(" | ");
-}
-
-export function formatManagerReviewFollowupLine(followup: ManagerReviewFollowup, threadReference: string): string {
-  return formatControlRoomFollowupForSlack(followup, threadReference);
-}
-
-export function formatControlRoomReviewForSlack(result: ManagerReviewResult, threadReference?: string): string {
-  const lines: string[] = [];
-
-  if (result.kind === "morning-review") {
-    lines.push("朝の execution review");
-  } else if (result.kind === "evening-review") {
-    lines.push("夕方の execution review");
-  } else if (result.kind === "weekly-review") {
-    lines.push("週次 planning review");
-  } else {
-    lines.push("緊急フォロー");
-  }
-
-  for (const summary of result.summaryLines ?? []) {
-    lines.push(summary.startsWith("- ") ? summary : `- ${summary}`);
-  }
-  for (const issueLine of (result.issueLines ?? []).slice(0, 3)) {
-    lines.push(formatIssueLineForSlack(issueLine));
-  }
-  if (result.followup) {
-    lines.push("", formatControlRoomFollowupForSlack(result.followup, threadReference ?? "source thread unavailable"));
-  }
-
-  if (lines.length === 1) {
-    return result.text;
-  }
-  const [headline, ...rest] = lines;
-  return [headline, "", ...rest].join("\n");
-}
-
-function resolveFollowupEntry(
-  entry: FollowupLedgerEntry,
-  now: Date,
-  reason: "response" | "risk-cleared" | "completed" | "answered",
-): FollowupLedgerEntry {
-  return {
-    ...entry,
-    status: "resolved",
-    resolvedAt: nowIso(now),
-    resolvedReason: reason,
-  };
-}
-
-function issueNeedsFollowupResponse(
-  followups: FollowupLedgerEntry[],
-  issueId: string,
-): FollowupLedgerEntry | undefined {
-  return followups.find((entry) => entry.issueId === issueId && entry.status === "awaiting-response");
-}
-
-function requestKindToSignalKind(
-  requestKind: ManagerReviewFollowup["requestKind"] | undefined,
-): Exclude<ManagerMessageKind, "conversation" | "request"> {
-  return requestKind === "blocked-details" ? "blocked" : "progress";
-}
-
-function buildFollowupResponseComment(message: ManagerSlackMessage, followup: FollowupLedgerEntry): string {
-  return [
-    "## Follow-up response",
-    `- requestKind: ${followup.requestKind ?? "status"}`,
-    `- requestText: ${followup.requestText ?? "(none)"}`,
-    `- channelId: ${message.channelId}`,
-    `- rootThreadTs: ${message.rootThreadTs}`,
-    `- sourceMessageTs: ${message.messageTs}`,
-    "",
-    message.text.trim(),
-  ].join("\n");
-}
-
-function updateFollowupsWithIssueResponse(
-  followups: FollowupLedgerEntry[],
-  issues: LinearIssue[],
-  kind: Exclude<ManagerMessageKind, "conversation" | "request"> | "followup-response",
-  responseText: string,
-  now: Date,
-): FollowupLedgerEntry[] {
-  const issueById = new Map(issues.map((issue) => [issue.identifier, issue]));
-  return followups.map((entry) => {
-    const issue = issueById.get(entry.issueId);
-    if (!issue || entry.status === "resolved") {
-      return entry;
-    }
-
-    const next: FollowupLedgerEntry = {
-      ...entry,
-      lastResponseAt: nowIso(now),
-      lastResponseKind: kind,
-      lastResponseText: responseText.trim() || entry.lastResponseText,
-    };
-
-    if (issueMatchesCompletedState(issue)) {
-      return resolveFollowupEntry(next, now, "completed");
-    }
-
-    return next;
-  });
-}
-
-async function assessFollowupResponses(
-  config: AppConfig,
-  message: ManagerSlackMessage,
-  followups: FollowupLedgerEntry[],
-  issues: LinearIssue[],
-  paths: ReturnType<typeof buildThreadPaths>,
-  now: Date,
-): Promise<FollowupLedgerEntry[]> {
-  let nextFollowups = [...followups];
-
-  for (const issue of issues) {
-    const entry = issueNeedsFollowupResponse(nextFollowups, issue.identifier);
-    if (!entry?.requestText || !entry.requestKind) continue;
-
-    if (issueMatchesCompletedState(issue)) {
-      nextFollowups = nextFollowups.map((candidate) => candidate.issueId === issue.identifier
-        ? resolveFollowupEntry(candidate, now, "completed")
-        : candidate);
-      continue;
-    }
-
-    const assessment = await runFollowupResolutionTurn(
-      config,
-      paths,
-      {
-        issueId: issue.identifier,
-        issueTitle: issue.title,
-        requestKind: entry.requestKind,
-        requestText: entry.requestText,
-        acceptableAnswerHint: entry.acceptableAnswerHint,
-        responseText: message.text,
-        taskKey: `${issue.identifier}-${entry.requestKind}`,
-      },
-    ).catch<FollowupResolutionResult>(() => ({
-      answered: false,
-      confidence: 0,
-      reasoningSummary: "follow-up resolution failed",
-    }));
-
-    nextFollowups = nextFollowups.map((candidate) => {
-      if (candidate.issueId !== issue.identifier || candidate.status === "resolved") return candidate;
-      const patched: FollowupLedgerEntry = {
-        ...candidate,
-        resolutionAssessment: {
-          answered: assessment.answered,
-          answerKind: assessment.answerKind,
-          confidence: assessment.confidence,
-          extractedFields: assessment.extractedFields,
-        },
-      };
-
-      if (assessment.answered && assessment.confidence >= 0.7) {
-        return resolveFollowupEntry(patched, now, "answered");
-      }
-      return patched;
-    });
-  }
-
-  return nextFollowups;
-}
-
-async function applyFollowupExtractedFields(
-  followup: FollowupLedgerEntry,
-  issue: LinearIssue,
-  assessment: FollowupResolutionResult,
-  message: ManagerSlackMessage,
-  env: Record<string, string | undefined>,
-): Promise<LinearIssue> {
-  const extracted = assessment.extractedFields ?? {};
-  if (followup.requestKind === "owner" && extracted.assignee) {
-    return updateManagedLinearIssue(
-      {
-        issueId: issue.identifier,
-        assignee: extracted.assignee,
-      },
-      env,
-    );
-  }
-
-  if (followup.requestKind === "due-date" && extracted.dueDate) {
-    return updateManagedLinearIssue(
-      {
-        issueId: issue.identifier,
-        dueDate: extracted.dueDate,
-      },
-      env,
-    );
-  }
-
-  if (followup.requestKind === "status") {
-    await addLinearProgressComment(issue.identifier, buildFollowupResponseComment(message, followup), env);
-    return getLinearIssue(issue.identifier, env, undefined, { includeComments: true });
-  }
-
-  await addLinearComment(issue.identifier, buildFollowupResponseComment(message, followup), env);
-  return getLinearIssue(issue.identifier, env, undefined, { includeComments: true });
-}
-
-function applyFollowupAssessmentResult(
-  followups: FollowupLedgerEntry[],
-  issueId: string,
-  assessment: FollowupResolutionResult,
-  now: Date,
-  reason: "answered" | "risk-cleared" | "completed" | undefined,
-): FollowupLedgerEntry[] {
-  return followups.map((entry) => {
-    if (entry.issueId !== issueId) return entry;
-    const patched: FollowupLedgerEntry = {
-      ...entry,
-      resolutionAssessment: {
-        answered: assessment.answered,
-        answerKind: assessment.answerKind,
-        confidence: assessment.confidence,
-        extractedFields: assessment.extractedFields,
-      },
-    };
-
-    if (reason) {
-      return resolveFollowupEntry(patched, now, reason);
-    }
-    return patched;
-  });
-}
-
 function formatAutonomousCreateReply(
   parent: LinearIssue | undefined,
   children: LinearIssue[],
@@ -1678,62 +963,6 @@ function formatExistingIssueReply(duplicates: LinearIssue[]): string {
   return lines.join("\n");
 }
 
-function formatStatusReply(
-  kind: Exclude<ManagerMessageKind, "conversation" | "request">,
-  issues: LinearIssue[],
-  extras: string[] = [],
-): string {
-  const target = issues.map((issue) => buildSlackTargetLabel(issue)).join(" / ");
-  const headline = kind === "completed"
-    ? "完了を Linear に反映しました。"
-    : kind === "blocked"
-      ? "blocked 状態を Linear に反映しました。"
-      : "進捗を Linear に反映しました。";
-  const nextAction = kind === "completed"
-    ? "次アクション: 残っている作業があれば、この thread で続けてください。"
-    : kind === "blocked"
-      ? "次アクション: 原因 / 待ち先 / 再開条件 が分かったら、この thread で追記してください。"
-      : "次アクション: 必要ならこの thread で続きの進捗を共有してください。";
-
-  return formatThreadReplyForSlack({
-    headline,
-    target,
-    lines: [nextAction, ...extras],
-    maxLines: extras.length > 0 ? 5 : 4,
-  });
-}
-
-function formatFollowupResolutionReply(
-  followup: FollowupLedgerEntry,
-  issue: LinearIssue,
-  assessment: FollowupResolutionResult,
-): string {
-  const answered = assessment.answered && assessment.confidence >= 0.7;
-  const lines: string[] = [];
-  if (assessment.reasoningSummary) {
-    lines.push(`判定: ${truncateSlackText(assessment.reasoningSummary, 90)}`);
-  }
-
-  if (!answered) {
-    lines.push(`引き続き必要な返答: ${followup.requestText ?? "追加情報をお願いします。"}`);
-    if (followup.acceptableAnswerHint) {
-      lines.push(`返答フォーマット: ${followup.acceptableAnswerHint}`);
-    }
-  } else if (followup.requestKind === "owner" && assessment.extractedFields?.assignee) {
-    lines.push(`担当: ${assessment.extractedFields.assignee}`);
-  } else if (followup.requestKind === "due-date" && assessment.extractedFields?.dueDate) {
-    lines.push(`期限: ${assessment.extractedFields.dueDate}`);
-  } else {
-    lines.push("次アクション: 追加情報があればこの thread で続けてください。");
-  }
-  return formatThreadReplyForSlack({
-    headline: answered ? "follow-up への返答を Linear に反映しました。" : "follow-up への返答を受け取りました。",
-    target: buildSlackTargetLabel(issue),
-    lines,
-    maxLines: 5,
-  });
-}
-
 function buildResearchSlackSummary(args: {
   parent: LinearIssue;
   researchChild: LinearIssue;
@@ -1770,453 +999,41 @@ function buildResearchSlackSummary(args: {
   });
 }
 
-function getPrimaryRiskCategory(item: RiskAssessment): string {
-  const rank: Record<string, number> = {
-    overdue: 0,
-    due_today: 1,
-    blocked: 2,
-    stale: 3,
-    due_soon: 4,
-    owner_missing: 5,
-    due_missing: 6,
-  };
-
-  return [...item.riskCategories].sort((left, right) => (rank[left] ?? 99) - (rank[right] ?? 99))[0] ?? "review";
-}
-
-function formatReviewFollowupPrompt(item: RiskAssessment): string {
-  const primaryCategory = getPrimaryRiskCategory(item);
-  if (primaryCategory === "blocked") {
-    return "原因と、誰の返答待ちか、何がそろえば再開できるかを共有してください。";
-  }
-  if (primaryCategory === "overdue" || primaryCategory === "due_today" || primaryCategory === "due_soon") {
-    return "現在の進捗と次アクション、次回更新予定を共有してください。";
-  }
-  if (primaryCategory === "owner_missing") {
-    return "担当者を 1 人決めて共有してください。";
-  }
-  if (primaryCategory === "due_missing") {
-    return "期限を YYYY-MM-DD で共有してください。";
-  }
-  return "最新状況と次アクション、次回更新予定を共有してください。";
-}
-
-function requestKindForRiskCategory(category: string): ManagerReviewFollowup["requestKind"] {
-  if (category === "blocked") return "blocked-details";
-  if (category === "owner_missing") return "owner";
-  if (category === "due_missing") return "due-date";
-  return "status";
-}
-
-function acceptableAnswerHintForRequestKind(requestKind: ManagerReviewFollowup["requestKind"]): string {
-  if (requestKind === "blocked-details") {
-    return "原因 / 待ち先 / 再開条件";
-  }
-  if (requestKind === "owner") {
-    return "担当者名";
-  }
-  if (requestKind === "due-date") {
-    return "YYYY-MM-DD";
-  }
-  return "進捗 / 次アクション / 次回更新予定";
-}
-
-function resolveSlackUserIdForReview(
-  ownerMap: OwnerMap,
-  assigneeDisplayName: string | undefined,
-): string | undefined {
-  if (!assigneeDisplayName) return undefined;
-  const normalizedAssignee = normalizeText(assigneeDisplayName);
-  return ownerMap.entries.find((entry) => {
-    if (!entry.slackUserId) return false;
-    return normalizeText(entry.linearAssignee) === normalizedAssignee || normalizeText(entry.id) === normalizedAssignee;
-  })?.slackUserId;
-}
-
-function shouldMentionReviewFollowup(
-  category: string,
-  existingFollowup?: FollowupLedgerEntry,
-): boolean {
-  if (["blocked", "overdue", "due_today"].includes(category)) {
-    return true;
-  }
-  return existingFollowup?.status === "awaiting-response" && Boolean(existingFollowup.lastPublicFollowupAt);
-}
-
-function buildReviewFollowup(
-  item: RiskAssessment,
-  intakeLedger: IntakeLedgerEntry[],
-  ownerMap: OwnerMap,
-  existingFollowup?: FollowupLedgerEntry,
-): ManagerReviewFollowup {
-  const riskCategory = getPrimaryRiskCategory(item);
-  const requestKind = existingFollowup?.requestKind ?? requestKindForRiskCategory(riskCategory);
-  const assigneeDisplayName = existingFollowup?.assigneeDisplayName ?? item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined;
-  return {
-    issueId: item.issue.identifier,
-    issueTitle: item.issue.title,
-    issueUrl: item.issue.url,
-    request: existingFollowup?.requestText ?? formatReviewFollowupPrompt(item),
-    requestKind,
-    acceptableAnswerHint: existingFollowup?.acceptableAnswerHint ?? acceptableAnswerHintForRequestKind(requestKind),
-    assigneeDisplayName,
-    slackUserId: resolveSlackUserIdForReview(ownerMap, assigneeDisplayName),
-    riskCategory,
-    shouldMention: shouldMentionReviewFollowup(riskCategory, existingFollowup),
-    source: existingFollowup?.sourceChannelId && existingFollowup?.sourceThreadTs && existingFollowup?.sourceMessageTs
-      ? {
-          channelId: existingFollowup.sourceChannelId,
-          rootThreadTs: existingFollowup.sourceThreadTs,
-          sourceMessageTs: existingFollowup.sourceMessageTs,
-        }
-      : findLatestIssueSource(intakeLedger, item.issue.identifier),
-  };
-}
-
-function buildAwaitingFollowupPatch(
-  followups: FollowupLedgerEntry[],
-  followup: ManagerReviewFollowup,
-  category: string,
-  now: Date,
-): FollowupLedgerEntry {
-  const existing = followups.find((entry) => entry.issueId === followup.issueId);
-  return {
-    issueId: followup.issueId,
-    lastPublicFollowupAt: nowIso(now),
-    lastCategory: category,
-    requestKind: followup.requestKind,
-    status: "awaiting-response",
-    requestText: followup.request,
-    acceptableAnswerHint: followup.acceptableAnswerHint,
-    sourceChannelId: followup.source?.channelId,
-    sourceThreadTs: followup.source?.rootThreadTs,
-    sourceMessageTs: followup.source?.sourceMessageTs,
-    assigneeDisplayName: followup.assigneeDisplayName,
-    rePingCount: existing?.status === "awaiting-response" ? (existing.rePingCount ?? 0) + 1 : 0,
-    resolvedAt: undefined,
-    resolvedReason: undefined,
-    lastResponseAt: existing?.status === "awaiting-response" ? existing.lastResponseAt : undefined,
-    lastResponseKind: existing?.status === "awaiting-response" ? existing.lastResponseKind : undefined,
-    lastResponseText: existing?.status === "awaiting-response" ? existing.lastResponseText : undefined,
-    resolutionAssessment: existing?.status === "awaiting-response" ? existing.resolutionAssessment : undefined,
-  };
-}
-
-function selectReviewFollowupItem(
-  items: RiskAssessment[],
-  followups: FollowupLedgerEntry[],
-  policy: ManagerPolicy,
-  now: Date,
-): RiskAssessment | undefined {
-  if (policy.reviewExplicitFollowupCount <= 0) {
-    return undefined;
-  }
-
-  const eligible = items.filter((item) => !shouldSuppressFollowup(
-    followups,
-    item.issue.identifier,
-    getPrimaryRiskCategory(item),
-    policy.followupCooldownHours,
-    now,
-  ));
-  const awaitingIssueIds = new Set(
-    followups
-      .filter((entry) => entry.status === "awaiting-response")
-      .map((entry) => entry.issueId),
-  );
-  return eligible.find((item) => awaitingIssueIds.has(item.issue.identifier)) ?? eligible[0];
-}
-
-function findAwaitingFollowupCandidates(
-  followups: FollowupLedgerEntry[],
-  message: ManagerSlackMessage,
-  controlRoomChannelId: string,
-): FollowupLedgerEntry[] {
-  const explicitIssueIds = new Set(extractIssueIdentifiers(message.text));
-  return followups.filter((entry) => {
-    if (entry.status !== "awaiting-response") return false;
-    if (entry.sourceChannelId === message.channelId && entry.sourceThreadTs === message.rootThreadTs) return true;
-    if (message.channelId === controlRoomChannelId && explicitIssueIds.has(entry.issueId)) return true;
-    return false;
-  });
-}
-
-function getJstDayString(date: Date): string {
-  return toJstDate(date).toISOString().slice(0, 10);
-}
-
-export function businessDaysSince(updatedAt: string | undefined, now = new Date()): number {
-  if (!updatedAt) return Number.MAX_SAFE_INTEGER;
-  const start = toJstDate(new Date(updatedAt));
-  const end = toJstDate(now);
-  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
-  const target = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
-  let businessDays = 0;
-
-  while (cursor.getTime() < target.getTime()) {
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    const weekday = cursor.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) {
-      businessDays += 1;
-    }
-  }
-
-  return businessDays;
-}
-
-export function assessRisk(issue: LinearIssue, policy: ManagerPolicy, now = new Date()): RiskAssessment {
-  const today = getJstDayString(now);
-  const tomorrow = getJstDayString(new Date(now.getTime() + 24 * 60 * 60 * 1000));
-  const dueDate = issue.dueDate ?? undefined;
-  const ownerMissing = !issue.assignee;
-  const dueMissing = !dueDate;
-  const blockedState =
-    issue.state?.name?.toLowerCase().includes("block") === true ||
-    issue.state?.type?.toLowerCase().includes("block") === true;
-  const blockedByRelation = (issue.relations ?? []).some((relation) => normalizeRelationType(relation.type).includes("blockedby"));
-  const inverseBlockingRelation = (issue.inverseRelations ?? []).some((relation) => {
-    const normalized = normalizeRelationType(relation.type);
-    return normalized.includes("blocks") || normalized.includes("blockedby");
-  });
-  const blocked = blockedState || blockedByRelation || inverseBlockingRelation;
-  const staleDays = businessDaysSince(issue.updatedAt ?? undefined, now);
-  const riskCategories: string[] = [];
-
-  if (dueDate) {
-    if (dueDate < today) {
-      riskCategories.push("overdue");
-    } else if (dueDate === today) {
-      riskCategories.push("due_today");
-    } else if (dueDate === tomorrow) {
-      riskCategories.push("due_soon");
-    }
-  }
-
-  if (staleDays >= policy.staleBusinessDays) {
-    riskCategories.push("stale");
-  }
-  if (blocked) {
-    riskCategories.push("blocked");
-  }
-  if (ownerMissing) {
-    riskCategories.push("owner_missing");
-  }
-  if (dueMissing) {
-    riskCategories.push("due_missing");
-  }
-
-  return {
-    issue,
-    riskCategories: unique(riskCategories),
-    ownerMissing,
-    dueMissing,
-    blocked,
-    businessDaysSinceUpdate: staleDays,
-  };
-}
-
-function sortRiskyIssues(items: RiskAssessment[]): RiskAssessment[] {
-  const rank: Record<string, number> = {
-    overdue: 0,
-    due_today: 1,
-    blocked: 2,
-    stale: 3,
-    due_soon: 4,
-    owner_missing: 5,
-    due_missing: 6,
-  };
-
-  return [...items].sort((left, right) => {
-    const leftRank = Math.min(...left.riskCategories.map((category) => rank[category] ?? 99));
-    const rightRank = Math.min(...right.riskCategories.map((category) => rank[category] ?? 99));
-    if (leftRank !== rightRank) return leftRank - rightRank;
-    return (right.issue.priority ?? 0) - (left.issue.priority ?? 0);
-  });
-}
-
-function isWithinBusinessHours(policy: ManagerPolicy, now = new Date()): boolean {
-  const jst = toJstDate(now);
-  const weekday = jst.getUTCDay();
-  const isoWeekday = weekday === 0 ? 7 : weekday;
-  if (!policy.businessHours.weekdays.includes(isoWeekday)) return false;
-
-  const current = `${String(jst.getUTCHours()).padStart(2, "0")}:${String(jst.getUTCMinutes()).padStart(2, "0")}`;
-  return current >= policy.businessHours.start && current <= policy.businessHours.end;
-}
-
-function isUrgentRisk(item: RiskAssessment, policy: ManagerPolicy): boolean {
-  if (item.riskCategories.includes("overdue") || item.riskCategories.includes("due_today")) {
-    return true;
-  }
-  if (item.riskCategories.includes("blocked")) {
-    return true;
-  }
-  if (item.riskCategories.includes("stale") && (item.issue.priority ?? 0) > 0 && (item.issue.priority ?? 99) <= policy.urgentPriorityThreshold) {
-    return true;
-  }
-  return false;
-}
-
-function shouldSuppressFollowup(
-  followups: FollowupLedgerEntry[],
-  issueId: string,
-  category: string,
-  cooldownHours: number,
-  now = new Date(),
-): boolean {
-  const existing = followups.find((entry) => entry.issueId === issueId && entry.lastCategory === category);
-  if (!existing?.lastPublicFollowupAt) return false;
-  const elapsedMs = now.getTime() - Date.parse(existing.lastPublicFollowupAt);
-  return elapsedMs < cooldownHours * 60 * 60 * 1000;
-}
-
-function reconcileFollowupsWithRiskyIssues(
-  followups: FollowupLedgerEntry[],
-  risky: RiskAssessment[],
-  now: Date,
-): { changed: boolean; followups: FollowupLedgerEntry[] } {
-  const riskyByIssueId = new Map(risky.map((item) => [item.issue.identifier, item]));
-  let changed = false;
-  const next = followups.map((entry) => {
-    if (entry.status !== "awaiting-response") {
-      return entry;
-    }
-
-    const current = riskyByIssueId.get(entry.issueId);
-    if (!current) {
-      changed = true;
-      return resolveFollowupEntry(entry, now, "risk-cleared");
-    }
-
-    if (issueMatchesCompletedState(current.issue)) {
-      changed = true;
-      return resolveFollowupEntry(entry, now, "completed");
-    }
-
-    if (entry.lastCategory === "owner_missing" && !current.ownerMissing) {
-      changed = true;
-      return resolveFollowupEntry(entry, now, "risk-cleared");
-    }
-
-    if (entry.lastCategory === "due_missing" && !current.dueMissing) {
-      changed = true;
-      return resolveFollowupEntry(entry, now, "risk-cleared");
-    }
-
-    if (entry.lastCategory === "blocked" && !current.blocked) {
-      changed = true;
-      return resolveFollowupEntry(entry, now, "risk-cleared");
-    }
-
-    return entry;
-  });
-
-  return { changed, followups: next };
-}
-
-interface ManagerReviewData {
-  policy: ManagerPolicy;
-  ownerMap: OwnerMap;
-  followups: FollowupLedgerEntry[];
-  planningLedger: PlanningLedgerEntry[];
-  intakeLedger: IntakeLedgerEntry[];
-  risky: RiskAssessment[];
-}
-
-async function loadManagerReviewData(
-  config: AppConfig,
-  systemPaths: SystemPaths,
-  now: Date,
-): Promise<ManagerReviewData> {
-  const policy = await loadManagerPolicy(systemPaths);
-  const ownerMap = await loadOwnerMap(systemPaths);
-  const followups = await loadFollowupsLedger(systemPaths);
-  const planningLedger = await loadPlanningLedger(systemPaths);
-  const intakeLedger = await loadIntakeLedger(systemPaths);
-  const env = {
-    ...process.env,
-    LINEAR_API_KEY: config.linearApiKey,
-    LINEAR_WORKSPACE: config.linearWorkspace,
-    LINEAR_TEAM_KEY: config.linearTeamKey,
-  };
-
-  const risky = (await listRiskyLinearIssues(
-    {
-      staleBusinessDays: policy.staleBusinessDays,
-      urgentPriorityThreshold: policy.urgentPriorityThreshold,
-    },
-    env,
-  )).map((issue) => assessRisk(issue, policy, now)).filter((item) => item.riskCategories.length > 0);
-
-  const reconciled = reconcileFollowupsWithRiskyIssues(followups, risky, now);
-  if (reconciled.changed) {
-    await saveFollowupsLedger(systemPaths, reconciled.followups);
-  }
-
-  return {
-    policy,
-    ownerMap,
-    followups: reconciled.followups,
-    planningLedger,
-    intakeLedger,
-    risky,
-  };
-}
-
 export async function buildHeartbeatReviewDecision(
   config: AppConfig,
   systemPaths: SystemPaths,
   now = new Date(),
 ): Promise<HeartbeatReviewDecision> {
-  const { policy, ownerMap, followups, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
-
-  if (!isWithinBusinessHours(policy, now)) {
-    return { reason: "outside-business-hours" };
-  }
-
-  const urgent = sortRiskyIssues(risky).filter((item) => isUrgentRisk(item, policy));
-  if (urgent.length === 0) {
-    return { reason: "no-urgent-items" };
-  }
-
-  const available = urgent.filter((item) => !shouldSuppressFollowup(
-    followups,
-    item.issue.identifier,
-    getPrimaryRiskCategory(item),
-    policy.followupCooldownHours,
+  return buildHeartbeatReviewDecisionOrchestrator({
+    config,
+    systemPaths,
     now,
-  ));
-
-  if (available.length === 0) {
-    return { reason: "suppressed-by-cooldown" };
-  }
-
-  const top = available[0];
-  const existingFollowup = followups.find((entry) => entry.issueId === top.issue.identifier);
-  const followup = buildReviewFollowup(top, intakeLedger, ownerMap, existingFollowup);
-  const nextFollowups = upsertFollowup(
-    followups,
-    buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(top), now),
-  );
-  await saveFollowupsLedger(systemPaths, nextFollowups);
-
-  return {
-    review: {
-      kind: "heartbeat",
-      text: [
-        "緊急フォローが必要です。",
-        formatRiskLine(top),
-      ].join("\n"),
-      summaryLines: ["blocked / overdue / due today の優先確認が必要です。"],
-      issueLines: [{
-        issueId: top.issue.identifier,
-        title: top.issue.title,
-        assigneeDisplayName: top.issue.assignee?.displayName ?? top.issue.assignee?.name ?? undefined,
-        riskSummary: top.riskCategories.join(", "),
-      }],
-      followup,
+    helpers: {
+      loadManagerReviewData,
+      isWithinBusinessHours: (policy, candidateNow) => isWithinBusinessHours(policy, candidateNow, { toJstDate }),
+      sortRiskyIssues,
+      isUrgentRisk,
+      shouldSuppressFollowup,
+      buildReviewFollowup: (item, intakeLedger, ownerMap, existingFollowup) => buildReviewFollowup(
+        item,
+        intakeLedger,
+        ownerMap,
+        existingFollowup,
+        { normalizeText, findLatestIssueSource },
+      ),
+      upsertFollowup,
+      buildAwaitingFollowupPatch: (followups, followup, category, candidateNow) => buildAwaitingFollowupPatch(
+        followups,
+        followup,
+        category,
+        candidateNow,
+        { nowIso },
+      ),
+      getPrimaryRiskCategory,
+      formatRiskLine,
+      selectReviewFollowupItem,
     },
-  };
+  });
 }
 
 export async function handleManagerMessage(
@@ -2249,146 +1066,26 @@ export async function handleManagerMessage(
     LINEAR_TEAM_KEY: config.linearTeamKey,
   };
 
-  if (!pendingClarification) {
-    const awaitingFollowups = findAwaitingFollowupCandidates(followups, message, policy.controlRoomChannelId);
-    if (awaitingFollowups.length > 0) {
-      let selectedFollowup = awaitingFollowups.length === 1 ? awaitingFollowups[0] : undefined;
-
-      if (!selectedFollowup) {
-        const explicitIssueIds = extractIssueIdentifiers(message.text);
-        if (explicitIssueIds.length === 1) {
-          selectedFollowup = awaitingFollowups.find((entry) => entry.issueId === explicitIssueIds[0]);
-        }
-      }
-
-      if (!selectedFollowup) {
-        return {
-          handled: true,
-          reply: formatIssueSelectionReply("progress", awaitingFollowups.map((entry) => ({
-            issueId: entry.issueId,
-            title: undefined,
-          }))),
-        };
-      }
-
-      if (selectedFollowup) {
-        const issue = await getLinearIssue(selectedFollowup.issueId, env, undefined, { includeComments: true });
-        const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
-        const assessment = await runFollowupResolutionTurn(
-          config,
-          paths,
-          {
-            issueId: issue.identifier,
-            issueTitle: issue.title,
-            requestKind: selectedFollowup.requestKind ?? "status",
-            requestText: selectedFollowup.requestText ?? formatReviewFollowupPrompt(assessRisk(issue, policy, now)),
-            acceptableAnswerHint: selectedFollowup.acceptableAnswerHint,
-            responseText: message.text,
-            taskKey: `${issue.identifier}-followup`,
-          },
-        ).catch<FollowupResolutionResult>(() => ({
-          answered: false,
-          confidence: 0,
-          reasoningSummary: "follow-up resolution failed",
-        }));
-
-        let updatedIssue = issue;
-        let resolveReason: "answered" | "risk-cleared" | "completed" | undefined;
-        if (selectedFollowup.requestKind === "owner" && assessment.extractedFields?.assignee) {
-          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
-          resolveReason = updatedIssue.assignee ? "risk-cleared" : undefined;
-        } else if (selectedFollowup.requestKind === "due-date" && assessment.extractedFields?.dueDate) {
-          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
-          resolveReason = updatedIssue.dueDate ? "risk-cleared" : undefined;
-        } else if (
-          selectedFollowup.requestKind === "status"
-          || selectedFollowup.requestKind === "blocked-details"
-          || (assessment.answered && assessment.confidence >= 0.7)
-        ) {
-          updatedIssue = await applyFollowupExtractedFields(selectedFollowup, issue, assessment, message, env);
-          if (assessment.answered && assessment.confidence >= 0.7) {
-            resolveReason = issueMatchesCompletedState(updatedIssue) ? "completed" : "answered";
-          }
-        }
-
-        let nextFollowups = updateFollowupsWithIssueResponse(followups, [updatedIssue], "followup-response", message.text, now);
-        nextFollowups = applyFollowupAssessmentResult(nextFollowups, updatedIssue.identifier, assessment, now, resolveReason);
-        await saveFollowupsLedger(systemPaths, nextFollowups);
-
-        const nextLedger = upsertThreadIntakeEntry(
-          intakeLedger,
-          message,
-          {
-            lastResolvedIssueId: updatedIssue.identifier,
-            issueFocusHistory: [buildIssueFocusEvent(updatedIssue.identifier, "followup-response", "followup", message.text, now)],
-          },
-          now,
-        );
-        await saveIntakeLedger(systemPaths, nextLedger);
-
-        return {
-          handled: true,
-          reply: formatFollowupResolutionReply(selectedFollowup, updatedIssue, assessment),
-        };
-      }
-    }
-  }
-
-  if (signal !== "request" && signal !== "conversation") {
-    if (!policy.autoStatusUpdate) {
-      return { handled: false };
-    }
-    const resolution = await resolveIssueTargetsFromThread(intakeLedger, message, signal, config.workspaceDir, env);
-    if (resolution.reason === "missing" || resolution.reason === "ambiguous") {
-      return {
-        handled: true,
-        reply: formatIssueSelectionReply(signal, resolution.candidates),
-      };
-    }
-
-    const targetIssueIds = resolution.selectedIssueIds;
-    const extras: string[] = [];
-    const updatedIssues: LinearIssue[] = [];
-
-    if (signal === "progress") {
-      for (const issueId of targetIssueIds) {
-        await addLinearProgressComment(issueId, formatStatusSourceComment(message, "## Progress source"), env);
-        updatedIssues.push(await getLinearIssue(issueId, env));
-      }
-    } else if (signal === "completed") {
-      for (const issueId of targetIssueIds) {
-        updatedIssues.push(await updateLinearIssueState(issueId, "completed", env));
-        await addLinearComment(issueId, formatStatusSourceComment(message, "## Completion source"), env);
-      }
-    } else if (signal === "blocked") {
-      for (const issueId of targetIssueIds) {
-        const result = await markLinearIssueBlocked(issueId, formatStatusSourceComment(message, "## Blocked source"), env);
-        updatedIssues.push(result.issue);
-        if (!result.blockedStateApplied) {
-          extras.push(`${issueId} は workflow に blocked state が無いため、comment のみ追加しました。`);
-        }
-      }
-    }
-
-    const nextLedger = upsertThreadIntakeEntry(
-      intakeLedger,
-      message,
-      {
-        status: signal === "progress" ? "progressed" : signal,
-        lastResolvedIssueId: targetIssueIds[0],
-        issueFocusHistory: targetIssueIds.map((issueId) => buildIssueFocusEvent(issueId, signal, "thread-status", message.text, now)),
-      },
-      now,
-    );
-    await saveIntakeLedger(systemPaths, nextLedger);
-    const paths = buildThreadPaths(config.workspaceDir, message.channelId, message.rootThreadTs);
-    const followupState = updateFollowupsWithIssueResponse(followups, updatedIssues, signal, message.text, now);
-    await saveFollowupsLedger(systemPaths, await assessFollowupResponses(config, message, followupState, updatedIssues, paths, now));
-
-    return {
-      handled: true,
-      reply: formatStatusReply(signal, updatedIssues, extras),
-    };
+  const updatesResult = await handleManagerUpdates({
+    config,
+    systemPaths,
+    message,
+    now,
+    signal,
+    policy,
+    intakeLedger,
+    followups,
+    allowFollowupResolution: !pendingClarification,
+    env,
+    helpers: {
+      formatReviewFollowupPrompt,
+      assessRisk,
+      buildIssueFocusEvent,
+      upsertThreadIntakeEntry,
+    },
+  });
+  if (updatesResult) {
+    return updatesResult;
   }
 
   if (signal !== "request") {
@@ -2399,486 +1096,41 @@ export async function handleManagerMessage(
     return { handled: false };
   }
 
-  const ownerMap = await loadOwnerMap(systemPaths);
-  const planningLedger = await loadPlanningLedger(systemPaths);
-
-  const fingerprint = pendingClarification?.messageFingerprint ?? fingerprintText(requestMessage.text);
-  const existingLedgerEntry = intakeLedger.find((entry) => {
-    if (entry.status === "needs-clarification") return false;
-    return buildIntakeKey(entry) === buildIntakeKey({
-      sourceChannelId: requestMessage.channelId,
-      sourceThreadTs: requestMessage.rootThreadTs,
-      messageFingerprint: fingerprint,
-    });
-  });
-
-  if (existingLedgerEntry) {
-    const linkedIssues = unique([existingLedgerEntry.parentIssueId, ...existingLedgerEntry.childIssueIds].filter(Boolean)) as string[];
-    return {
-      handled: true,
-      reply: linkedIssues.length > 0
-        ? ["この依頼は既に取り込まれています。", ...linkedIssues.map((issueId) => `- ${issueId}`)].join("\n")
-        : "この依頼は既に取り込まれています。",
-    };
-  }
-
-  const planningPaths = buildThreadPaths(config.workspaceDir, requestMessage.channelId, requestMessage.rootThreadTs);
-  const taskPlan = await runTaskPlanningTurn(
+  return handleIntakeRequest({
     config,
-    planningPaths,
-    {
-      channelId: requestMessage.channelId,
-      rootThreadTs: requestMessage.rootThreadTs,
-      originalRequest: originalRequestText,
-      latestUserMessage: message.text,
-      combinedRequest: requestMessage.text,
-      clarificationQuestion: pendingClarification?.clarificationQuestion,
-      currentDate: toJstDate(now).toISOString().slice(0, 10),
-      taskKey: `${requestMessage.channelId}-${requestMessage.rootThreadTs}-task-plan`,
-    },
-  );
-
-  if (taskPlan.action === "clarify") {
-    const clarificationEntry: IntakeLedgerEntry = {
-      sourceChannelId: requestMessage.channelId,
-      sourceThreadTs: requestMessage.rootThreadTs,
-      sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
-      messageFingerprint: fingerprint,
-      childIssueIds: [],
-      status: "needs-clarification",
-      originalText: requestMessage.text,
-      clarificationQuestion: taskPlan.clarificationQuestion,
-      clarificationReasons: taskPlan.clarificationReasons,
-      issueFocusHistory: [],
-      createdAt: pendingClarification?.createdAt ?? nowIso(now),
-      updatedAt: nowIso(now),
-    };
-    const nextLedger = [
-      ...intakeLedger.filter((entry) => entry !== pendingClarification),
-      clarificationEntry,
-    ];
-    await saveIntakeLedger(systemPaths, nextLedger);
-    return {
-      handled: true,
-      reply: clarificationEntry.clarificationQuestion,
-    };
-  }
-
-  const planningReason = taskPlan.planningReason;
-  const planningTitle = taskPlan.parentTitle ?? taskPlan.children[0]?.title;
-  if (!planningTitle) {
-    throw new Error("Task planner returned no planning title");
-  }
-  const primaryTitle = planningTitle;
-  const research = planningReason === "research-first" || taskPlan.children.some((child) => child.kind === "research");
-  const globalDueDate = taskPlan.parentDueDate;
-  const duplicates = await searchLinearIssues(
-    {
-      query: planningTitle.slice(0, 32),
-      limit: 5,
-    },
+    systemPaths,
+    message,
+    now,
+    policy,
+    intakeLedger,
+    pendingClarification,
+    originalRequestText,
+    requestMessage,
     env,
-  );
-
-  if (duplicates.length > 0 && !research) {
-    const nextLedger = [
-      ...intakeLedger.filter((entry) => entry !== pendingClarification),
-      {
-        sourceChannelId: requestMessage.channelId,
-        sourceThreadTs: requestMessage.rootThreadTs,
-        sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
-        messageFingerprint: fingerprint,
-        childIssueIds: duplicates.map((issue) => issue.identifier),
-        status: "linked-existing",
-        lastResolvedIssueId: duplicates.length === 1 ? duplicates[0]?.identifier : undefined,
-        issueFocusHistory: duplicates.length === 1 && duplicates[0]
-          ? [buildIssueFocusEvent(duplicates[0].identifier, "reuse", "duplicate-reuse", requestMessage.text, now)]
-          : [],
-        originalText: requestMessage.text,
-        clarificationReasons: [],
-        createdAt: nowIso(now),
-        updatedAt: nowIso(now),
-      },
-    ];
-    await saveIntakeLedger(systemPaths, nextLedger);
-    return {
-      handled: true,
-      reply: formatExistingIssueReply(duplicates),
-    };
-  }
-
-  const existingResearchParent = research ? chooseExistingResearchParent(duplicates, planningTitle) : undefined;
-  const needsNewParent = Boolean(taskPlan.parentTitle) && !existingResearchParent;
-  const usedFallbackOwners = new Set<string>();
-  const parentOwner = needsNewParent ? chooseOwner(planningTitle, ownerMap) : undefined;
-  if (parentOwner?.resolution === "fallback") {
-    usedFallbackOwners.add(parentOwner.entry.id);
-  }
-
-  const plannedChildren = taskPlan.children.map((child) => {
-    const owner = chooseOwner(child.assigneeHint ?? child.title, ownerMap);
-    if (!child.assigneeHint && owner.resolution === "fallback") {
-      usedFallbackOwners.add(owner.entry.id);
-    }
-    const childDueDate = child.dueDate ?? globalDueDate;
-
-    return {
-      childText: child.title,
-      title: child.title,
-      description: child.kind === "research"
-        ? [
-            "## Slack source",
-            requestMessage.text,
-            "",
-            "## 調べた範囲",
-            "- ここに調査対象を書く",
-            "",
-            "## 分かったこと",
-            "- ここに調査結果を書く",
-            "",
-            "## 未確定事項",
-            "- ここに未確定事項を書く",
-            "",
-            "## 次アクション",
-            "- ここに次アクションを書く",
-          ].join("\n")
-        : [
-            "## Slack source",
-            requestMessage.text,
-            "",
-            "## 完了条件",
-            "- 実行単位で完了できる状態にする",
-          ].join("\n"),
-      dueDate: childDueDate,
-      assignee: child.assigneeHint ?? owner.entry.linearAssignee,
-      priority: childDueDate ? 2 : undefined,
-      isResearch: child.kind === "research",
-    };
+    helpers: {
+      unique,
+      nowIso,
+      toJstDate,
+      fingerprintText,
+      buildIntakeKey,
+      buildIssueFocusEvent,
+      chooseExistingResearchParent,
+      chooseOwner,
+      compactLinearIssues,
+      formatSourceComment,
+      formatExistingIssueReply,
+      formatSlackContextSummary,
+      formatRelatedIssuesSummary,
+      formatWebSummary,
+      buildFallbackResearchSynthesis,
+      filterResearchNextActions,
+      buildResearchIssueDescription,
+      buildResearchComment,
+      buildResearchSlackSummary,
+      formatAutonomousCreateReply,
+      formatIssueReference,
+    },
   });
-
-  let createdParent: LinearIssue | undefined;
-  let parent = existingResearchParent;
-  let createdChildren: LinearIssue[] = [];
-  let researchChild: LinearIssue | undefined;
-
-  if (needsNewParent && plannedChildren.length >= 2) {
-    const batch = await createManagedLinearIssueBatch(
-      {
-        parent: {
-          title: planningTitle,
-          description: [
-            "## 目的",
-            planningTitle,
-            "",
-            "## 完了条件",
-            "- Slack の依頼を親 issue として管理する",
-            "- 実行子 issue で前進できる状態にする",
-          ].join("\n"),
-          assignee: parentOwner?.entry.linearAssignee,
-          dueDate: globalDueDate,
-          priority: globalDueDate ? 2 : undefined,
-        },
-        children: plannedChildren.map((child) => ({
-          title: child.title,
-          description: child.description,
-          dueDate: child.dueDate,
-          assignee: child.assignee,
-          priority: child.priority,
-        })),
-      },
-      env,
-    );
-    createdParent = batch.parent;
-    parent = batch.parent;
-    createdChildren = compactLinearIssues(batch.children);
-    if (createdChildren.length !== plannedChildren.length) {
-      throw new Error(`Linear batch create returned ${createdChildren.length}/${plannedChildren.length} children`);
-    }
-    const researchIndex = plannedChildren.findIndex((child) => child.isResearch);
-    researchChild = researchIndex >= 0 ? createdChildren[researchIndex] : undefined;
-  } else {
-    createdParent = needsNewParent
-      ? await createManagedLinearIssue(
-          {
-            title: planningTitle,
-            description: [
-              "## 目的",
-              planningTitle,
-              "",
-              "## 完了条件",
-              "- Slack の依頼を親 issue として管理する",
-              "- 実行子 issue で前進できる状態にする",
-            ].join("\n"),
-            assignee: parentOwner?.entry.linearAssignee,
-            dueDate: globalDueDate,
-            priority: globalDueDate ? 2 : undefined,
-          },
-          env,
-        )
-      : undefined;
-    parent = existingResearchParent ?? createdParent;
-
-    for (const child of plannedChildren) {
-      const createdChild = await createManagedLinearIssue(
-        {
-          title: child.title,
-          description: child.description,
-          dueDate: child.dueDate,
-          parent: parent?.identifier,
-          assignee: child.assignee,
-          priority: child.priority,
-        },
-        env,
-      );
-
-      if (!createdChild) {
-        throw new Error(`Linear create returned no issue for child: ${child.title}`);
-      }
-
-      createdChildren.push(createdChild);
-      if (child.isResearch) {
-        researchChild = createdChild;
-      }
-    }
-  }
-
-  for (const child of createdChildren) {
-    await addLinearComment(child.identifier, formatSourceComment(requestMessage, planningReason), env);
-  }
-
-  if (parent) {
-    await addLinearComment(parent.identifier, formatSourceComment(requestMessage, planningReason), env);
-  }
-
-  if (parent && createdChildren.length > 1) {
-    for (let index = 1; index < createdChildren.length; index += 1) {
-      await addLinearRelation(createdChildren[index - 1].identifier, "blocks", createdChildren[index].identifier, env);
-    }
-  }
-
-  if (researchChild) {
-    const slackThreadContext = await getSlackThreadContext(config.workspaceDir, requestMessage.channelId, requestMessage.rootThreadTs).catch(() => ({
-      channelId: requestMessage.channelId,
-      rootThreadTs: requestMessage.rootThreadTs,
-      entries: [],
-    }));
-    const recentChannelContexts = await getRecentChannelContext(config.workspaceDir, requestMessage.channelId, 3, 6).catch(() => []);
-    const relatedIssues = (await searchLinearIssues(
-      {
-        query: primaryTitle.slice(0, 32),
-        limit: 5,
-      },
-      env,
-    ).catch(() => [])).filter((issue) => issue.identifier !== researchChild?.identifier && issue.identifier !== parent?.identifier);
-    const searchResults = await webSearchFetch(primaryTitle, 3).catch(() => []);
-    const fetchedPages: Awaited<ReturnType<typeof webFetchUrl>>[] = [];
-    for (const result of searchResults.slice(0, 2)) {
-      try {
-        fetchedPages.push(await webFetchUrl(result.url));
-      } catch {
-        // Ignore fetch failures for individual pages and keep the rest of the research summary.
-      }
-    }
-
-    const existingTitles = [parent?.title, ...createdChildren.map((issue) => issue.title)].filter(Boolean) as string[];
-    const researchPaths = buildThreadPaths(config.workspaceDir, requestMessage.channelId, requestMessage.rootThreadTs);
-    const rawResearchSynthesis = await runResearchSynthesisTurn(
-      config,
-      researchPaths,
-      {
-        channelId: requestMessage.channelId,
-        rootThreadTs: requestMessage.rootThreadTs,
-        taskTitle: planningTitle,
-        sourceMessage: requestMessage.text,
-        slackThreadSummary: formatSlackContextSummary(slackThreadContext.entries),
-        recentChannelSummary: recentChannelContexts.length > 0
-          ? recentChannelContexts
-            .slice(0, 3)
-            .map((context) => `- ${context.rootThreadTs}: ${context.entries.slice(-1)[0]?.text.replace(/\s+/g, " ").slice(0, 120) ?? "(no messages)"}`)
-            .join("\n")
-          : "- 直近 thread 文脈は取得できませんでした。",
-        relatedIssuesSummary: formatRelatedIssuesSummary(relatedIssues),
-        webSummary: formatWebSummary(searchResults, fetchedPages),
-        taskKey: researchChild.identifier,
-      },
-    ).catch(() => buildFallbackResearchSynthesis({
-      slackThreadEntries: slackThreadContext.entries,
-      relatedIssues,
-      searchResults,
-    }));
-    const researchSynthesis: ResearchSynthesisResult = {
-      ...rawResearchSynthesis,
-      nextActions: filterResearchNextActions(rawResearchSynthesis.nextActions, existingTitles, policy),
-    };
-
-    await updateManagedLinearIssue(
-      {
-        issueId: researchChild.identifier,
-        description: buildResearchIssueDescription({
-          sourceMessage: requestMessage,
-          synthesis: researchSynthesis,
-        }),
-      },
-      env,
-    );
-
-    await addLinearComment(
-      researchChild.identifier,
-      buildResearchComment({
-        sourceMessage: requestMessage,
-        slackThreadEntries: slackThreadContext.entries,
-        recentChannelContexts,
-        relatedIssues,
-        searchResults,
-        fetchedPages,
-        synthesis: researchSynthesis,
-      }),
-      env,
-    );
-
-    const followupChildren: LinearIssue[] = [];
-    if (policy.autoPlan && researchSynthesis.nextActions.length >= policy.researchAutoPlanMinActions) {
-      const parentAssignee = parent?.assignee?.displayName ?? parent?.assignee?.name;
-      for (const nextAction of researchSynthesis.nextActions.slice(0, policy.researchAutoPlanMaxChildren)) {
-        if (nextAction.title.trim().length < 6) {
-          continue;
-        }
-        const owner = chooseOwner(nextAction.ownerHint ?? nextAction.title, ownerMap);
-        if (owner.resolution === "fallback") {
-          usedFallbackOwners.add(owner.entry.id);
-        }
-
-        const followupChild = await createManagedLinearIssue(
-          {
-            title: nextAction.title,
-            description: [
-              "## Research source",
-              formatIssueReference(researchChild),
-              "",
-              "## Purpose",
-              nextAction.purpose || "調査結果を踏まえて実行可能な状態にする",
-              "",
-              "## Slack source",
-              requestMessage.text,
-              "",
-              "## 完了条件",
-              "- 調査結果を踏まえて実行可能な状態にする",
-            ].join("\n"),
-            parent: parent?.identifier,
-            assignee: owner.resolution === "mapped" ? owner.entry.linearAssignee : parentAssignee ?? owner.entry.linearAssignee,
-            dueDate: researchChild.dueDate ?? parent?.dueDate ?? undefined,
-            priority: (researchChild.dueDate ?? parent?.dueDate) ? 2 : undefined,
-          },
-          env,
-        );
-        followupChildren.push(followupChild);
-      }
-    }
-
-    const allCreatedChildren = [...createdChildren, ...followupChildren];
-
-    const nextIntakeEntry: IntakeLedgerEntry = {
-      sourceChannelId: requestMessage.channelId,
-      sourceThreadTs: requestMessage.rootThreadTs,
-      sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
-      messageFingerprint: fingerprint,
-      parentIssueId: parent?.identifier,
-      childIssueIds: allCreatedChildren.map((issue) => issue.identifier),
-      status: "created",
-      ownerResolution: usedFallbackOwners.size > 0 ? "fallback" : "mapped",
-      originalText: requestMessage.text,
-      clarificationReasons: [],
-      lastResolvedIssueId: researchChild.identifier,
-      issueFocusHistory: [
-        ...(parent ? [buildIssueFocusEvent(parent.identifier, research ? "research-parent" : "create-parent", planningReason, requestMessage.text, now)] : []),
-        ...allCreatedChildren.map((issue) => buildIssueFocusEvent(
-          issue.identifier,
-          issue.identifier === researchChild.identifier ? "research-child" : "create-child",
-          planningReason,
-          issue.title,
-          now,
-        )),
-      ],
-      createdAt: nowIso(now),
-      updatedAt: nowIso(now),
-    };
-    await saveIntakeLedger(systemPaths, [
-      ...intakeLedger.filter((entry) => entry !== pendingClarification),
-      nextIntakeEntry,
-    ]);
-
-    const planningEntry: PlanningLedgerEntry = {
-      sourceThread: `${message.channelId}:${message.rootThreadTs}`,
-      parentIssueId: parent?.identifier,
-      generatedChildIssueIds: allCreatedChildren.map((issue) => issue.identifier),
-      planningReason,
-      ownerResolution: usedFallbackOwners.size > 0 ? "fallback" : "mapped",
-      createdAt: nowIso(now),
-      updatedAt: nowIso(now),
-    };
-    await savePlanningLedger(systemPaths, [...planningLedger, planningEntry]);
-
-    return {
-      handled: true,
-      reply: buildResearchSlackSummary({
-        parent: parent!,
-        researchChild,
-        reusedParent: Boolean(existingResearchParent),
-        synthesis: researchSynthesis,
-        followupChildren,
-      }),
-    };
-  }
-
-  const ownerResolution = usedFallbackOwners.size > 0 ? "fallback" : "mapped";
-  const nextIntakeEntry: IntakeLedgerEntry = {
-    sourceChannelId: requestMessage.channelId,
-    sourceThreadTs: requestMessage.rootThreadTs,
-    sourceMessageTs: pendingClarification?.sourceMessageTs ?? requestMessage.messageTs,
-    messageFingerprint: fingerprint,
-    parentIssueId: parent?.identifier,
-    childIssueIds: createdChildren.map((issue) => issue.identifier),
-    status: "created",
-    ownerResolution,
-    originalText: requestMessage.text,
-    clarificationReasons: [],
-    lastResolvedIssueId: createdChildren.length === 1 ? createdChildren[0]?.identifier : createdChildren.length === 0 ? parent?.identifier : undefined,
-    issueFocusHistory: [
-      ...(parent ? [buildIssueFocusEvent(parent.identifier, "create-parent", planningReason, requestMessage.text, now)] : []),
-      ...createdChildren.map((issue) => buildIssueFocusEvent(issue.identifier, "create-child", planningReason, issue.title, now)),
-    ],
-    createdAt: nowIso(now),
-    updatedAt: nowIso(now),
-  };
-  await saveIntakeLedger(systemPaths, [
-    ...intakeLedger.filter((entry) => entry !== pendingClarification),
-    nextIntakeEntry,
-  ]);
-
-  const planningEntry: PlanningLedgerEntry = {
-    sourceThread: `${message.channelId}:${message.rootThreadTs}`,
-    parentIssueId: parent?.identifier,
-    generatedChildIssueIds: createdChildren.map((issue) => issue.identifier),
-    planningReason,
-    ownerResolution,
-    createdAt: nowIso(now),
-    updatedAt: nowIso(now),
-  };
-  await savePlanningLedger(systemPaths, [...planningLedger, planningEntry]);
-
-  return {
-    handled: true,
-    reply: formatAutonomousCreateReply(parent, createdChildren, planningReason, usedFallbackOwners.size > 0, {
-      reusedParent: Boolean(existingResearchParent),
-    }),
-  };
-}
-
-function formatRiskLine(item: RiskAssessment): string {
-  const categories = item.riskCategories.join(", ");
-  const assignee = item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? "未割当";
-  const due = item.issue.dueDate ?? "期限未設定";
-  return `- ${item.issue.identifier} / ${item.issue.title} / ${categories} / 担当: ${assignee} / 期限: ${due}`;
 }
 
 export async function buildManagerReview(
@@ -2887,144 +1139,35 @@ export async function buildManagerReview(
   kind: ManagerReviewKind,
   now = new Date(),
 ): Promise<ManagerReviewResult | undefined> {
-  if (kind === "heartbeat") {
-    const decision = await buildHeartbeatReviewDecision(config, systemPaths, now);
-    return decision.review;
-  }
-
-  const { policy, ownerMap, followups, planningLedger, intakeLedger, risky } = await loadManagerReviewData(config, systemPaths, now);
-
-  const sorted = sortRiskyIssues(risky);
-  if (kind === "morning-review") {
-    const lines = ["朝の execution review です。"];
-    const items = sorted.filter((item) => !item.riskCategories.includes("due_missing")).slice(0, 3);
-    if (items.length === 0) {
-      return {
-        kind,
-        text: "朝の execution review です。\n- 今日すぐに共有すべきリスクはありません。",
-        summaryLines: ["今日すぐに共有すべきリスクはありません。"],
-      };
-    }
-    lines.push("今日やるべきこと / 期限リスク / stale:");
-    for (const item of items) lines.push(formatRiskLine(item));
-    const followupItem = selectReviewFollowupItem(items, followups, policy, now);
-    let followup: ManagerReviewFollowup | undefined;
-    if (followupItem) {
-      const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await saveFollowupsLedger(systemPaths, upsertFollowup(
-        followups,
-        buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
-      ));
-    }
-    return {
-      kind,
-      text: lines.join("\n"),
-      summaryLines: ["今日やるべきこと / 期限リスク / stale"],
-      issueLines: items.map((item) => ({
-        issueId: item.issue.identifier,
-        title: item.issue.title,
-        issueUrl: item.issue.url,
-        assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
-        riskSummary: item.riskCategories.join(", "),
-      })),
-      followup,
-    };
-  }
-
-  if (kind === "evening-review") {
-    const lines = ["夕方の進捗 review です。"];
-    const items = sorted
-      .filter((item) => item.riskCategories.some((category) => ["due_today", "blocked", "overdue", "stale"].includes(category)))
-      .slice(0, 3);
-    if (items.length === 0) {
-      return {
-        kind,
-        text: "夕方の進捗 review です。\n- 今日の残タスクで強いリスクは見当たりません。",
-        summaryLines: ["今日の残タスクで強いリスクは見当たりません。"],
-      };
-    }
-    lines.push("今日残っていること / blocked / due today:");
-    for (const item of items) lines.push(formatRiskLine(item));
-    const followupItem = selectReviewFollowupItem(items, followups, policy, now);
-    let followup: ManagerReviewFollowup | undefined;
-    if (followupItem) {
-      const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-      followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-      await saveFollowupsLedger(systemPaths, upsertFollowup(
-        followups,
-        buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
-      ));
-    }
-    return {
-      kind,
-      text: lines.join("\n"),
-      summaryLines: ["残タスク / blocked / due today"],
-      issueLines: items.map((item) => ({
-        issueId: item.issue.identifier,
-        title: item.issue.title,
-        issueUrl: item.issue.url,
-        assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
-        riskSummary: item.riskCategories.join(", "),
-      })),
-      followup,
-    };
-  }
-
-  const fallbackCount = planningLedger.filter((entry) => entry.ownerResolution === "fallback").length;
-  const unresolvedClarifications = intakeLedger.filter((entry) => entry.status === "needs-clarification").length;
-  const staleItems = sorted.filter((item) => item.riskCategories.includes("stale")).slice(0, 5);
-  const lines = ["週次 planning review です。"];
-  lines.push(`- 未整備 issue: ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length}`);
-  lines.push(`- 長期 stale: ${staleItems.length}`);
-  lines.push(`- owner map gap: ${fallbackCount}`);
-  lines.push(`- 未処理 clarification: ${unresolvedClarifications}`);
-  for (const item of staleItems.slice(0, 3)) {
-    lines.push(formatRiskLine(item));
-  }
-  const weeklyItems = staleItems.slice(0, 3);
-  const followupItem = selectReviewFollowupItem(weeklyItems, followups, policy, now);
-  let followup: ManagerReviewFollowup | undefined;
-  if (followupItem) {
-    const existingFollowup = followups.find((entry) => entry.issueId === followupItem.issue.identifier);
-    followup = buildReviewFollowup(followupItem, intakeLedger, ownerMap, existingFollowup);
-    await saveFollowupsLedger(systemPaths, upsertFollowup(
-      followups,
-      buildAwaitingFollowupPatch(followups, followup, getPrimaryRiskCategory(followupItem), now),
-    ));
-  }
-  return {
+  return buildManagerReviewOrchestrator({
+    config,
+    systemPaths,
     kind,
-    text: lines.join("\n"),
-    summaryLines: [
-      `未整備 issue: ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length}`,
-      `長期 stale: ${staleItems.length}`,
-      `owner map gap: ${fallbackCount}`,
-      `未処理 clarification: ${unresolvedClarifications}`,
-    ],
-    issueLines: weeklyItems.map((item) => ({
-      issueId: item.issue.identifier,
-      title: item.issue.title,
-      issueUrl: item.issue.url,
-      assigneeDisplayName: item.issue.assignee?.displayName ?? item.issue.assignee?.name ?? undefined,
-      riskSummary: item.riskCategories.join(", "),
-    })),
-    followup,
-  };
-}
-
-function upsertFollowup(
-  followups: FollowupLedgerEntry[],
-  patch: FollowupLedgerEntry,
-): FollowupLedgerEntry[] {
-  const index = followups.findIndex((entry) => entry.issueId === patch.issueId);
-  if (index === -1) {
-    return [...followups, patch];
-  }
-  const next = [...followups];
-  next[index] = {
-    ...next[index],
-    ...patch,
-  };
-  return next;
+    now,
+    helpers: {
+      loadManagerReviewData,
+      isWithinBusinessHours: (policy, candidateNow) => isWithinBusinessHours(policy, candidateNow, { toJstDate }),
+      sortRiskyIssues,
+      isUrgentRisk,
+      shouldSuppressFollowup,
+      buildReviewFollowup: (item, intakeLedger, ownerMap, existingFollowup) => buildReviewFollowup(
+        item,
+        intakeLedger,
+        ownerMap,
+        existingFollowup,
+        { normalizeText, findLatestIssueSource },
+      ),
+      upsertFollowup,
+      buildAwaitingFollowupPatch: (followups, followup, category, candidateNow) => buildAwaitingFollowupPatch(
+        followups,
+        followup,
+        category,
+        candidateNow,
+        { nowIso },
+      ),
+      getPrimaryRiskCategory,
+      formatRiskLine,
+      selectReviewFollowupItem,
+    },
+  });
 }
