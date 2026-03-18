@@ -51,6 +51,14 @@ export interface LinearWorkflowState {
   type?: string | null;
 }
 
+export interface LinearCycle {
+  id?: string;
+  number?: number;
+  name?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+}
+
 export interface LinearIssue {
   id: string;
   identifier: string;
@@ -59,6 +67,8 @@ export interface LinearIssue {
   description?: string | null;
   dueDate?: string | null;
   priority?: number | null;
+  priorityLabel?: string | null;
+  cycle?: LinearCycle | null;
   updatedAt?: string | null;
   assignee?: LinearUser | null;
   state?: LinearWorkflowState | null;
@@ -173,8 +183,16 @@ interface CliIssueRef {
 interface CliIssuePayload extends CliIssueRef {
   description?: string | null;
   priority?: number | null;
+  priorityLabel?: string | null;
   updatedAt?: string | null;
   assignee?: CliIssueUser | null;
+  cycle?: {
+    id?: string;
+    number?: number | null;
+    name?: string | null;
+    startsAt?: string | null;
+    endsAt?: string | null;
+  } | null;
   parent?: CliIssueRef | null;
   children?: CliIssueRef[] | { nodes?: CliIssueRef[] } | null;
   relations?: unknown;
@@ -322,6 +340,28 @@ function normalizeLinearState(raw: unknown): LinearWorkflowState | undefined {
     id: toStringOrUndefined(raw.id) ?? name,
     name,
     type: toNullableString(raw.type),
+  };
+}
+
+function normalizeLinearCycle(raw: unknown): LinearCycle | undefined {
+  if (!isRecord(raw)) return undefined;
+
+  const id = toStringOrUndefined(raw.id);
+  const number = toNumberOrUndefined(raw.number);
+  const name = toNullableString(raw.name);
+  const startsAt = toNullableString(raw.startsAt);
+  const endsAt = toNullableString(raw.endsAt);
+
+  if (!id && number == null && !name) {
+    return undefined;
+  }
+
+  return {
+    id,
+    number,
+    name,
+    startsAt,
+    endsAt,
   };
 }
 
@@ -474,6 +514,8 @@ export function normalizeLinearIssuePayload(raw: unknown): LinearIssue | undefin
     description: toNullableString(raw.description),
     dueDate: toNullableString(raw.dueDate),
     priority: toNumberOrUndefined(raw.priority),
+    priorityLabel: toNullableString(raw.priorityLabel),
+    cycle: normalizeLinearCycle(raw.cycle) ?? null,
     updatedAt: toNullableString(raw.updatedAt),
     assignee: normalizeLinearUser(raw.assignee) ?? null,
     state: normalizeLinearState(raw.state) ?? null,
@@ -874,8 +916,8 @@ async function loadIssueRelations(
 export async function verifyLinearCli(teamKey: string): Promise<void> {
   const versionResult = await execLinear(["--version"], process.env);
   const version = versionResult.stdout || versionResult.stderr;
-  if (compareVersions(version, "2.5.0") < 0) {
-    throw new Error(`linear-cli v2.5.0 or newer is required. Current version: ${version || "unknown"}`);
+  if (compareVersions(version, "2.6.0") < 0) {
+    throw new Error(`linear-cli v2.6.0 or newer is required. Current version: ${version || "unknown"}`);
   }
 
   const whoami = await execLinear(["auth", "whoami"], process.env);

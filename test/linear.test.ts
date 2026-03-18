@@ -203,6 +203,14 @@ describe("linear command builders", () => {
       url: "https://linear.app/test-team/issue/TEST-123/fix-authentication-bug-in-login-flow",
       dueDate: "2025-08-25",
       priority: 2,
+      priorityLabel: "High",
+      cycle: {
+        id: "cycle-1",
+        number: 42,
+        name: "Sprint 42",
+        startsAt: "2025-08-11",
+        endsAt: "2025-08-24",
+      },
       updatedAt: "2025-08-16T15:30:00Z",
       assignee: {
         id: "user-1",
@@ -264,6 +272,12 @@ describe("linear command builders", () => {
     expect(issue).toMatchObject({
       identifier: "TEST-123",
       title: "Fix authentication bug in login flow",
+      priorityLabel: "High",
+      cycle: {
+        id: "cycle-1",
+        number: 42,
+        name: "Sprint 42",
+      },
       parent: {
         identifier: "TEST-100",
       },
