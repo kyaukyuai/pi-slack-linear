@@ -11,6 +11,7 @@ import { buildHeartbeatReviewDecision, buildManagerReview, formatControlRoomRevi
 import { ensureManagerSystemFiles, loadManagerPolicy } from "./lib/manager-state.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runAgentTurn, runSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
+import { formatSlackMessageText } from "./lib/slack-format.js";
 import { classifyTaskIntent, isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
 import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
 import {
@@ -210,17 +211,18 @@ async function main(): Promise<void> {
               attachments,
             });
 
+        const formattedReply = formatSlackMessageText(reply);
         await webClient.chat.postMessage({
           channel: message.channelId,
           thread_ts: message.rootThreadTs,
-          text: reply,
+          text: formattedReply,
         });
 
         await appendThreadLog(paths, {
           type: "assistant",
           ts: `${Date.now() / 1000}`,
           threadTs: message.rootThreadTs,
-          text: reply,
+          text: formattedReply,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -230,7 +232,7 @@ async function main(): Promise<void> {
           error: errorMessage,
         });
 
-        const reply = `処理に失敗しました。設定や Linear 連携を確認してください。\n\n${errorMessage}`;
+        const reply = formatSlackMessageText(`処理に失敗しました。設定や Linear 連携を確認してください。\n\n${errorMessage}`);
         await webClient.chat.postMessage({
           channel: message.channelId,
           thread_ts: message.rootThreadTs,
@@ -280,7 +282,7 @@ async function main(): Promise<void> {
         return { reply, status: "noop", reason };
       }
       const review = decision.review;
-      const reply = await formatManagerReviewForSlack(webClient, logger, review);
+      const reply = formatSlackMessageText(await formatManagerReviewForSlack(webClient, logger, review));
       await webClient.chat.postMessage({
         channel: channelId,
         text: reply,
@@ -316,7 +318,7 @@ async function main(): Promise<void> {
             summary: "No review output",
           };
         }
-        const reply = await formatManagerReviewForSlack(webClient, logger, review);
+        const reply = formatSlackMessageText(await formatManagerReviewForSlack(webClient, logger, review));
 
         await webClient.chat.postMessage({
           channel: job.channelId,
@@ -338,7 +340,7 @@ async function main(): Promise<void> {
         text: job.prompt,
       });
 
-      const reply = await runSystemTurn(config, paths, {
+      const reply = formatSlackMessageText(await runSystemTurn(config, paths, {
         kind: "scheduler",
         channelId: job.channelId,
         text: job.prompt,
@@ -346,7 +348,7 @@ async function main(): Promise<void> {
           jobId: job.id,
           scheduleKind: job.kind,
         },
-      });
+      }));
 
       await webClient.chat.postMessage({
         channel: job.channelId,
