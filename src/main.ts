@@ -200,6 +200,7 @@ async function main(): Promise<void> {
             userId: message.userId,
             text: message.text,
           },
+          managerRepositories,
         );
 
         const reply = managerResult.handled
@@ -271,7 +272,7 @@ async function main(): Promise<void> {
         text: prompt,
       });
 
-      const decision = await buildHeartbeatReviewDecision(config, systemPaths);
+      const decision = await buildHeartbeatReviewDecision(config, systemPaths, managerRepositories);
       if (!decision.review) {
         const reason = decision.reason ?? "no-urgent-items";
         const reply = `heartbeat noop: ${reason}`;
@@ -313,7 +314,7 @@ async function main(): Promise<void> {
 
       if (job.action) {
         const mappedKind = job.action;
-        const review = await buildManagerReview(config, systemPaths, mappedKind);
+        const review = await buildManagerReview(config, systemPaths, mappedKind, managerRepositories);
         if (!review) {
           return {
             delivered: false,

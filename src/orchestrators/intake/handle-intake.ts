@@ -12,7 +12,7 @@ import {
   type IntakeLedgerEntry,
   type ManagerPolicy,
   type PlanningLedgerEntry,
-} from "../../lib/manager-state.js";
+} from "../../state/manager-state-contract.js";
 import {
   runResearchSynthesisTurn,
   runTaskPlanningTurn,

@@ -1,5 +1,5 @@
 import type { LinearIssue } from "../../lib/linear.js";
-import type { ManagerPolicy } from "../../lib/manager-state.js";
+import type { ManagerPolicy } from "../../state/manager-state-contract.js";
 import type { RiskAssessment } from "./contract.js";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;

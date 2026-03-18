@@ -6,7 +6,7 @@ import {
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
-} from "../../lib/manager-state.js";
+} from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import type { RiskAssessment } from "./contract.js";
 import { assessRisk, issueMatchesCompletedState } from "./risk.js";

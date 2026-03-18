@@ -1,6 +1,7 @@
 import { Type } from "@mariozechner/pi-ai";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { AppConfig } from "./config.js";
+import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import {
   addLinearComment,
   addLinearProgressComment,
@@ -77,10 +78,11 @@ function formatManagedIssue(issue: LinearIssue, prefix: string): string {
   return lines.join("\n");
 }
 
-export function createLinearCustomTools(config: AppConfig): ToolDefinition[] {
+export function createLinearCustomTools(
+  config: AppConfig,
+  managerRepositories = createFileBackedManagerRepositories(buildSystemPaths(config.workspaceDir)),
+): ToolDefinition[] {
   const env = buildLinearEnv(config);
-  const systemPaths = buildSystemPaths(config.workspaceDir);
-  const managerRepositories = createFileBackedManagerRepositories(systemPaths);
 
   return [
     {

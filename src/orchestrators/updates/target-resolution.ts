@@ -3,7 +3,7 @@ import {
   type LinearCommandEnv,
   type LinearIssue,
 } from "../../lib/linear.js";
-import type { IntakeLedgerEntry } from "../../lib/manager-state.js";
+import type { IntakeLedgerEntry } from "../../state/manager-state-contract.js";
 import { getSlackThreadContext } from "../../lib/slack-context.js";
 import { issueMatchesCompletedState } from "../review/risk.js";
 

@@ -28,10 +28,11 @@ import {
   type TaskPlanningResult,
 } from "../planners/task-intake/index.js";
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
+import type { IntakeLedgerEntry } from "../state/manager-state-contract.js";
+import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import type { AppConfig } from "./config.js";
 import { getLinearIssue } from "./linear.js";
 import { createLinearCustomTools } from "./linear-tools.js";
-import type { IntakeLedgerEntry } from "./manager-state.js";
 import type { TaskIntent } from "./slack.js";
 import { buildSystemPaths } from "./system-workspace.js";
 import type { AttachmentRecord, ThreadPaths } from "./thread-workspace.js";
@@ -82,6 +83,7 @@ interface SharedRuntime {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   model: Awaited<ReturnType<ModelRegistry["getAvailable"]>>[number];
+  managerRepositories: ManagerRepositories;
 }
 
 interface ThreadRuntime {
@@ -120,9 +122,12 @@ function findThreadLedgerEntries(
   return entries.filter((entry) => entry.sourceChannelId === channelId && entry.sourceThreadTs === rootThreadTs);
 }
 
-async function loadThreadPromptContext(config: AppConfig, input: AgentInput): Promise<ThreadPromptContext | undefined> {
-  const systemPaths = buildSystemPaths(config.workspaceDir);
-  const ledger = await createFileBackedManagerRepositories(systemPaths).intake.load().catch(() => []);
+async function loadThreadPromptContext(
+  config: AppConfig,
+  input: AgentInput,
+  managerRepositories: Pick<ManagerRepositories, "intake">,
+): Promise<ThreadPromptContext | undefined> {
+  const ledger = await managerRepositories.intake.load().catch(() => []);
   const threadEntries = findThreadLedgerEntries(ledger, input.channelId, input.rootThreadTs);
   if (threadEntries.length === 0) {
     return undefined;
@@ -411,6 +416,7 @@ async function getSharedRuntime(config: AppConfig): Promise<SharedRuntime> {
         authStorage,
         modelRegistry,
         model,
+        managerRepositories: createFileBackedManagerRepositories(buildSystemPaths(config.workspaceDir)),
       };
     })().catch((error) => {
       sharedRuntimePromise = undefined;
@@ -452,7 +458,7 @@ async function createThreadRuntime(config: AppConfig, paths: ThreadPaths): Promi
     sessionManager,
     settingsManager,
     tools: [createReadTool(paths.rootDir)],
-    customTools: createLinearCustomTools(config),
+    customTools: createLinearCustomTools(config, shared.managerRepositories),
   });
 
   return {
@@ -518,7 +524,8 @@ export async function disposeAllThreadRuntimes(): Promise<void> {
 }
 
 export async function runAgentTurn(config: AppConfig, paths: ThreadPaths, input: AgentInput): Promise<string> {
-  const context = await loadThreadPromptContext(config, input);
+  const shared = await getSharedRuntime(config);
+  const context = await loadThreadPromptContext(config, input, shared.managerRepositories);
   return runPromptTurn(config, paths, buildAgentPrompt(input, config, paths, context));
 }
 

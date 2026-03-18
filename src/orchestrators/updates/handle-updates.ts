@@ -12,7 +12,7 @@ import {
   type FollowupLedgerEntry,
   type IntakeLedgerEntry,
   type ManagerPolicy,
-} from "../../lib/manager-state.js";
+} from "../../state/manager-state-contract.js";
 import {
   runFollowupResolutionTurn,
   type FollowupResolutionResult,

@@ -1,4 +1,4 @@
-import type { IntakeLedgerEntry } from "../../lib/manager-state.js";
+import type { IntakeLedgerEntry } from "../../state/manager-state-contract.js";
 
 interface ThreadScopedMessage {
   channelId: string;

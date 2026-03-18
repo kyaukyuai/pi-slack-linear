@@ -7,7 +7,7 @@ import {
   type LinearCommandEnv,
   type LinearIssue,
 } from "../../lib/linear.js";
-import type { FollowupLedgerEntry } from "../../lib/manager-state.js";
+import type { FollowupLedgerEntry } from "../../state/manager-state-contract.js";
 import {
   runFollowupResolutionTurn,
   type FollowupResolutionResult,

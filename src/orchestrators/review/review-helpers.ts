@@ -3,7 +3,7 @@ import type {
   IntakeLedgerEntry,
   ManagerPolicy,
   OwnerMap,
-} from "../../lib/manager-state.js";
+} from "../../state/manager-state-contract.js";
 import type {
   ManagerReviewFollowup,
   ManagerReviewIssueLine,

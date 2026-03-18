@@ -1,5 +1,5 @@
 import type { LinearIssue } from "../../lib/linear.js";
-import type { FollowupLedgerEntry } from "../../lib/manager-state.js";
+import type { FollowupLedgerEntry } from "../../state/manager-state-contract.js";
 import type { FollowupResolutionResult } from "../../lib/pi-session.js";
 
 type UpdateSignal = "progress" | "completed" | "blocked";

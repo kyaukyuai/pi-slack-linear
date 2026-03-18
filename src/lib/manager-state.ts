@@ -1,3 +1,4 @@
+// Compatibility layer for legacy callers and tests.
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {

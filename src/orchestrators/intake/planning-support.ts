@@ -3,7 +3,7 @@ import type {
   ManagerPolicy,
   OwnerMap,
   OwnerMapEntry,
-} from "../../lib/manager-state.js";
+} from "../../state/manager-state-contract.js";
 import type { ResearchNextAction } from "../../lib/pi-session.js";
 
 const ACTIONABLE_RESEARCH_PATTERN = /(確認|修正|対応|実装|調査|整理|洗い出し|作成|更新|共有|再現|検証|比較)/i;

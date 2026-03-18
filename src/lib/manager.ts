@@ -32,13 +32,14 @@ import {
 } from "../orchestrators/review/risk.js";
 import { handleManagerUpdates } from "../orchestrators/updates/handle-updates.js";
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
+import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import {
   type LinearIssue,
 } from "./linear.js";
 import {
   type IntakeLedgerEntry,
   type ManagerPolicy,
-} from "./manager-state.js";
+} from "../state/manager-state-contract.js";
 import type { SystemPaths } from "./system-workspace.js";
 
 export type ManagerMessageKind = "request" | "progress" | "completed" | "blocked" | "conversation";
@@ -493,12 +494,26 @@ function findLatestIssueSource(
   };
 }
 
+function isManagerRepositories(value: unknown): value is ManagerRepositories {
+  return typeof value === "object"
+    && value !== null
+    && "policy" in value
+    && "ownerMap" in value
+    && "intake" in value
+    && "followups" in value
+    && "planning" in value;
+}
+
 export async function buildHeartbeatReviewDecision(
   config: AppConfig,
   systemPaths: SystemPaths,
-  now = new Date(),
+  repositoriesOrNow?: ManagerRepositories | Date,
+  maybeNow?: Date,
 ): Promise<HeartbeatReviewDecision> {
-  const repositories = createFileBackedManagerRepositories(systemPaths);
+  const repositories = isManagerRepositories(repositoriesOrNow)
+    ? repositoriesOrNow
+    : createFileBackedManagerRepositories(systemPaths);
+  const now = repositoriesOrNow instanceof Date ? repositoriesOrNow : (maybeNow ?? new Date());
   return buildHeartbeatReviewDecisionOrchestrator({
     config,
     repositories,
@@ -535,9 +550,13 @@ export async function handleManagerMessage(
   config: AppConfig,
   systemPaths: SystemPaths,
   message: ManagerSlackMessage,
-  now = new Date(),
+  repositoriesOrNow?: ManagerRepositories | Date,
+  maybeNow?: Date,
 ): Promise<ManagerHandleResult> {
-  const repositories = createFileBackedManagerRepositories(systemPaths);
+  const repositories = isManagerRepositories(repositoriesOrNow)
+    ? repositoriesOrNow
+    : createFileBackedManagerRepositories(systemPaths);
+  const now = repositoriesOrNow instanceof Date ? repositoriesOrNow : (maybeNow ?? new Date());
   const policy = await repositories.policy.load();
   const intakeLedger = await repositories.intake.load();
   const followups = await repositories.followups.load();
@@ -615,9 +634,13 @@ export async function buildManagerReview(
   config: AppConfig,
   systemPaths: SystemPaths,
   kind: ManagerReviewKind,
-  now = new Date(),
+  repositoriesOrNow?: ManagerRepositories | Date,
+  maybeNow?: Date,
 ): Promise<ManagerReviewResult | undefined> {
-  const repositories = createFileBackedManagerRepositories(systemPaths);
+  const repositories = isManagerRepositories(repositoriesOrNow)
+    ? repositoriesOrNow
+    : createFileBackedManagerRepositories(systemPaths);
+  const now = repositoriesOrNow instanceof Date ? repositoriesOrNow : (maybeNow ?? new Date());
   return buildManagerReviewOrchestrator({
     config,
     repositories,
