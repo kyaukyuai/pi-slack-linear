@@ -80,8 +80,10 @@ describe("manager helpers", () => {
 
   it("distinguishes query kinds for list and prioritization requests", () => {
     expect(classifyManagerQuery("今日やるべきタスクある？")).toBe("what-should-i-do");
+    expect(classifyManagerQuery("自分の今日やるべきタスクある？")).toBe("what-should-i-do");
     expect(classifyManagerQuery("今日のタスク一覧を確認して")).toBe("list-today");
     expect(classifyManagerQuery("タスク一覧を確認して")).toBe("list-active");
+    expect(classifyManagerQuery("この件どうなってる？")).toBe("inspect-work");
     expect(classifyManagerQuery("AIC-38 の状況は？")).toBe("inspect-work");
     expect(classifyManagerQuery("既存 issue あったっけ？")).toBe("search-existing");
   });

@@ -5,6 +5,7 @@ import {
   type LinearCommandEnv,
   type LinearIssue,
 } from "../../lib/linear.js";
+import { getSlackThreadContext } from "../../lib/slack-context.js";
 import { buildWorkgraphThreadKey } from "../../state/workgraph/events.js";
 import {
   getIssueContext,
@@ -13,7 +14,7 @@ import {
   type WorkgraphIssueContext,
   type WorkgraphThreadPlanningContext,
 } from "../../state/workgraph/queries.js";
-import type { ManagerPolicy } from "../../state/manager-state-contract.js";
+import type { ManagerPolicy, OwnerMap, OwnerMapEntry } from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import type { RiskAssessment } from "../review/contract.js";
 import { assessRisk } from "../review/risk.js";
@@ -39,14 +40,16 @@ export interface QueryHandleResult {
 export interface QueryMessage {
   channelId: string;
   rootThreadTs: string;
+  userId: string;
   text: string;
 }
 
 export interface HandleManagerQueryArgs {
-  repositories: Pick<ManagerRepositories, "policy" | "workgraph">;
+  repositories: Pick<ManagerRepositories, "policy" | "ownerMap" | "workgraph">;
   kind: ManagerQueryKind;
   message: QueryMessage;
   now: Date;
+  workspaceDir: string;
   env: LinearCommandEnv;
 }
 
@@ -61,6 +64,7 @@ const INSPECT_WORK_PATTERN =
 const SEARCH_EXISTING_PATTERN =
   /(?:(?:既存|同じ|似た|重複).*(?:issue|イシュー|task|タスク|チケット).*(?:ある|あります|あったっけ|探して|検索|確認)|(?:issue|イシュー|task|タスク|チケット).*(?:既存|同じ|似た|重複).*(?:ある|あります|あったっけ|探して|検索|確認)|(?:既に|すでに).*(?:登録|起票).*(?:されてる|されている|ある|あります))/i;
 const TASK_BREAKDOWN_LINE_PATTERN = /^\s*(?:[-*・•]\s+|\d+[.)]\s+)/;
+const SELF_WORK_PATTERN = /(?:自分|自分の|私|私の|僕|僕の|わたし|わたしの)/i;
 
 const RISK_LABELS: Record<string, string> = {
   overdue: "期限を過ぎています",
@@ -76,11 +80,19 @@ interface RankedQueryItem {
   issue: LinearIssue;
   assessment: RiskAssessment;
   score: number;
+  viewerOwned: boolean;
 }
 
 interface InspectResolution {
   issueId?: string;
   candidates: Array<{ issueId: string; title?: string; url?: string | null }>;
+}
+
+interface InspectCandidateScore {
+  issueId: string;
+  title?: string;
+  url?: string | null;
+  score: number;
 }
 
 export function classifyManagerQuery(text: string): ManagerQueryKind | undefined {
@@ -103,6 +115,28 @@ export function classifyManagerQuery(text: string): ManagerQueryKind | undefined
 
 function unique<T>(values: T[]): T[] {
   return Array.from(new Set(values));
+}
+
+function normalizeComparableText(text: string | null | undefined): string {
+  return (text ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[。！!？?]+$/g, "")
+    .toLowerCase();
+}
+
+function resolveViewerOwnerEntry(ownerMap: OwnerMap, slackUserId: string): OwnerMapEntry | undefined {
+  return ownerMap.entries.find((entry) => entry.slackUserId === slackUserId);
+}
+
+function issueMatchesViewerAssignee(issue: LinearIssue, viewerAssignee: string | undefined): boolean {
+  if (!viewerAssignee) return false;
+  const normalizedViewer = normalizeComparableText(viewerAssignee);
+  return [
+    issue.assignee?.displayName,
+    issue.assignee?.name,
+    issue.assignee?.email,
+  ].some((value) => normalizeComparableText(value) === normalizedViewer);
 }
 
 function toJstDateString(now: Date): string {
@@ -128,7 +162,11 @@ function issuePriorityRank(issue: LinearIssue): number {
   return priority > 0 ? priority : 99;
 }
 
-function computeQueryScore(item: RiskAssessment, policy: ManagerPolicy): number {
+function computeQueryScore(
+  item: RiskAssessment,
+  policy: ManagerPolicy,
+  options?: { viewerAssignee?: string; preferViewerOwned?: boolean },
+): number {
   let score = 0;
   const categories = new Set(item.riskCategories);
 
@@ -145,6 +183,12 @@ function computeQueryScore(item: RiskAssessment, policy: ManagerPolicy): number 
     score += 250 - (priority * 10);
   } else if (priority < 99) {
     score += 70 - (priority * 5);
+  }
+
+  if (issueMatchesViewerAssignee(item.issue, options?.viewerAssignee)) {
+    score += options?.preferViewerOwned ? 600 : 140;
+  } else if (options?.preferViewerOwned) {
+    score -= 120;
   }
 
   return score;
@@ -246,8 +290,69 @@ function threadPlanningCandidates(
   });
 }
 
+function matchIssueMentionScore(
+  sourceText: string,
+  candidate: { issueId: string; title?: string },
+): number {
+  const normalizedSource = normalizeComparableText(sourceText);
+  if (!normalizedSource) return 0;
+
+  let score = 0;
+  if (normalizedSource.includes(candidate.issueId.toLowerCase())) {
+    score += 40;
+  }
+
+  const normalizedTitle = normalizeComparableText(candidate.title);
+  if (normalizedTitle.length >= 2) {
+    if (normalizedSource.includes(normalizedTitle)) {
+      score += 28;
+    } else if (normalizedTitle.includes(normalizedSource) && normalizedSource.length >= 2) {
+      score += 8;
+    }
+  }
+
+  return score;
+}
+
+async function scoreInspectCandidates(args: {
+  workspaceDir: string;
+  message: QueryMessage;
+  planningContext: WorkgraphThreadPlanningContext | undefined;
+  candidates: Array<{ issueId: string; title?: string; url?: string | null }>;
+}): Promise<InspectCandidateScore[]> {
+  const recentContext = await getSlackThreadContext(
+    args.workspaceDir,
+    args.message.channelId,
+    args.message.rootThreadTs,
+    12,
+  ).catch(() => undefined);
+
+  const recentEntries = recentContext?.entries.slice(-6) ?? [];
+
+  return args.candidates.map((candidate) => {
+    let score = matchIssueMentionScore(args.message.text, candidate);
+    if (args.planningContext?.thread.latestFocusIssueId === candidate.issueId) {
+      score += 70;
+    }
+    if (args.planningContext?.thread.lastResolvedIssueId === candidate.issueId) {
+      score += 45;
+    }
+
+    recentEntries.forEach((entry, index) => {
+      const recencyWeight = recentEntries.length - index;
+      score += matchIssueMentionScore(entry.text, candidate) * recencyWeight;
+    });
+
+    return {
+      ...candidate,
+      score,
+    };
+  });
+}
+
 async function resolveInspectIssue(
   repository: Pick<ManagerRepositories, "workgraph">["workgraph"],
+  workspaceDir: string,
   message: QueryMessage,
 ): Promise<InspectResolution> {
   const explicitIssueIds = extractIssueIdentifiers(message.text);
@@ -269,6 +374,30 @@ async function resolveInspectIssue(
   );
   const candidates = threadPlanningCandidates(planningContext);
 
+  if (candidates.length === 1) {
+    return {
+      issueId: candidates[0]?.issueId,
+      candidates,
+    };
+  }
+  if (candidates.length >= 2) {
+    const scored = await scoreInspectCandidates({
+      workspaceDir,
+      message,
+      planningContext,
+      candidates,
+    });
+    scored.sort((left, right) => right.score - left.score);
+    const top = scored[0];
+    const second = scored[1];
+    if (top && top.score >= 70 && top.score - (second?.score ?? 0) >= 20) {
+      return {
+        issueId: top.issueId,
+        candidates,
+      };
+    }
+  }
+
   if (planningContext?.thread.latestFocusIssueId) {
     return {
       issueId: planningContext.thread.latestFocusIssueId,
@@ -278,12 +407,6 @@ async function resolveInspectIssue(
   if (planningContext?.thread.lastResolvedIssueId) {
     return {
       issueId: planningContext.thread.lastResolvedIssueId,
-      candidates,
-    };
-  }
-  if (candidates.length === 1) {
-    return {
-      issueId: candidates[0]?.issueId,
       candidates,
     };
   }
@@ -423,6 +546,15 @@ function buildSearchExistingReply(query: string, issues: LinearIssue[]): string 
   ]);
 }
 
+function preferViewerOwnedItems(
+  items: RankedQueryItem[],
+  viewerAssignee: string | undefined,
+): RankedQueryItem[] {
+  if (!viewerAssignee) return items;
+  const owned = items.filter((item) => item.viewerOwned);
+  return owned.length > 0 ? owned : items;
+}
+
 function buildListActiveReply(items: RankedQueryItem[]): string {
   if (items.length === 0) {
     return composeSlackReply([
@@ -446,12 +578,21 @@ function buildListActiveReply(items: RankedQueryItem[]): string {
   ]);
 }
 
-function buildListTodayReply(items: RankedQueryItem[], policy: ManagerPolicy): string {
-  const todayItems = items.filter((item) => isTodayCandidate(item, policy));
-  const visible = (todayItems.length > 0 ? todayItems : items).slice(0, 5);
+function buildListTodayReply(
+  items: RankedQueryItem[],
+  policy: ManagerPolicy,
+  options?: { viewerAssignee?: string; viewerDisplayLabel?: string; preferViewerOwned?: boolean },
+): string {
+  const scopedItems = options?.preferViewerOwned ? preferViewerOwnedItems(items, options.viewerAssignee) : items;
+  const todayItems = scopedItems.filter((item) => isTodayCandidate(item, policy));
+  const visible = (todayItems.length > 0 ? todayItems : scopedItems).slice(0, 5);
   const intro = todayItems.length > 0
-    ? "今日優先して見たい task を整理しました。"
-    : "今日は期限や blocked で強く急ぐ task は多くありません。手を付けるなら次の順がよさそうです。";
+    ? options?.preferViewerOwned && options.viewerAssignee && visible.every((item) => item.viewerOwned)
+      ? `${options.viewerDisplayLabel ?? "担当中のもの"} を基準に、今日優先して見たい task を整理しました。`
+      : "今日優先して見たい task を整理しました。"
+    : options?.preferViewerOwned && options.viewerAssignee
+      ? `${options.viewerDisplayLabel ?? "担当中のもの"} では期限や blocked が強い task は多くありません。手を付けるなら次の順がよさそうです。`
+      : "今日は期限や blocked で強く急ぐ task は多くありません。手を付けるなら次の順がよさそうです。";
 
   if (visible.length === 0) {
     return composeSlackReply([
@@ -467,7 +608,12 @@ function buildListTodayReply(items: RankedQueryItem[], policy: ManagerPolicy): s
   ]);
 }
 
-function buildWhatShouldIDoReply(items: RankedQueryItem[], policy: ManagerPolicy, now: Date): string {
+function buildWhatShouldIDoReply(
+  items: RankedQueryItem[],
+  policy: ManagerPolicy,
+  now: Date,
+  options?: { viewerAssignee?: string; viewerDisplayLabel?: string; preferViewerOwned?: boolean },
+): string {
   if (items.length === 0) {
     return composeSlackReply([
       "いま着手中の task は見当たりません。",
@@ -475,18 +621,23 @@ function buildWhatShouldIDoReply(items: RankedQueryItem[], policy: ManagerPolicy
     ]);
   }
 
-  const todayItems = items.filter((item) => isTodayCandidate(item, policy));
-  const visible = (todayItems.length > 0 ? todayItems : items).slice(0, 3);
+  const scopedItems = options?.preferViewerOwned ? preferViewerOwnedItems(items, options.viewerAssignee) : items;
+  const todayItems = scopedItems.filter((item) => isTodayCandidate(item, policy));
+  const visible = (todayItems.length > 0 ? todayItems : scopedItems).slice(0, 3);
   const top = visible[0];
   const topLabel = top ? buildSlackTargetLabel(top.issue) : undefined;
   const today = toJstDateString(now);
   const intro = todayItems.length > 0
     ? joinSlackSentences([
-        `${today} 時点で、今日まず手を付けるなら ${topLabel} から見るのがよさそうです。`,
+        options?.preferViewerOwned && options.viewerAssignee && top?.viewerOwned
+          ? `${today} 時点で、${options.viewerDisplayLabel ?? "担当中のもの"}の中では ${topLabel} から見るのがよさそうです。`
+          : `${today} 時点で、今日まず手を付けるなら ${topLabel} から見るのがよさそうです。`,
         "続けて次の候補も挙げます。",
       ])
     : joinSlackSentences([
-        `${today} 時点では期限や blocked で強く急ぐものは多くありません。`,
+        options?.preferViewerOwned && options.viewerAssignee
+          ? `${today} 時点では ${options.viewerDisplayLabel ?? "担当中のもの"}で期限や blocked が強く急ぐものは多くありません。`
+          : `${today} 時点では期限や blocked で強く急ぐものは多くありません。`,
         `手を付けるなら ${topLabel} から見るのがよさそうです。`,
       ]);
 
@@ -497,17 +648,29 @@ function buildWhatShouldIDoReply(items: RankedQueryItem[], policy: ManagerPolicy
   ]);
 }
 
+function shouldPreferViewerOwned(kind: ManagerQueryKind, text: string, viewerAssignee: string | undefined): boolean {
+  if (!viewerAssignee) return false;
+  if (SELF_WORK_PATTERN.test(text)) return true;
+  return kind === "what-should-i-do" || kind === "list-today";
+}
+
 export async function handleManagerQuery({
   repositories,
   kind,
   message,
   now,
+  workspaceDir,
   env,
 }: HandleManagerQueryArgs): Promise<QueryHandleResult> {
   const policy = await repositories.policy.load();
+  const ownerMap = await repositories.ownerMap.load();
+  const viewerOwnerEntry = resolveViewerOwnerEntry(ownerMap, message.userId);
+  const viewerAssignee = viewerOwnerEntry?.linearAssignee;
+  const viewerDisplayLabel = viewerAssignee ? `${viewerAssignee} さんの担当` : undefined;
+  const preferViewerOwned = shouldPreferViewerOwned(kind, message.text, viewerAssignee);
 
   if (kind === "inspect-work") {
-    const resolution = await resolveInspectIssue(repositories.workgraph, message);
+    const resolution = await resolveInspectIssue(repositories.workgraph, workspaceDir, message);
     if (!resolution.issueId) {
       return {
         handled: true,
@@ -565,7 +728,8 @@ export async function handleManagerQuery({
       return {
         issue,
         assessment,
-        score: computeQueryScore(assessment, policy),
+        score: computeQueryScore(assessment, policy, { viewerAssignee, preferViewerOwned }),
+        viewerOwned: issueMatchesViewerAssignee(issue, viewerAssignee),
       };
     }),
   );
@@ -573,8 +737,8 @@ export async function handleManagerQuery({
   const reply = kind === "list-active"
     ? buildListActiveReply(rankedItems)
     : kind === "list-today"
-      ? buildListTodayReply(rankedItems, policy)
-      : buildWhatShouldIDoReply(rankedItems, policy, now);
+      ? buildListTodayReply(rankedItems, policy, { viewerAssignee, viewerDisplayLabel, preferViewerOwned })
+      : buildWhatShouldIDoReply(rankedItems, policy, now, { viewerAssignee, viewerDisplayLabel, preferViewerOwned });
 
   return {
     handled: true,

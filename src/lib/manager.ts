@@ -606,6 +606,7 @@ export async function handleManagerMessage(
       kind: queryKind,
       message,
       now,
+      workspaceDir: config.workspaceDir,
       env,
     });
   }
