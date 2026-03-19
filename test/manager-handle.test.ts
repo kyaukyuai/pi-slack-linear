@@ -113,12 +113,11 @@ function defaultTaskPlan(input: { combinedRequest: string }): Record<string, unk
     return {
       action: "clarify",
       clarificationQuestion: [
-        "起票前に確認したい点があります。",
-        "- 対象: 来週のリリースに向けた対応",
+        "起票前に確認したい点があります。 対象は 来週のリリースに向けた対応 です。",
         "- 期限を確認したいです。いつまでに完了したいか教えてください。例: 2026-03-20 / 今日中 / 明日",
         "- 進め方を固めたいです。完了条件か、分けたい作業を 1-3 点で教えてください。",
-        "- 返答をもらえれば、その内容を取り込んで Linear に起票します。",
-      ].join("\n"),
+        "返答をもらえれば、その内容を取り込んで Linear に起票します。",
+      ].join("\n\n"),
       clarificationReasons: ["due_date", "execution_plan"],
     };
   }
@@ -363,12 +362,12 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(second.handled).toBe(true);
-    expect(second.reply).toContain("Linear に登録しました");
+    expect(second.reply).toContain("この依頼は Linear に登録しておきました。");
     expect(second.reply).toContain("AIC-100");
-    expect(second.reply).toContain("対象: <https://linear.app/kyaukyuai/issue/AIC-100|AIC-100 来週のリリースに向けた対応>");
-    expect(second.reply).toContain("子task: <https://linear.app/kyaukyuai/issue/AIC-101|AIC-101 API レート制限の確認> / <https://linear.app/kyaukyuai/issue/AIC-102|AIC-102 修正対応>");
+    expect(second.reply).toContain("親は <https://linear.app/kyaukyuai/issue/AIC-100|AIC-100 来週のリリースに向けた対応> です。");
+    expect(second.reply).toContain("子 task は <https://linear.app/kyaukyuai/issue/AIC-101|AIC-101 API レート制限の確認> と <https://linear.app/kyaukyuai/issue/AIC-102|AIC-102 修正対応> です。");
     expect(second.reply).not.toContain("暫定で kyaukyuai に寄せています");
-    expect(second.reply).toContain("次アクション: この thread で進捗・完了・blocked を続けてください。");
+    expect(second.reply).toContain("この thread で進捗・完了・blocked を続けてください。");
     expect(second.reply).not.toContain("URL:");
 
     expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
@@ -551,7 +550,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("進捗を Linear に反映しました");
+    expect(result.reply).toContain("進捗を反映しました。");
     expect(result.reply).toContain("AIC-110");
     expect(linearMocks.addLinearProgressComment).toHaveBeenCalledWith(
       "AIC-110",
@@ -611,7 +610,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("進捗を Linear に反映しました");
+    expect(result.reply).toContain("進捗を反映しました。");
     expect(linearMocks.addLinearProgressComment).toHaveBeenCalledWith(
       "AIC-210",
       expect.stringContaining("進捗です。原因は再現できています"),
@@ -668,9 +667,9 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("Linear に登録しました。");
-    expect(result.reply).toContain("対象: <https://linear.app/kyaukyuai/issue/AIC-200|AIC-200 2ヶ月版の見積もり書作成 ほか1件>");
-    expect(result.reply).toContain("子task: <https://linear.app/kyaukyuai/issue/AIC-201|AIC-201 2ヶ月版の見積もり書作成> / <https://linear.app/kyaukyuai/issue/AIC-202|AIC-202 4月・5月の2ヶ月間でのクローン成果物の作成>");
+    expect(result.reply).toContain("この依頼は Linear に登録しておきました。");
+    expect(result.reply).toContain("親は <https://linear.app/kyaukyuai/issue/AIC-200|AIC-200 2ヶ月版の見積もり書作成 ほか1件> です。");
+    expect(result.reply).toContain("子 task は <https://linear.app/kyaukyuai/issue/AIC-201|AIC-201 2ヶ月版の見積もり書作成> と <https://linear.app/kyaukyuai/issue/AIC-202|AIC-202 4月・5月の2ヶ月間でのクローン成果物の作成> です。");
     expect(result.reply).not.toContain("暫定で kyaukyuai に寄せています");
 
     expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledWith(
@@ -745,8 +744,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("対象: <https://linear.app/kyaukyuai/issue/AIC-34|AIC-34 OPT社と金澤クローンAI開発の契約を締結する必要があります>");
-    expect(result.reply).toContain("子task: <https://linear.app/kyaukyuai/issue/AIC-35|AIC-35 ドラフト作成> / <https://linear.app/kyaukyuai/issue/AIC-36|AIC-36 OPT 田平さんへ契約書確認依頼>");
+    expect(result.reply).toContain("親は <https://linear.app/kyaukyuai/issue/AIC-34|AIC-34 OPT社と金澤クローンAI開発の契約を締結する必要があります> です。");
+    expect(result.reply).toContain("子 task は <https://linear.app/kyaukyuai/issue/AIC-35|AIC-35 ドラフト作成> と <https://linear.app/kyaukyuai/issue/AIC-36|AIC-36 OPT 田平さんへ契約書確認依頼> です。");
 
     expect(linearMocks.createManagedLinearIssueBatch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -834,7 +833,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("完了を Linear に反映しました。");
+    expect(result.reply).toContain("完了として反映しました。");
     expect(linearMocks.updateLinearIssueState).toHaveBeenCalledWith(
       "AIC-122",
       "completed",
@@ -918,7 +917,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("完了を Linear に反映しました");
+    expect(result.reply).toContain("完了として反映しました。");
     expect(result.reply).toContain("AIC-221");
     expect(linearMocks.updateLinearIssueState).toHaveBeenCalledWith("AIC-221", "completed", expect.any(Object));
   });
@@ -1001,7 +1000,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("進捗を Linear に反映しました");
+    expect(result.reply).toContain("進捗を反映しました。");
     expect(result.reply).toContain("AIC-322");
     expect(linearMocks.addLinearProgressComment).toHaveBeenCalledWith(
       "AIC-322",
@@ -1183,10 +1182,10 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("進捗を反映したい issue を特定できませんでした。");
+    expect(result.reply).toContain("どの issue に進捗を反映するか、まだ決めきれていません。");
     expect(result.reply).toContain("AIC-501");
     expect(result.reply).toContain("AIC-502");
-    expect(result.reply).toContain("当てはまるものが無ければ `新規 task` と返してください。");
+    expect(result.reply).toContain("どれにも当てはまらなければ、`新規 task` と返してください。");
     expect(linearMocks.addLinearProgressComment).not.toHaveBeenCalled();
   });
 
@@ -1228,7 +1227,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("blocked 状態を Linear に反映しました");
+    expect(result.reply).toContain("blocked を反映しました。");
     expect(linearMocks.markLinearIssueBlocked).toHaveBeenCalledWith(
       "AIC-130",
       expect.stringContaining("API 仕様待ちです"),
@@ -1242,9 +1241,9 @@ describe("handleManagerMessage clarification flow", () => {
       { issueId: "AIC-432", title: "設計検証", latestActionLabel: "blocked", focusReason: "最新 intake entry" },
     ]);
 
-    expect(reply).toContain("AIC-431 / 設計整理 / 最新: 進捗 / 理由: 直近 thread focus");
-    expect(reply).toContain("AIC-432 / 設計検証 / 最新: blocked / 理由: 最新 intake entry");
-    expect(reply).toContain("当てはまるものが無ければ `新規 task` と返してください。");
+    expect(reply).toContain("- AIC-431 設計整理。最新の動きは 進捗。候補に出した理由は 直近 thread focus。");
+    expect(reply).toContain("- AIC-432 設計検証。最新の動きは blocked。候補に出した理由は 最新 intake entry。");
+    expect(reply).toContain("どれにも当てはまらなければ、`新規 task` と返してください。");
   });
 
   it("writes a structured research comment for research-first requests", async () => {
@@ -1320,10 +1319,10 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("調査内容を Linear に記録しました");
-    expect(result.reply).toContain("分かったこと: 関連 issue として AIC-050 過去のログイン不具合 を確認しました。");
-    expect(result.reply).toContain("未確定事項: スコープや対処方針の確定が必要なら、この thread で詰めます。");
-    expect(result.reply).toContain("次アクション: API 仕様の確認");
+    expect(result.reply).toContain("調査内容を Linear に残しました。");
+    expect(result.reply).toContain("いま分かっているのは、関連 issue として AIC-050 過去のログイン不具合 を確認しました。");
+    expect(result.reply).toContain("まだ未確定なのは、スコープや対処方針の確定が必要なら、この thread で詰めます。");
+    expect(result.reply).toContain("次に進める候補は「API 仕様の確認」です。");
     expect(result.reply).not.toContain("調べた範囲:");
     expect(linearMocks.addLinearComment).toHaveBeenCalledWith(
       "AIC-141",
@@ -1411,8 +1410,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("追加 task を 2 件作成しました");
-    expect(result.reply).toContain("子task: <https://linear.app/kyaukyuai/issue/AIC-242|AIC-242 API 仕様の確認> / <https://linear.app/kyaukyuai/issue/AIC-243|AIC-243 修正方針の整理>");
+    expect(result.reply).toContain("次に進める候補として 2 件の task を追加しています。");
+    expect(result.reply).toContain("子 task は <https://linear.app/kyaukyuai/issue/AIC-242|AIC-242 API 仕様の確認> と <https://linear.app/kyaukyuai/issue/AIC-243|AIC-243 修正方針の整理> です。");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(4);
 
     const thread = await loadThreadProjection("C0ALAMDRB9V:thread-research-followups");
@@ -1472,8 +1471,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("対象: <https://linear.app/kyaukyuai/issue/AIC-150|AIC-150 調査: ログイン画面の不具合修正> / 親: AIC-11");
-    expect(result.reply).toContain("次アクション: 調査結果をもとに必要なら実行 task を追加します。");
+    expect(result.reply).toContain("調査 task は <https://linear.app/kyaukyuai/issue/AIC-150|AIC-150 調査: ログイン画面の不具合修正> で、親は <https://linear.app/kyaukyuai/issue/AIC-11|AIC-11 ログイン画面の不具合修正> です。");
+    expect(result.reply).toContain("必要になれば、この thread から実行 task を追加できます。");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(1);
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1542,7 +1541,7 @@ describe("handleManagerMessage clarification flow", () => {
       new Date("2026-03-17T01:00:00.000Z"),
     );
 
-    expect(morning?.text).toContain("朝の execution review です。");
+    expect(morning?.text).toContain("おはようございます。今朝の確認で、優先して見てほしい点があります。");
     expect(morning?.text).toContain("AIC-300");
     expect(morning?.text).toContain("優先度: Urgent");
     expect(morning?.text).toContain("Cycle: Sprint 42");
@@ -1863,8 +1862,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("follow-up への返答を受け取りました。");
-    expect(result.reply).toContain("引き続き必要な返答");
+    expect(result.reply).toContain("返答を受け取りました。");
+    expect(result.reply).toContain("引き続きこの内容を教えてください。");
 
     const followups = await loadFollowupsLedger(systemPaths);
     expect(followups).toEqual(expect.arrayContaining([
@@ -2063,7 +2062,7 @@ describe("handleManagerMessage clarification flow", () => {
       new Date("2026-03-17T02:00:00.000Z"),
     );
 
-    expect(review?.text).toContain("今日すぐに共有すべきリスクはありません");
+    expect(review?.text).toContain("今日すぐに共有が必要なリスクはありません。");
 
     const followups = await loadFollowupsLedger(systemPaths);
     expect(followups).toEqual(expect.arrayContaining([
@@ -2151,10 +2150,10 @@ describe("handleManagerMessage clarification flow", () => {
       new Date("2026-03-17T02:00:00.000Z"),
     );
 
-    expect(review?.text).toContain("未処理 clarification: 1");
-    expect(review?.text).toContain("未回答 follow-up: 1");
-    expect(review?.summaryLines).toContain("未処理 clarification: 1");
-    expect(review?.summaryLines).toContain("未回答 follow-up: 1");
+    expect(review?.text).toContain("未処理の clarification は 1 件です。");
+    expect(review?.text).toContain("未回答の follow-up は 1 件です。");
+    expect(review?.summaryLines).toContain("未処理の clarification は 1 件です。");
+    expect(review?.summaryLines).toContain("未回答の follow-up は 1 件です。");
   });
 
   it("applies a due-date follow-up reply from the source thread and resolves it as risk-cleared", async () => {
@@ -2211,7 +2210,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("期限: 2026-03-20");
+    expect(result.reply).toContain("期限は 2026-03-20 として反映しました。");
 
     const followups = await loadFollowupsLedger(systemPaths);
     expect(followups).toEqual(expect.arrayContaining([

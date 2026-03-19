@@ -8,6 +8,13 @@ import {
   webFetchUrl,
   webSearchFetch,
 } from "../../lib/web-research.js";
+import {
+  buildSlackTargetLabel,
+  composeSlackReply,
+  formatSlackIssueListSentence,
+  joinSlackSentences,
+  truncateSlackText,
+} from "../shared/slack-conversation.js";
 
 interface SourceMessageLike {
   channelId: string;
@@ -21,6 +28,10 @@ type RecentChannelContexts = Awaited<ReturnType<typeof getRecentChannelContext>>
 type SearchResults = Awaited<ReturnType<typeof webSearchFetch>>;
 type FetchedPages = Awaited<ReturnType<typeof webFetchUrl>>[];
 
+function stripSentenceEnding(text: string): string {
+  return text.replace(/[。.!！?？]+$/u, "").trim();
+}
+
 function extractTopLines(lines: string[], fallback: string): string {
   if (lines.length === 0) return `- ${fallback}`;
   return lines.map((line) => `- ${line}`).join("\n");
@@ -31,62 +42,6 @@ function formatResearchNextActions(nextActions: ResearchSynthesisResult["nextAct
     nextActions.map((action) => action.title),
     "調査結果をもとに必要な実行子 issue を追加する。",
   );
-}
-
-function truncateSlackText(text: string, maxLength = 80): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function buildSlackTargetLabel(
-  issue: Pick<LinearIssue, "identifier" | "title"> & { url?: string | null },
-  maxLength = 80,
-): string {
-  const label = `${issue.identifier} ${truncateSlackText(issue.title, maxLength)}`;
-  return issue.url ? `<${issue.url}|${label}>` : label;
-}
-
-function formatChildIssueSummaryForSlack(
-  children: LinearIssue[],
-  options?: { limit?: number; titleMaxLength?: number },
-): string | undefined {
-  if (children.length === 0) return undefined;
-  const limit = options?.limit ?? 2;
-  const titleMaxLength = options?.titleMaxLength ?? 80;
-  const visible = children
-    .slice(0, limit)
-    .map((issue) => buildSlackTargetLabel(issue, titleMaxLength));
-  const suffix = children.length > limit ? ` (+${children.length - limit}件)` : "";
-  return `子task: ${visible.join(" / ")}${suffix}`;
-}
-
-function formatThreadReplyForSlack(args: {
-  headline: string;
-  target?: string;
-  lines?: string[];
-  url?: string;
-  maxLines?: number;
-}): string {
-  const maxLines = args.maxLines ?? 4;
-  const bodyLines = (args.lines ?? []).filter((line) => line.trim().length > 0);
-  const lines = [args.headline];
-  if (args.target) {
-    lines.push(`対象: ${args.target}`);
-  }
-
-  const urlLine = args.url ? `詳細: <${args.url}|Linear issue>` : undefined;
-  const reservedForUrl = urlLine ? 1 : 0;
-  const remaining = Math.max(0, maxLines - lines.length - reservedForUrl);
-  lines.push(...bodyLines.slice(0, remaining));
-  if (urlLine && lines.length < maxLines) {
-    lines.push(urlLine);
-  }
-
-  if (lines.length <= 1) return lines.join("\n");
-  return [lines[0], "", ...lines.slice(1)].join("\n");
 }
 
 export function compactLinearIssues(issues: Array<LinearIssue | undefined>): LinearIssue[] {
@@ -246,52 +201,55 @@ export function formatAutonomousCreateReply(
   options?: { reusedParent?: boolean },
 ): string {
   const primary = parent ?? children[0];
-  const detailLines: string[] = ["次アクション: この thread で進捗・完了・blocked を続けてください。"];
-  let includeUrl = true;
+  const paragraphs: Array<string | undefined> = [];
 
   if (reason === "research-first" && parent && children[0]) {
-    detailLines.unshift(
-      options?.reusedParent
-        ? `調査 task: ${buildSlackTargetLabel(children[0])} を既存の親 issue 配下に追加しました。`
-        : `調査 task: ${buildSlackTargetLabel(children[0])} を作成しました。`,
+    paragraphs.push(
+      joinSlackSentences([
+        "この依頼は Linear に登録しておきました。",
+        `親は ${buildSlackTargetLabel(parent)} です。`,
+        options?.reusedParent
+          ? `調査 task として ${buildSlackTargetLabel(children[0])} を既存の親 issue 配下に追加しています。`
+          : `調査 task として ${buildSlackTargetLabel(children[0])} を作成しています。`,
+      ]),
     );
   } else {
-    const childSummary = formatChildIssueSummaryForSlack(children);
-    if (childSummary) {
-      detailLines.push(childSummary);
-      includeUrl = false;
-    }
+    paragraphs.push(
+      joinSlackSentences([
+        "この依頼は Linear に登録しておきました。",
+        primary ? `親は ${buildSlackTargetLabel(primary)} です。` : undefined,
+        formatSlackIssueListSentence({
+          subject: "子 task は ",
+          issues: children,
+        }),
+      ]),
+    );
   }
 
+  paragraphs.push("この thread で進捗・完了・blocked を続けてください。");
   if (usedFallback) {
-    detailLines.push("補足: 担当未定義の task は暫定で kyaukyuai に寄せています。");
+    paragraphs.push("担当が未定義だった task は、いったん kyaukyuai に寄せています。");
   }
-
-  return formatThreadReplyForSlack({
-    headline: "Linear に登録しました。",
-    target: primary ? buildSlackTargetLabel(primary) : undefined,
-    lines: detailLines,
-    url: includeUrl ? primary?.url ?? undefined : undefined,
-    maxLines: usedFallback ? 5 : 4,
-  });
+  return composeSlackReply(paragraphs);
 }
 
 export function formatExistingIssueReply(duplicates: LinearIssue[]): string {
   if (duplicates.length === 1) {
-    return formatThreadReplyForSlack({
-      headline: "既存の Linear issue を再利用します。",
-      target: buildSlackTargetLabel(duplicates[0]),
-      lines: ["次アクション: 進捗・完了・blocked はこの thread にそのまま返してください。"],
-      url: duplicates[0]?.url ?? undefined,
-    });
+  return composeSlackReply([
+    "同じ内容の issue が見つかったので、新規起票はせず既存の issue に寄せます。",
+    `対象は ${buildSlackTargetLabel(duplicates[0])} です。`,
+    "進捗・完了・blocked は、この thread にそのまま返してください。",
+    ]);
   }
 
-  const lines = ["既存の Linear issue が見つかったため、新規起票は行いませんでした。"];
-  lines.push("候補が複数あるため、必要なら対象 issue を明示してください。");
-  for (const issue of duplicates.slice(0, 3)) {
-    lines.push(`- ${formatIssueReference(issue)}`);
-  }
-  return lines.join("\n");
+  return composeSlackReply([
+    "同じ内容の issue が複数見つかったため、新規起票はまだ行っていません。",
+    "対象にしたい issue があれば、その issue ID を教えてください。候補は次のとおりです。",
+    duplicates
+      .slice(0, 3)
+      .map((issue) => `- ${formatIssueReference(issue)}`)
+      .join("\n"),
+  ]);
 }
 
 export function buildResearchSlackSummary(args: {
@@ -301,31 +259,35 @@ export function buildResearchSlackSummary(args: {
   synthesis: ResearchSynthesisResult;
   followupChildren?: LinearIssue[];
 }): string {
-  const lines = [
-    `分かったこと: ${truncateSlackText(args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。", 72)}`,
-    `未確定事項: ${truncateSlackText(args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。", 72)}`,
+  const paragraphs = [
+    joinSlackSentences([
+      "調査内容を Linear に残しました。",
+      args.reusedParent
+        ? `調査 task は ${buildSlackTargetLabel(args.researchChild, 48)} で、親は ${buildSlackTargetLabel(args.parent, 48)} です。`
+        : `調査 task は ${buildSlackTargetLabel(args.researchChild, 48)} です。`,
+    ]),
+    joinSlackSentences([
+      `いま分かっているのは、${stripSentenceEnding(truncateSlackText(args.synthesis.findings[0] ?? "まず関連情報の洗い出しを開始しました。", 72))}。`,
+      `まだ未確定なのは、${stripSentenceEnding(truncateSlackText(args.synthesis.uncertainties[0] ?? "スコープや対処方針の確定が必要なら、この thread で詰めます。", 72))}。`,
+    ]),
   ];
   if ((args.followupChildren?.length ?? 0) > 0) {
-    lines.push(`次アクション: 調査結果をもとに追加 task を ${args.followupChildren!.length} 件作成しました。`);
-    const childSummary = formatChildIssueSummaryForSlack(args.followupChildren ?? [], {
-      limit: 2,
-      titleMaxLength: 32,
-    });
-    if (childSummary) {
-      lines.push(childSummary);
-    }
+    paragraphs.push(
+      joinSlackSentences([
+        `次に進める候補として ${args.followupChildren!.length} 件の task を追加しています。`,
+        formatSlackIssueListSentence({
+          subject: "子 task は ",
+          issues: args.followupChildren ?? [],
+          limit: 2,
+          titleMaxLength: 32,
+        }),
+      ]),
+    );
   } else if (args.synthesis.nextActions.length > 0) {
-    lines.push(`次アクション: ${args.synthesis.nextActions[0]?.title}`);
+    paragraphs.push(`次に進める候補は「${args.synthesis.nextActions[0]?.title}」です。`);
   } else {
-    lines.push("次アクション: 調査結果をもとに必要なら実行 task を追加します。");
+    paragraphs.push("必要になれば、この thread から実行 task を追加できます。");
   }
 
-  return formatThreadReplyForSlack({
-    headline: "調査内容を Linear に記録しました。",
-    target: args.reusedParent
-      ? `${buildSlackTargetLabel(args.researchChild, 48)} / 親: ${args.parent.identifier}`
-      : buildSlackTargetLabel(args.researchChild, 48),
-    lines,
-    maxLines: 6,
-  });
+  return composeSlackReply(paragraphs);
 }

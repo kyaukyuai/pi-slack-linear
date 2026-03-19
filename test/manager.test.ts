@@ -124,6 +124,7 @@ describe("manager helpers", () => {
   it("formats a clarification reply with concrete asks", () => {
     const reply = formatClarificationReply("ログイン画面の不具合修正", ["due_date", "execution_plan"]);
     expect(reply).toContain("起票前に確認したい点があります");
+    expect(reply).toContain("対象は ログイン画面の不具合修正 です。");
     expect(reply).toContain("期限を確認したいです");
     expect(reply).toContain("進め方を固めたいです");
   });
@@ -203,7 +204,7 @@ describe("manager helpers", () => {
       issueUrl: "https://linear.app/kyaukyuai/issue/AIC-1",
       assigneeDisplayName: "y.kakui",
       riskSummary: "overdue, blocked",
-    })).toBe("- <https://linear.app/kyaukyuai/issue/AIC-1|AIC-1> | ログイン画面の不具合修正 | y.kakui | overdue, blocked");
+    })).toBe("- <https://linear.app/kyaukyuai/issue/AIC-1|AIC-1> ログイン画面の不具合修正。担当は y.kakui です。気になっている点は overdue, blocked です。");
   });
 
   it("mentions assignees only for important follow-ups when slack user ids are available", () => {
@@ -258,11 +259,12 @@ describe("manager helpers", () => {
       },
     }, "https://slack.example/thread");
 
-    expect(review).toContain("朝の execution review");
-    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-1|AIC-1> | task 1 | a | overdue");
-    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-2|AIC-2> | task 2 | b | blocked");
-    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-3|AIC-3> | task 3 | c | stale");
-    expect(review).not.toContain("- AIC-4 | task 4 | d | due_today");
-    expect(review).toContain("要返信: | <https://linear.app/kyaukyuai/issue/AIC-2|AIC-2> | <@U456> |");
+    expect(review).toContain("おはようございます。今朝の確認で、優先して見てほしい点があります。");
+    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-1|AIC-1> task 1。担当は a です。気になっている点は overdue です。");
+    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-2|AIC-2> task 2。担当は b です。気になっている点は blocked です。");
+    expect(review).toContain("- <https://linear.app/kyaukyuai/issue/AIC-3|AIC-3> task 3。担当は c です。気になっている点は stale です。");
+    expect(review).not.toContain("AIC-4");
+    expect(review).toContain("気になっている点があります。 <@U456>、<https://linear.app/kyaukyuai/issue/AIC-2|AIC-2> について");
+    expect(review).toContain("返答フォーマットは 原因 / 待ち先 / 再開条件 です。");
   });
 });

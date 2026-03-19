@@ -132,10 +132,10 @@ export async function buildHeartbeatReviewDecision({
     review: {
       kind: "heartbeat",
       text: [
-        "緊急フォローが必要です。",
+        "気になっている点があります。優先して確認してください。",
         helpers.formatRiskLine(top),
       ].join("\n"),
-      summaryLines: ["blocked / overdue / due today の優先確認が必要です。"],
+      summaryLines: ["blocked / overdue / due today を優先して確認してください。"],
       issueLines: [{
         issueId: top.issue.identifier,
         title: top.issue.title,
@@ -181,16 +181,16 @@ export async function buildManagerReview({
 
   const sorted = helpers.sortRiskyIssues(risky);
   if (kind === "morning-review") {
-    const lines = ["朝の execution review です。"];
+    const lines = ["おはようございます。今朝の確認で、優先して見てほしい点があります。"];
     const items = sorted.filter((item) => !item.riskCategories.includes("due_missing")).slice(0, 3);
     if (items.length === 0) {
       return {
         kind,
-        text: "朝の execution review です。\n- 今日すぐに共有すべきリスクはありません。",
+        text: "おはようございます。今朝の確認では、今日すぐに共有が必要なリスクはありません。",
         summaryLines: ["今日すぐに共有すべきリスクはありません。"],
       };
     }
-    lines.push("今日やるべきこと / 期限リスク / stale:");
+    lines.push("今日やるべきこと、期限リスク、stale を優先して見ています。");
     for (const item of items) lines.push(helpers.formatRiskLine(item));
     const followupItem = helpers.selectReviewFollowupItem(items, followups, policy, now);
     let followup: ManagerReviewFollowup | undefined;
@@ -222,7 +222,7 @@ export async function buildManagerReview({
     return {
       kind,
       text: lines.join("\n"),
-      summaryLines: ["今日やるべきこと / 期限リスク / stale"],
+      summaryLines: ["今日やるべきこと、期限リスク、stale を優先して見ています。"],
       issueLines: items.map((item) => ({
         issueId: item.issue.identifier,
         title: item.issue.title,
@@ -235,18 +235,18 @@ export async function buildManagerReview({
   }
 
   if (kind === "evening-review") {
-    const lines = ["夕方の進捗 review です。"];
+    const lines = ["夕方時点で、優先して見てほしい点があります。"];
     const items = sorted
       .filter((item) => item.riskCategories.some((category) => ["due_today", "blocked", "overdue", "stale"].includes(category)))
       .slice(0, 3);
     if (items.length === 0) {
       return {
         kind,
-        text: "夕方の進捗 review です。\n- 今日の残タスクで強いリスクは見当たりません。",
+        text: "夕方時点では、今日の残タスクに強いリスクは見当たりません。",
         summaryLines: ["今日の残タスクで強いリスクは見当たりません。"],
       };
     }
-    lines.push("今日残っていること / blocked / due today:");
+    lines.push("今日の残タスクでは、blocked・期限超過・本日期限を優先して見ています。");
     for (const item of items) lines.push(helpers.formatRiskLine(item));
     const followupItem = helpers.selectReviewFollowupItem(items, followups, policy, now);
     let followup: ManagerReviewFollowup | undefined;
@@ -278,7 +278,7 @@ export async function buildManagerReview({
     return {
       kind,
       text: lines.join("\n"),
-      summaryLines: ["残タスク / blocked / due today"],
+      summaryLines: ["今日の残タスクでは、blocked・期限超過・本日期限を優先して見ています。"],
       issueLines: items.map((item) => ({
         issueId: item.issue.identifier,
         title: item.issue.title,
@@ -292,12 +292,12 @@ export async function buildManagerReview({
 
   const fallbackCount = planningLedger.filter((entry) => entry.ownerResolution === "fallback").length;
   const staleItems = sorted.filter((item) => item.riskCategories.includes("stale")).slice(0, 5);
-  const lines = ["週次 planning review です。"];
-  lines.push(`- 未整備 issue: ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length}`);
-  lines.push(`- 長期 stale: ${staleItems.length}`);
-  lines.push(`- owner map gap: ${fallbackCount}`);
-  lines.push(`- 未回答 follow-up: ${awaitingFollowupCount}`);
-  lines.push(`- 未処理 clarification: ${pendingClarificationCount}`);
+  const lines = ["週次で見直したところ、今の気になる点は次のとおりです。"];
+  lines.push(`- 未整備の issue は ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length} 件です。`);
+  lines.push(`- 長期 stale は ${staleItems.length} 件です。`);
+  lines.push(`- owner map の gap は ${fallbackCount} 件です。`);
+  lines.push(`- 未回答の follow-up は ${awaitingFollowupCount} 件です。`);
+  lines.push(`- 未処理の clarification は ${pendingClarificationCount} 件です。`);
   for (const item of staleItems.slice(0, 3)) {
     lines.push(helpers.formatRiskLine(item));
   }
@@ -333,11 +333,11 @@ export async function buildManagerReview({
     kind,
     text: lines.join("\n"),
     summaryLines: [
-      `未整備 issue: ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length}`,
-      `長期 stale: ${staleItems.length}`,
-      `owner map gap: ${fallbackCount}`,
-      `未回答 follow-up: ${awaitingFollowupCount}`,
-      `未処理 clarification: ${pendingClarificationCount}`,
+      `未整備の issue は ${sorted.filter((item) => item.ownerMissing || item.dueMissing).length} 件です。`,
+      `長期 stale は ${staleItems.length} 件です。`,
+      `owner map の gap は ${fallbackCount} 件です。`,
+      `未回答の follow-up は ${awaitingFollowupCount} 件です。`,
+      `未処理の clarification は ${pendingClarificationCount} 件です。`,
     ],
     issueLines: weeklyItems.map((item) => ({
       issueId: item.issue.identifier,

@@ -32,6 +32,7 @@ import {
 import { handleManagerUpdates } from "../orchestrators/updates/handle-updates.js";
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
+import { composeSlackReply, formatSlackBullets, joinSlackSentences } from "../orchestrators/shared/slack-conversation.js";
 import {
   type LinearIssue,
 } from "./linear.js";
@@ -382,20 +383,26 @@ export function detectClarificationNeeds(text: string, now = new Date()): Clarif
 }
 
 export function formatClarificationReply(title: string, needs: ClarificationNeed[]): string {
-  const lines = ["起票前に確認したい点があります。", `- 対象: ${title}`];
+  const asks: string[] = [];
 
   if (needs.includes("scope")) {
-    lines.push("- 何をどこまで対応するタスクか、対象をもう少し具体化してください。");
+    asks.push("何をどこまで対応するタスクか、対象をもう少し具体化してください。");
   }
   if (needs.includes("due_date")) {
-    lines.push("- 期限を確認したいです。いつまでに完了したいか教えてください。例: 2026-03-20 / 今日中 / 明日");
+    asks.push("期限を確認したいです。いつまでに完了したいか教えてください。例: 2026-03-20 / 今日中 / 明日");
   }
   if (needs.includes("execution_plan")) {
-    lines.push("- 進め方を固めたいです。完了条件か、分けたい作業を 1-3 点で教えてください。");
+    asks.push("進め方を固めたいです。完了条件か、分けたい作業を 1-3 点で教えてください。");
   }
 
-  lines.push("- 返答をもらえれば、その内容を取り込んで Linear に起票します。");
-  return lines.join("\n");
+  return composeSlackReply([
+    joinSlackSentences([
+      "起票前に確認したい点があります。",
+      `対象は ${title} です。`,
+    ]),
+    formatSlackBullets(asks),
+    "返答をもらえれば、その内容を取り込んで Linear に起票します。",
+  ]);
 }
 
 function extractDueDate(text: string, now = new Date()): string | undefined {

@@ -8,6 +8,7 @@ import type { WorkgraphRepository } from "../../state/workgraph/file-backed-work
 import { buildWorkgraphThreadKey } from "../../state/workgraph/events.js";
 import { getThreadPlanningContext } from "../../state/workgraph/queries.js";
 import { issueMatchesCompletedState } from "../review/risk.js";
+import { composeSlackReply } from "../shared/slack-conversation.js";
 
 type UpdateSignal = "progress" | "completed" | "blocked";
 
@@ -463,23 +464,31 @@ export function formatIssueSelectionReply(
   issues: IssueSelectionCandidate[],
 ): string {
   const prefix = kind === "completed"
-    ? "完了を反映したい issue を特定できませんでした。"
+    ? "どの issue を完了として反映するか、まだ決めきれていません。"
     : kind === "blocked"
-      ? "blocked 状態を反映したい issue を特定できませんでした。"
-      : "進捗を反映したい issue を特定できませんでした。";
+      ? "どの issue を blocked として反映するか、まだ決めきれていません。"
+      : "どの issue に進捗を反映するか、まだ決めきれていません。";
 
-  const lines = [prefix];
   if (issues.length > 0) {
-    lines.push("対象の issue ID を 1 つ指定してください。候補:");
-    for (const issue of issues.slice(0, 5)) {
+    const candidates = issues.slice(0, 5).map((issue) => {
       const issueLabel = issue.issueUrl ? `<${issue.issueUrl}|${issue.issueId}>` : issue.issueId;
-      lines.push(
-        `- ${issueLabel}${issue.title ? ` / ${issue.title}` : ""}${issue.latestActionLabel ? ` / 最新: ${issue.latestActionLabel}` : ""}${issue.focusReason ? ` / 理由: ${issue.focusReason}` : ""}`,
-      );
-    }
-    lines.push("当てはまるものが無ければ `新規 task` と返してください。");
-  } else {
-    lines.push("同じ thread に紐づく issue が無かったため、`AIC-123` のように issue ID を含めてください。");
+      const details = [
+        issue.title,
+        issue.latestActionLabel ? `最新の動きは ${issue.latestActionLabel}` : undefined,
+        issue.focusReason ? `候補に出した理由は ${issue.focusReason}` : undefined,
+      ].filter(Boolean).join("。");
+      return `- ${issueLabel}${details ? ` ${details}。` : ""}`;
+    }).join("\n");
+    return composeSlackReply([
+      prefix,
+      "対象の issue ID を 1 つ教えてください。候補は次のとおりです。",
+      candidates,
+      "どれにも当てはまらなければ、`新規 task` と返してください。",
+    ]);
   }
-  return lines.join("\n");
+  return composeSlackReply([
+    prefix,
+    "この thread に紐づく issue がまだ見つかっていません。`AIC-123` のように issue ID を含めてください。",
+    "新しく作るなら、`新規 task` と返してください。",
+  ]);
 }

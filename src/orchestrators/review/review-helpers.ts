@@ -9,6 +9,12 @@ import type {
   ManagerReviewResult,
   RiskAssessment,
 } from "./contract.js";
+import {
+  composeSlackReply,
+  formatSlackBullets,
+  formatSlackThreadReference,
+  joinSlackSentences,
+} from "../shared/slack-conversation.js";
 
 export interface ReviewHelperDeps {
   nowIso(now: Date): string;
@@ -300,14 +306,17 @@ export function formatIssueLineForSlack(issue: ManagerReviewIssueLine): string {
   const title = truncateSlackText(issue.title);
   const assignee = issue.assigneeDisplayName ?? "未割当";
   const issueLabel = issue.issueUrl ? `<${issue.issueUrl}|${issue.issueId}>` : issue.issueId;
-  return `- ${issueLabel} | ${title} | ${assignee} | ${issue.riskSummary}`;
+  return `- ${issueLabel} ${title}。担当は ${assignee} です。気になっている点は ${issue.riskSummary} です。`;
 }
 
-function formatSlackAssigneeLabel(followup: ManagerReviewFollowup): string {
+function formatSlackAssigneeLabel(followup: ManagerReviewFollowup): string | undefined {
   if (followup.shouldMention && followup.slackUserId) {
     return `<@${followup.slackUserId}>`;
   }
-  return followup.assigneeDisplayName ?? "未割当";
+  if (followup.assigneeDisplayName) {
+    return `${followup.assigneeDisplayName} さん`;
+  }
+  return undefined;
 }
 
 export function formatControlRoomFollowupForSlack(
@@ -316,14 +325,16 @@ export function formatControlRoomFollowupForSlack(
 ): string {
   const answerFormat = followup.acceptableAnswerHint ?? acceptableAnswerHintForRequestKind(followup.requestKind);
   const issueLabel = followup.issueUrl ? `<${followup.issueUrl}|${followup.issueId}>` : followup.issueId;
-  return [
-    "要返信:",
-    issueLabel,
-    formatSlackAssigneeLabel(followup),
-    followup.request,
-    `返答フォーマット: ${answerFormat}`,
-    `戻る thread: ${threadReference}`,
-  ].join(" | ");
+  const assignee = formatSlackAssigneeLabel(followup);
+  const requestSentence = assignee
+    ? `${assignee}、${issueLabel} について ${followup.request}`
+    : `${issueLabel} について ${followup.request}`;
+  return joinSlackSentences([
+    "気になっている点があります。",
+    requestSentence,
+    `返答フォーマットは ${answerFormat} です。`,
+    `戻る thread は ${formatSlackThreadReference(threadReference)} です。`,
+  ]) ?? "";
 }
 
 export function formatManagerReviewFollowupLine(
@@ -337,31 +348,28 @@ export function formatControlRoomReviewForSlack(
   result: ManagerReviewResult,
   threadReference?: string,
 ): string {
-  const lines: string[] = [];
+  const intro = result.kind === "morning-review"
+    ? "おはようございます。今朝の確認で、優先して見てほしい点があります。"
+    : result.kind === "evening-review"
+      ? "夕方時点で、優先して見てほしい点があります。"
+      : result.kind === "weekly-review"
+        ? "週次で見直したところ、今の気になる点は次のとおりです。"
+        : "気になっている点があります。優先して確認してください。";
+  const summaryBlock = formatSlackBullets(result.summaryLines ?? []);
+  const issueBlock = formatSlackBullets(
+    (result.issueLines ?? []).slice(0, 3).map((issueLine) => formatIssueLineForSlack(issueLine)),
+  );
+  const followupBlock = result.followup
+    ? formatControlRoomFollowupForSlack(result.followup, threadReference ?? "source thread unavailable")
+    : undefined;
 
-  if (result.kind === "morning-review") {
-    lines.push("朝の execution review");
-  } else if (result.kind === "evening-review") {
-    lines.push("夕方の execution review");
-  } else if (result.kind === "weekly-review") {
-    lines.push("週次 planning review");
-  } else {
-    lines.push("緊急フォロー");
-  }
-
-  for (const summary of result.summaryLines ?? []) {
-    lines.push(summary.startsWith("- ") ? summary : `- ${summary}`);
-  }
-  for (const issueLine of (result.issueLines ?? []).slice(0, 3)) {
-    lines.push(formatIssueLineForSlack(issueLine));
-  }
-  if (result.followup) {
-    lines.push("", formatControlRoomFollowupForSlack(result.followup, threadReference ?? "source thread unavailable"));
-  }
-
-  if (lines.length === 1) {
+  if (!summaryBlock && !issueBlock && !followupBlock) {
     return result.text;
   }
-  const [headline, ...rest] = lines;
-  return [headline, "", ...rest].join("\n");
+  return composeSlackReply([
+    intro,
+    summaryBlock,
+    issueBlock,
+    followupBlock,
+  ]);
 }
