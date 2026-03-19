@@ -16,6 +16,35 @@ const TASK_PLANNING_SYSTEM_PROMPT = [
   "When enough detail exists, do not ask a clarification question.",
 ].join("\n");
 
+function normalizePlanningTitle(title: string | undefined): string {
+  return (title ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[。！!？?]+$/g, "")
+    .toLowerCase();
+}
+
+function postValidateTaskPlan(result: TaskPlanningResult): TaskPlanningResult {
+  if (result.action !== "create") {
+    return result;
+  }
+
+  if (
+    result.planningReason !== "single-issue"
+    && result.children.length === 1
+    && result.parentTitle
+    && normalizePlanningTitle(result.parentTitle) === normalizePlanningTitle(result.children[0]?.title)
+  ) {
+    return {
+      ...result,
+      planningReason: "single-issue",
+      parentTitle: undefined,
+    };
+  }
+
+  return result;
+}
+
 export async function runTaskPlanningTurnWithExecutor(
   executeReply: TaskPlanningReplyExecutor,
   input: TaskPlanningInput,
@@ -26,5 +55,5 @@ export async function runTaskPlanningTurnWithExecutor(
     input.taskKey ?? `${input.channelId}-${input.rootThreadTs}-task-planning`,
   );
 
-  return parseTaskPlanningReply(reply);
+  return postValidateTaskPlan(parseTaskPlanningReply(reply));
 }

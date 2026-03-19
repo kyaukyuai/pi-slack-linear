@@ -192,6 +192,18 @@ function defaultTaskPlan(input: { combinedRequest: string }): Record<string, unk
   };
 }
 
+function makeActiveIssue(overrides: Record<string, unknown> & { identifier: string; title: string }) {
+  return {
+    id: `issue-${overrides.identifier}`,
+    url: `https://linear.app/kyaukyuai/issue/${overrides.identifier}`,
+    assignee: { id: "user-1", displayName: "y.kakui" },
+    state: { id: "state-started", name: "Started", type: "started" },
+    relations: [],
+    inverseRelations: [],
+    ...overrides,
+  };
+}
+
 describe("handleManagerMessage clarification flow", () => {
   let workspaceDir: string;
   let systemPaths: ReturnType<typeof buildSystemPaths>;
@@ -510,6 +522,140 @@ describe("handleManagerMessage clarification flow", () => {
     expect(second.reply).toContain("この依頼は既に取り込まれています。");
     expect(second.reply).toContain("AIC-150");
     expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a single issue without duplicating parent and child labels in the reply", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-38",
+      identifier: "AIC-38",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-38",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-single-issue",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+      },
+      new Date("2026-03-17T04:00:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("この依頼は Linear に登録しておきました。");
+    expect(result.reply).toContain("対象は <https://linear.app/kyaukyuai/issue/AIC-38|AIC-38 OPT社の社内チャネルへの招待依頼> です。");
+    expect(result.reply).not.toContain("子 task は");
+    expect(linearMocks.createManagedLinearIssueBatch).not.toHaveBeenCalled();
+  });
+
+  it("lists active tasks for query-style task list requests", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValueOnce([
+      makeActiveIssue({
+        identifier: "AIC-501",
+        title: "OPT社の社内チャネルへの招待依頼",
+        dueDate: "2026-03-20",
+        priority: 2,
+        priorityLabel: "High",
+      }),
+      makeActiveIssue({
+        identifier: "AIC-502",
+        title: "契約書ドラフトの確認",
+        dueDate: "2026-03-19",
+        priority: 1,
+        priorityLabel: "Urgent",
+      }),
+    ]);
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-query-active",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "タスク一覧を確認して",
+      },
+      new Date("2026-03-19T01:00:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("タスク一覧を確認しました。");
+    expect(result.reply).toContain("AIC-501");
+    expect(result.reply).toContain("AIC-502");
+    expect(result.reply).toContain("気になる issue があれば");
+    expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
+    expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+  });
+
+  it("answers today and prioritization queries without sending them to intake", async () => {
+    linearMocks.listRiskyLinearIssues.mockResolvedValue([
+      makeActiveIssue({
+        identifier: "AIC-601",
+        title: "今日中にOPT社へ確認事項を送る",
+        dueDate: "2026-03-19",
+        priority: 1,
+        priorityLabel: "Urgent",
+      }),
+      makeActiveIssue({
+        identifier: "AIC-602",
+        title: "ドラフト作成",
+        dueDate: "2026-03-20",
+        priority: 2,
+        priorityLabel: "High",
+      }),
+      makeActiveIssue({
+        identifier: "AIC-603",
+        title: "来週レビュー用のメモ整理",
+        priority: 3,
+        priorityLabel: "Medium",
+        updatedAt: "2026-03-18T00:00:00.000Z",
+      }),
+    ]);
+
+    const today = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-query-today",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "今日のタスク一覧を確認して",
+      },
+      new Date("2026-03-19T01:00:00.000Z"),
+    );
+
+    expect(today.handled).toBe(true);
+    expect(today.reply).toContain("今日優先して見たい task を整理しました。");
+    expect(today.reply).toContain("AIC-601");
+    expect(today.reply).toContain("AIC-602");
+
+    const shouldDo = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-query-priority",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "今日やるべきタスクある？",
+      },
+      new Date("2026-03-19T01:05:00.000Z"),
+    );
+
+    expect(shouldDo.handled).toBe(true);
+    expect(shouldDo.reply).toContain("今日まず手を付けるなら");
+    expect(shouldDo.reply).toContain("AIC-601");
+    expect(shouldDo.reply).toContain("必要なら、このまま優先順位を一緒に絞ります。");
+    expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
   });
 
   it("updates a unique thread-linked issue when the user reports progress", async () => {

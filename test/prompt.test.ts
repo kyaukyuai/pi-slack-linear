@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildFollowupResolutionPrompt, parseFollowupResolutionReply } from "../src/planners/followup-resolution/index.js";
 import { buildResearchSynthesisPrompt, parseResearchSynthesisReply } from "../src/planners/research-synthesis/index.js";
-import { buildTaskPlanningPrompt, parseTaskPlanningReply } from "../src/planners/task-intake/index.js";
+import { buildTaskPlanningPrompt, parseTaskPlanningReply, runTaskPlanningTurnWithExecutor } from "../src/planners/task-intake/index.js";
 import type { AppConfig } from "../src/lib/config.js";
 import { DEFAULT_HEARTBEAT_PROMPT } from "../src/lib/heartbeat.js";
 import { createLinearCustomTools } from "../src/lib/linear-tools.js";
@@ -187,6 +187,35 @@ describe("prompt helpers", () => {
       children: [
         { title: "ドラフト作成", kind: "execution", dueDate: undefined, assigneeHint: undefined },
         { title: "OPT 田平さんへ契約書確認依頼", kind: "execution", dueDate: undefined, assigneeHint: "OPT 田平さん" },
+      ],
+    });
+  });
+
+  it("collapses duplicate parent and only child plans after parsing", async () => {
+    const result = await runTaskPlanningTurnWithExecutor(
+      async () => `{"action":"create","planningReason":"complex-request","parentTitle":"OPT社の社内チャネルへの招待依頼","parentDueDate":null,"children":[{"title":"OPT社の社内チャネルへの招待依頼","kind":"execution","dueDate":null}]}`,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "12345.678",
+        originalRequest: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+        latestUserMessage: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+        combinedRequest: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+        currentDate: "2026-03-19",
+      },
+    );
+
+    expect(result).toEqual({
+      action: "create",
+      planningReason: "single-issue",
+      parentDueDate: undefined,
+      parentTitle: undefined,
+      children: [
+        {
+          title: "OPT社の社内チャネルへの招待依頼",
+          kind: "execution",
+          dueDate: undefined,
+          assigneeHint: undefined,
+        },
       ],
     });
   });

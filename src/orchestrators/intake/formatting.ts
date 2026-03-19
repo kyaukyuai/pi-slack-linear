@@ -213,6 +213,13 @@ export function formatAutonomousCreateReply(
           : `調査 task として ${buildSlackTargetLabel(children[0])} を作成しています。`,
       ]),
     );
+  } else if (!parent && children.length === 1 && children[0]) {
+    paragraphs.push(
+      joinSlackSentences([
+        "この依頼は Linear に登録しておきました。",
+        `対象は ${buildSlackTargetLabel(children[0])} です。`,
+      ]),
+    );
   } else {
     paragraphs.push(
       joinSlackSentences([

@@ -41,7 +41,7 @@ import {
 } from "./reply-format.js";
 
 export type UpdateSignal = "progress" | "completed" | "blocked";
-export type ManagerSignal = UpdateSignal | "request" | "conversation";
+export type ManagerSignal = UpdateSignal | "request" | "query" | "conversation";
 
 export interface UpdatesMessage {
   channelId: string;
@@ -211,7 +211,7 @@ export async function handleManagerUpdates({
     }
   }
 
-  if (signal === "request" || signal === "conversation") {
+  if (signal === "request" || signal === "query" || signal === "conversation") {
     return undefined;
   }
 

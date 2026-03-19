@@ -5,6 +5,11 @@ import {
   buildHeartbeatReviewDecision as buildHeartbeatReviewDecisionOrchestrator,
   buildManagerReview as buildManagerReviewOrchestrator,
 } from "../orchestrators/review/build-review.js";
+import {
+  classifyManagerQuery,
+  handleManagerQuery,
+  type ManagerQueryKind,
+} from "../orchestrators/query/handle-query.js";
 import type {
   HeartbeatReviewDecision,
   ManagerReviewKind,
@@ -45,7 +50,7 @@ import {
 } from "../state/workgraph/queries.js";
 import type { SystemPaths } from "./system-workspace.js";
 
-export type ManagerMessageKind = "request" | "progress" | "completed" | "blocked" | "conversation";
+export type ManagerMessageKind = "request" | "query" | "progress" | "completed" | "blocked" | "conversation";
 export type ClarificationNeed = "scope" | "due_date" | "execution_plan";
 export type {
   HeartbeatNoopReason,
@@ -57,6 +62,7 @@ export type {
   ManagerReviewResult,
   RiskAssessment,
 } from "../orchestrators/review/contract.js";
+export type { ManagerQueryKind } from "../orchestrators/query/handle-query.js";
 export {
   formatControlRoomFollowupForSlack,
   formatControlRoomReviewForSlack,
@@ -66,6 +72,7 @@ export {
 export { assessRisk, businessDaysSince } from "../orchestrators/review/risk.js";
 export { formatIssueSelectionReply } from "../orchestrators/updates/target-resolution.js";
 export { chooseOwner } from "../orchestrators/intake/planning-support.js";
+export { classifyManagerQuery } from "../orchestrators/query/handle-query.js";
 
 export interface ManagerSlackMessage {
   channelId: string;
@@ -162,6 +169,7 @@ export function fingerprintText(text: string): string {
 export function classifyManagerSignal(text: string): ManagerMessageKind {
   const normalized = text.trim();
   if (!normalized) return "conversation";
+  if (classifyManagerQuery(normalized)) return "query";
   if (BLOCKED_PATTERN.test(normalized)) return "blocked";
   if (COMPLETED_PATTERN.test(normalized)) return "completed";
   if (PROGRESS_PATTERN.test(normalized)) return "progress";
@@ -562,6 +570,9 @@ export async function handleManagerMessage(
       }
     : message;
   const signal = pendingClarification ? "request" : classifyManagerSignal(message.text);
+  const queryKind: ManagerQueryKind | undefined = !pendingClarification && signal === "query"
+    ? classifyManagerQuery(message.text)
+    : undefined;
   const env = {
     ...process.env,
     LINEAR_API_KEY: config.linearApiKey,
@@ -587,6 +598,15 @@ export async function handleManagerMessage(
   });
   if (updatesResult) {
     return updatesResult;
+  }
+
+  if (signal === "query" && queryKind) {
+    return handleManagerQuery({
+      repositories,
+      kind: queryKind,
+      now,
+      env,
+    });
   }
 
   if (signal !== "request") {

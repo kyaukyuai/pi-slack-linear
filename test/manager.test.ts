@@ -3,6 +3,7 @@ import {
   assessRisk,
   businessDaysSince,
   chooseOwner,
+  classifyManagerQuery,
   classifyManagerSignal,
   detectClarificationNeeds,
   deriveIssueTitle,
@@ -69,8 +70,16 @@ const ownerMap: OwnerMap = {
 describe("manager helpers", () => {
   it("classifies request and completion signals", () => {
     expect(classifyManagerSignal("ログイン修復のタスクを追加して")).toBe("request");
+    expect(classifyManagerSignal("今日やるべきタスクある？")).toBe("query");
+    expect(classifyManagerSignal("タスク一覧を確認して")).toBe("query");
     expect(classifyManagerSignal("AIC-2 は完了しました")).toBe("completed");
     expect(classifyManagerSignal("AIC-2 は blocked です")).toBe("blocked");
+  });
+
+  it("distinguishes query kinds for list and prioritization requests", () => {
+    expect(classifyManagerQuery("今日やるべきタスクある？")).toBe("what-should-i-do");
+    expect(classifyManagerQuery("今日のタスク一覧を確認して")).toBe("list-today");
+    expect(classifyManagerQuery("タスク一覧を確認して")).toBe("list-active");
   });
 
   it("extracts task segments from bullet lists", () => {
