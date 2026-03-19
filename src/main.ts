@@ -15,6 +15,7 @@ import { formatSlackMessageText } from "./lib/slack-format.js";
 import { classifyTaskIntent, isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
 import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "./state/repositories/file-backed-manager-repositories.js";
+import { runWorkgraphMaintenance } from "./state/workgraph/maintenance.js";
 import {
   appendThreadLog,
   buildThreadPaths,
@@ -134,6 +135,65 @@ async function main(): Promise<void> {
   await verifyLinearCli(config.linearTeamKey);
   const managerRepositories = createFileBackedManagerRepositories(systemPaths);
   const managerPolicy = await managerRepositories.policy.load();
+  const workgraphPolicy = {
+    warnActiveLogEvents: config.workgraphHealthWarnActiveEvents,
+    autoCompactMaxActiveLogEvents: config.workgraphAutoCompactMaxActiveEvents,
+  };
+
+  const logWorkgraphMaintenance = async (source: "startup" | "interval"): Promise<void> => {
+    try {
+      const result = await runWorkgraphMaintenance(managerRepositories.workgraph, workgraphPolicy);
+      if (result.action === "compacted") {
+        logger.info("Workgraph compacted automatically", {
+          source,
+          activeLogEventCountBefore: result.before.activeLogEventCount,
+          activeLogEventCountAfter: result.after?.activeLogEventCount,
+          snapshotEventCount: result.after?.snapshotEventCount ?? result.snapshot?.eventCount,
+          compactedEventCount: result.after?.compactedEventCount ?? result.snapshot?.compactedEventCount,
+        });
+        return;
+      }
+      if (result.action === "recovery-required") {
+        logger.warn("Workgraph health check requires recovery", {
+          source,
+          snapshotEventCount: result.before.snapshotEventCount,
+          compactedEventCount: result.before.compactedEventCount,
+          activeLogEventCount: result.before.activeLogEventCount,
+          snapshotInvalid: result.before.snapshotInvalid,
+          snapshotAheadOfLog: result.before.snapshotAheadOfLog,
+        });
+        return;
+      }
+      if (result.before.status === "warning") {
+        logger.warn("Workgraph health check warning", {
+          source,
+          activeLogEventCount: result.before.activeLogEventCount,
+          replayTailEventCount: result.before.replayTailEventCount,
+          compactRecommended: result.before.compactRecommended,
+        });
+        return;
+      }
+      logger.debug("Workgraph health check ok", {
+        source,
+        activeLogEventCount: result.before.activeLogEventCount,
+        replayTailEventCount: result.before.replayTailEventCount,
+        snapshotEventCount: result.before.snapshotEventCount,
+      });
+    } catch (error) {
+      logger.warn("Workgraph maintenance failed", {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  await logWorkgraphMaintenance("startup");
+  if (config.workgraphMaintenanceIntervalMin > 0) {
+    const workgraphTimer = setInterval(() => {
+      void logWorkgraphMaintenance("interval");
+    }, config.workgraphMaintenanceIntervalMin * 60 * 1000);
+    workgraphTimer.unref();
+  }
 
   const authTest = await webClient.auth.test();
   const botUserId = authTest.user_id;
@@ -150,6 +210,9 @@ async function main(): Promise<void> {
     heartbeatIntervalMin: managerPolicy.heartbeatIntervalMin,
     schedulerPollSec: config.schedulerPollSec,
     controlRoomChannelId: managerPolicy.controlRoomChannelId,
+    workgraphMaintenanceIntervalMin: config.workgraphMaintenanceIntervalMin,
+    workgraphHealthWarnActiveEvents: config.workgraphHealthWarnActiveEvents,
+    workgraphAutoCompactMaxActiveEvents: config.workgraphAutoCompactMaxActiveEvents,
   });
 
   socketClient.on("message", async ({ event, ack }) => {

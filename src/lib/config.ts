@@ -13,6 +13,9 @@ const envSchema = z.object({
   HEARTBEAT_INTERVAL_MIN: z.coerce.number().int().min(0).default(30),
   HEARTBEAT_ACTIVE_LOOKBACK_HOURS: z.coerce.number().int().positive().default(24),
   SCHEDULER_POLL_SEC: z.coerce.number().int().positive().default(30),
+  WORKGRAPH_MAINTENANCE_INTERVAL_MIN: z.coerce.number().int().min(0).default(15),
+  WORKGRAPH_HEALTH_WARN_ACTIVE_EVENTS: z.coerce.number().int().nonnegative().default(200),
+  WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS: z.coerce.number().int().positive().default(500),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
@@ -29,6 +32,9 @@ export interface AppConfig {
   heartbeatIntervalMin: number;
   heartbeatActiveLookbackHours: number;
   schedulerPollSec: number;
+  workgraphMaintenanceIntervalMin: number;
+  workgraphHealthWarnActiveEvents: number;
+  workgraphAutoCompactMaxActiveEvents: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
@@ -50,6 +56,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     heartbeatIntervalMin: parsed.HEARTBEAT_INTERVAL_MIN,
     heartbeatActiveLookbackHours: parsed.HEARTBEAT_ACTIVE_LOOKBACK_HOURS,
     schedulerPollSec: parsed.SCHEDULER_POLL_SEC,
+    workgraphMaintenanceIntervalMin: parsed.WORKGRAPH_MAINTENANCE_INTERVAL_MIN,
+    workgraphHealthWarnActiveEvents: parsed.WORKGRAPH_HEALTH_WARN_ACTIVE_EVENTS,
+    workgraphAutoCompactMaxActiveEvents: parsed.WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS,
     logLevel: parsed.LOG_LEVEL,
   };
 }

@@ -79,6 +79,9 @@ WORKSPACE_DIR=/workspace
 HEARTBEAT_INTERVAL_MIN=30
 HEARTBEAT_ACTIVE_LOOKBACK_HOURS=24
 SCHEDULER_POLL_SEC=30
+WORKGRAPH_MAINTENANCE_INTERVAL_MIN=15
+WORKGRAPH_HEALTH_WARN_ACTIVE_EVENTS=200
+WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS=500
 LOG_LEVEL=info
 ```
 
@@ -88,6 +91,8 @@ LOG_LEVEL=info
 - `LINEAR_TEAM_KEY` は UUID ではなく `AIC`, `KYA` のような team key を使います。
 - headless 運用では `ANTHROPIC_API_KEY` を推奨します。
 - manager review と heartbeat を既定で使うなら `HEARTBEAT_INTERVAL_MIN=30` のままにします。
+- `WORKGRAPH_MAINTENANCE_INTERVAL_MIN=15` なら 15 分ごとに health check と auto compaction 判定を行います。
+- `WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS` に達すると active `workgraph-events.jsonl` を snapshot に畳み込みます。
 
 ## 4. Optional: use `auth.json` instead of `ANTHROPIC_API_KEY`
 
@@ -213,6 +218,12 @@ docker compose down
 このうち、明示的に編集したくなるのは主に `policy.json`, `owner-map.json`, `HEARTBEAT.md` です。
 
 ## 9. Workgraph maintenance
+
+現在の health を確認する場合:
+
+```bash
+npm run workgraph:health -- /workspace
+```
 
 snapshot だけ作り直す場合:
 

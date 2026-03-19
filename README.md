@@ -70,6 +70,9 @@ Optional:
 - `HEARTBEAT_INTERVAL_MIN`
 - `HEARTBEAT_ACTIVE_LOOKBACK_HOURS`
 - `SCHEDULER_POLL_SEC`
+- `WORKGRAPH_MAINTENANCE_INTERVAL_MIN`
+- `WORKGRAPH_HEALTH_WARN_ACTIVE_EVENTS`
+- `WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS`
 - `LOG_LEVEL`
 
 この bot は `linear-cli v2.6.0` 以上を前提にしています。実行時の Linear 取得・更新は `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を使います。

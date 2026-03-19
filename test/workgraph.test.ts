@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { createFileBackedWorkgraphRepository } from "../src/state/workgraph/file-backed-workgraph-repository.js";
+import { runWorkgraphMaintenance } from "../src/state/workgraph/maintenance.js";
 import {
   findExistingThreadIntakeByFingerprint,
   buildIssueSourceIndex,
@@ -434,6 +435,95 @@ describe("workgraph repository", () => {
           },
         }),
       },
+    });
+  });
+
+  it("reports health and compacts automatically when the active log reaches the threshold", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "pi-slack-linear-workgraph-health-"));
+    const paths = buildSystemPaths(workspaceDir);
+    const repository = createFileBackedWorkgraphRepository(paths);
+
+    await repository.append([
+      {
+        type: "planning.parent_created",
+        occurredAt: "2026-03-18T04:00:00.000Z",
+        threadKey: "C123:thread-health",
+        sourceChannelId: "C123",
+        sourceThreadTs: "thread-health",
+        sourceMessageTs: "msg-1",
+        issueId: "AIC-40",
+        title: "ヘルス確認",
+      },
+      {
+        type: "issue.progressed",
+        occurredAt: "2026-03-18T04:10:00.000Z",
+        threadKey: "C123:thread-health",
+        sourceChannelId: "C123",
+        sourceThreadTs: "thread-health",
+        sourceMessageTs: "msg-2",
+        issueId: "AIC-40",
+      },
+    ]);
+
+    expect(await repository.health({
+      warnActiveLogEvents: 1,
+      autoCompactMaxActiveLogEvents: 2,
+    })).toMatchObject({
+      status: "warning",
+      activeLogEventCount: 2,
+      replayTailEventCount: 2,
+      compactRecommended: true,
+      issueCount: 1,
+      threadCount: 1,
+    });
+
+    const maintenance = await runWorkgraphMaintenance(repository, {
+      warnActiveLogEvents: 1,
+      autoCompactMaxActiveLogEvents: 2,
+    });
+    expect(maintenance.action).toBe("compacted");
+    expect(maintenance.after).toMatchObject({
+      status: "ok",
+      activeLogEventCount: 0,
+      compactedEventCount: 2,
+      snapshotEventCount: 2,
+    });
+    await expect(repository.list()).resolves.toEqual([]);
+  });
+
+  it("flags recovery-required when the snapshot claims more tail events than the active log contains", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "pi-slack-linear-workgraph-health-recovery-"));
+    const paths = buildSystemPaths(workspaceDir);
+    const repository = createFileBackedWorkgraphRepository(paths);
+
+    await repository.append({
+      type: "planning.parent_created",
+      occurredAt: "2026-03-18T05:00:00.000Z",
+      threadKey: "C123:thread-health-recovery",
+      sourceChannelId: "C123",
+      sourceThreadTs: "thread-health-recovery",
+      sourceMessageTs: "msg-1",
+      issueId: "AIC-41",
+      title: "リカバリ確認",
+    });
+    await writeFile(paths.workgraphSnapshotFile, `${JSON.stringify({
+      version: 1,
+      eventCount: 4,
+      compactedEventCount: 1,
+      lastOccurredAt: "2026-03-18T05:00:00.000Z",
+      projection: {
+        issues: {},
+        threads: {},
+      },
+    }, null, 2)}\n`, "utf8");
+
+    expect(await repository.health({
+      warnActiveLogEvents: 10,
+      autoCompactMaxActiveLogEvents: 20,
+    })).toMatchObject({
+      status: "recovery-required",
+      snapshotAheadOfLog: true,
+      activeLogEventCount: 1,
     });
   });
 });

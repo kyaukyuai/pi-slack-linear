@@ -8,6 +8,7 @@ import {
   type WorkgraphEventInput,
 } from "./events.js";
 import { projectWorkgraph, type WorkgraphProjection } from "./projection.js";
+import { assessWorkgraphHealth, type WorkgraphHealth, type WorkgraphHealthPolicy } from "./health.js";
 import {
   EMPTY_WORKGRAPH_SNAPSHOT,
   workgraphSnapshotSchema,
@@ -22,6 +23,7 @@ export interface WorkgraphRepository {
   rebuildSnapshot(): Promise<WorkgraphSnapshot>;
   compact(): Promise<WorkgraphSnapshot>;
   recoverSnapshotFromLog(): Promise<WorkgraphSnapshot>;
+  health(policy: WorkgraphHealthPolicy): Promise<WorkgraphHealth>;
 }
 
 export function createFileBackedWorkgraphRepository(paths: SystemPaths): WorkgraphRepository {
@@ -99,6 +101,10 @@ export function createFileBackedWorkgraphRepository(paths: SystemPaths): Workgra
     loadSnapshot,
     async project(): Promise<WorkgraphProjection> {
       return (await projectFromStoredState()).projection;
+    },
+    async health(policy: WorkgraphHealthPolicy): Promise<WorkgraphHealth> {
+      const { snapshot, events, projection } = await projectFromStoredState();
+      return assessWorkgraphHealth(snapshot, events.length, projection, policy);
     },
     async rebuildSnapshot(): Promise<WorkgraphSnapshot> {
       const { snapshot: currentSnapshot, events, projection } = await projectFromStoredState();

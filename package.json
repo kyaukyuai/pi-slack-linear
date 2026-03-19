@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "test": "vitest run",
+    "workgraph:health": "tsx scripts/workgraph-maintenance.ts health",
     "workgraph:snapshot": "tsx scripts/workgraph-maintenance.ts snapshot",
     "workgraph:compact": "tsx scripts/workgraph-maintenance.ts compact",
     "workgraph:recover": "tsx scripts/workgraph-maintenance.ts recover"
