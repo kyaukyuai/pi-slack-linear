@@ -604,6 +604,7 @@ export async function handleManagerMessage(
     return handleManagerQuery({
       repositories,
       kind: queryKind,
+      message,
       now,
       env,
     });

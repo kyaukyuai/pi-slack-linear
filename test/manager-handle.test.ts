@@ -658,6 +658,149 @@ describe("handleManagerMessage clarification flow", () => {
     expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
   });
 
+  it("inspects the status of a thread-linked issue for conversational status questions", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-701",
+      identifier: "AIC-701",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-701",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-started", name: "Started", type: "started" },
+      dueDate: "2026-03-21",
+      priority: 2,
+      priorityLabel: "High",
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-inspect",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+      },
+      new Date("2026-03-19T01:00:00.000Z"),
+    );
+    piSessionMocks.runTaskPlanningTurn.mockClear();
+
+    linearMocks.getLinearIssue.mockResolvedValueOnce({
+      id: "issue-701",
+      identifier: "AIC-701",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-701",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-started", name: "Started", type: "started" },
+      dueDate: "2026-03-21",
+      priority: 2,
+      priorityLabel: "High",
+      cycle: { id: "cycle-1", name: "Sprint 3" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-inspect",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "この件どうなってる？",
+      },
+      new Date("2026-03-19T01:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("AIC-701");
+    expect(result.reply).toContain("状況を確認しました。");
+    expect(result.reply).toContain("状態は Started です。");
+    expect(result.reply).toContain("期限は 2026-03-21 です。");
+    expect(result.reply).toContain("優先度は High です。");
+    expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
+  });
+
+  it("searches for existing issues before new creation when asked conversationally", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-801",
+      identifier: "AIC-801",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-801",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-started", name: "Started", type: "started" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-search-existing",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "OPT社の社内チャネルに招待してもらうタスクを追加して",
+      },
+      new Date("2026-03-19T01:00:00.000Z"),
+    );
+    piSessionMocks.runTaskPlanningTurn.mockClear();
+
+    linearMocks.searchLinearIssues.mockResolvedValueOnce([
+      {
+        id: "issue-900",
+        identifier: "AIC-900",
+        title: "OPT社の社内チャネルへの招待依頼",
+        url: "https://linear.app/kyaukyuai/issue/AIC-900",
+        assignee: { id: "user-2", displayName: "t.tahira" },
+        state: { id: "state-started", name: "Started", type: "started" },
+        dueDate: "2026-03-22",
+        relations: [],
+        inverseRelations: [],
+      },
+      {
+        id: "issue-901",
+        identifier: "AIC-901",
+        title: "OPT社の社内チャネル参加依頼",
+        url: "https://linear.app/kyaukyuai/issue/AIC-901",
+        assignee: { id: "user-1", displayName: "y.kakui" },
+        state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-search-existing",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "既存 issue あったっけ？",
+      },
+      new Date("2026-03-19T01:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(linearMocks.searchLinearIssues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "OPT社の社内チャネルへの招待依頼",
+        limit: 5,
+      }),
+      expect.any(Object),
+    );
+    expect(result.reply).toContain("近い既存 issue が複数見つかりました。");
+    expect(result.reply).toContain("AIC-900");
+    expect(result.reply).toContain("AIC-901");
+    expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
+  });
+
   it("updates a unique thread-linked issue when the user reports progress", async () => {
     linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
       id: "issue-1",
