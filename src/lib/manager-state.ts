@@ -106,7 +106,7 @@ function mergeSchedulerJob(existing: SchedulerJob | undefined, desired: Schedule
 export async function ensureManagerSystemFiles(paths: SystemPaths): Promise<void> {
   await ensureJsonFile(paths.policyFile, DEFAULT_POLICY);
   await ensureJsonFile(paths.ownerMapFile, DEFAULT_OWNER_MAP);
-  await ensureJsonFile(paths.intakeLedgerFile, []);
+  await ensureJsonFile(paths.compatIntakeLedgerFile, []);
   await ensureJsonFile(paths.followupsFile, []);
   await ensureJsonFile(paths.planningLedgerFile, []);
   await ensureTextFile(paths.workgraphEventsFile, "");

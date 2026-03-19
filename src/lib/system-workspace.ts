@@ -9,7 +9,7 @@ export interface SystemPaths {
   heartbeatPromptFile: string;
   policyFile: string;
   ownerMapFile: string;
-  intakeLedgerFile: string;
+  compatIntakeLedgerFile: string;
   followupsFile: string;
   planningLedgerFile: string;
   workgraphEventsFile: string;
@@ -101,7 +101,7 @@ export function buildSystemPaths(workspaceDir: string): SystemPaths {
     heartbeatPromptFile: join(rootDir, "HEARTBEAT.md"),
     policyFile: join(rootDir, "policy.json"),
     ownerMapFile: join(rootDir, "owner-map.json"),
-    intakeLedgerFile: join(rootDir, "intake-ledger.json"),
+    compatIntakeLedgerFile: join(rootDir, "intake-ledger.json"),
     followupsFile: join(rootDir, "followups.json"),
     planningLedgerFile: join(rootDir, "planning-ledger.json"),
     workgraphEventsFile: join(rootDir, "workgraph-events.jsonl"),

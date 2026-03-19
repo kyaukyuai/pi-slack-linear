@@ -90,7 +90,7 @@ export function createFileBackedManagerRepositories(paths: SystemPaths): Manager
   return {
     policy: createReadonlyJsonRepository(paths.policyFile, managerPolicySchema, DEFAULT_POLICY),
     ownerMap: createReadonlyJsonRepository(paths.ownerMapFile, ownerMapSchema, DEFAULT_OWNER_MAP),
-    compatIntake: createMutableJsonRepository(paths.intakeLedgerFile, compatIntakeLedgerSchema, []),
+    compatIntake: createMutableJsonRepository(paths.compatIntakeLedgerFile, compatIntakeLedgerSchema, []),
     followups: createMutableJsonRepository(paths.followupsFile, followupsLedgerSchema, []),
     planning: createMutableJsonRepository(paths.planningLedgerFile, planningLedgerSchema, []),
     workgraph: createFileBackedWorkgraphRepository(paths),
