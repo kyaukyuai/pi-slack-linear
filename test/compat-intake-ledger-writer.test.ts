@@ -10,7 +10,7 @@ describe("compat intake ledger writer", () => {
   it("persists compatibility entries without exposing intake schema to orchestrators", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "pi-slack-linear-compat-intake-"));
     const repositories = createFileBackedManagerRepositories(buildSystemPaths(workspaceDir));
-    const writer = createCompatIntakeLedgerWriter(repositories.intake, {
+    const writer = createCompatIntakeLedgerWriter(repositories.compatIntake, {
       fingerprintText: (text) => text.trim().toLowerCase().replace(/\s+/g, "-"),
       nowIso: (now) => now.toISOString(),
     });
@@ -42,7 +42,7 @@ describe("compat intake ledger writer", () => {
       now: new Date("2026-03-19T01:05:00.000Z"),
     });
 
-    await expect(repositories.intake.load()).resolves.toEqual([
+    await expect(repositories.compatIntake.load()).resolves.toEqual([
       expect.objectContaining({
         sourceChannelId: "C123",
         sourceThreadTs: "thread-1",

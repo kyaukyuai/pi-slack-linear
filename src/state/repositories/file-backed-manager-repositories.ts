@@ -30,14 +30,14 @@ export interface MutableRepository<T> extends ReadonlyRepository<T> {
 
 export type PolicyRepository = ReadonlyRepository<ManagerPolicy>;
 export type OwnerMapRepository = ReadonlyRepository<OwnerMap>;
-export type IntakeRepository = MutableRepository<CompatIntakeLedgerEntry[]>;
+export type CompatIntakeRepository = MutableRepository<CompatIntakeLedgerEntry[]>;
 export type FollowupRepository = MutableRepository<FollowupLedgerEntry[]>;
 export type PlanningRepository = MutableRepository<PlanningLedgerEntry[]>;
 
 export interface ManagerRepositories {
   policy: PolicyRepository;
   ownerMap: OwnerMapRepository;
-  intake: IntakeRepository;
+  compatIntake: CompatIntakeRepository;
   followups: FollowupRepository;
   planning: PlanningRepository;
   workgraph: WorkgraphRepository;
@@ -90,7 +90,7 @@ export function createFileBackedManagerRepositories(paths: SystemPaths): Manager
   return {
     policy: createReadonlyJsonRepository(paths.policyFile, managerPolicySchema, DEFAULT_POLICY),
     ownerMap: createReadonlyJsonRepository(paths.ownerMapFile, ownerMapSchema, DEFAULT_OWNER_MAP),
-    intake: createMutableJsonRepository(paths.intakeLedgerFile, compatIntakeLedgerSchema, []),
+    compatIntake: createMutableJsonRepository(paths.intakeLedgerFile, compatIntakeLedgerSchema, []),
     followups: createMutableJsonRepository(paths.followupsFile, followupsLedgerSchema, []),
     planning: createMutableJsonRepository(paths.planningLedgerFile, planningLedgerSchema, []),
     workgraph: createFileBackedWorkgraphRepository(paths),

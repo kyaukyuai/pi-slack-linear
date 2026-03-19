@@ -3,12 +3,12 @@ import { createFileBackedManagerRepositories } from "../repositories/file-backed
 import type { CompatIntakeLedgerEntry } from "./intake-ledger-contract.js";
 
 export async function loadCompatIntakeLedger(paths: SystemPaths): Promise<CompatIntakeLedgerEntry[]> {
-  return createFileBackedManagerRepositories(paths).intake.load();
+  return createFileBackedManagerRepositories(paths).compatIntake.load();
 }
 
 export async function saveCompatIntakeLedger(
   paths: SystemPaths,
   ledger: CompatIntakeLedgerEntry[],
 ): Promise<void> {
-  await createFileBackedManagerRepositories(paths).intake.save(ledger);
+  await createFileBackedManagerRepositories(paths).compatIntake.save(ledger);
 }

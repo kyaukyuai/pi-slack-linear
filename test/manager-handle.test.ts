@@ -409,7 +409,7 @@ describe("handleManagerMessage clarification flow", () => {
     expect(first.handled).toBe(true);
     expect(first.reply).toContain("起票前に確認したい点があります");
 
-    await repositories.intake.save([]);
+    await repositories.compatIntake.save([]);
 
     linearMocks.createManagedLinearIssueBatch.mockResolvedValueOnce({
       parent: {
@@ -495,7 +495,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(first.handled).toBe(true);
-    await repositories.intake.save([]);
+    await repositories.compatIntake.save([]);
 
     const second = await handleManagerMessage(
       { ...config, workspaceDir },

@@ -24,7 +24,7 @@ describe("file-backed manager repositories", () => {
     await expect(repositories.ownerMap.load()).resolves.toMatchObject({
       defaultOwner: "kyaukyuai",
     });
-    await expect(repositories.intake.load()).resolves.toEqual([]);
+    await expect(repositories.compatIntake.load()).resolves.toEqual([]);
     await expect(repositories.followups.load()).resolves.toEqual([]);
     await expect(repositories.planning.load()).resolves.toEqual([]);
     await expect(repositories.workgraph.list()).resolves.toEqual([]);
@@ -74,7 +74,7 @@ describe("file-backed manager repositories", () => {
       },
     ];
 
-    await repositories.intake.save(intakeLedger);
+    await repositories.compatIntake.save(intakeLedger);
     await repositories.followups.save(followups);
     await repositories.planning.save(planningLedger);
 

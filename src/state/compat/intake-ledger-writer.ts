@@ -1,5 +1,5 @@
 import type { CompatIntakeLedgerEntry } from "./intake-ledger-contract.js";
-import type { IntakeRepository, ManagerRepositories } from "../repositories/file-backed-manager-repositories.js";
+import type { CompatIntakeRepository, ManagerRepositories } from "../repositories/file-backed-manager-repositories.js";
 
 interface ThreadScopedMessage {
   channelId: string;
@@ -121,7 +121,7 @@ function upsertThreadIntakeEntry(
 }
 
 async function replaceThreadPendingClarificationEntries(
-  repository: IntakeRepository,
+  repository: CompatIntakeRepository,
   message: ThreadScopedMessage,
   replacements: CompatIntakeLedgerEntry[],
 ): Promise<void> {
@@ -134,7 +134,7 @@ async function replaceThreadPendingClarificationEntries(
 }
 
 async function savePatchedThreadIntakeEntry(
-  repository: IntakeRepository,
+  repository: CompatIntakeRepository,
   message: ThreadMessage,
   patch: Partial<CompatIntakeLedgerEntry>,
   now: Date,
@@ -146,7 +146,7 @@ async function savePatchedThreadIntakeEntry(
 }
 
 export function createCompatIntakeLedgerWriter(
-  repository: IntakeRepository,
+  repository: CompatIntakeRepository,
   support: CompatIntakeLedgerWriterSupport,
 ): CompatIntakeLedgerWriter {
   return {
@@ -262,8 +262,8 @@ export function createCompatIntakeLedgerWriter(
 }
 
 export function createCompatIntakeLedgerWriterFromRepositories(
-  repositories: Pick<ManagerRepositories, "intake">,
+  repositories: Pick<ManagerRepositories, "compatIntake">,
   support: CompatIntakeLedgerWriterSupport,
 ): CompatIntakeLedgerWriter {
-  return createCompatIntakeLedgerWriter(repositories.intake, support);
+  return createCompatIntakeLedgerWriter(repositories.compatIntake, support);
 }
