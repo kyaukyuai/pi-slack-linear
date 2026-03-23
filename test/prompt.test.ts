@@ -77,6 +77,7 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("If Notion tools are available, use them as read-only reference material for specs, notes, and operating context.");
     expect(prompt).toContain("For reference-material replies that mention multiple Notion pages or documents, use short bullet lines and include markdown links when URLs are available.");
     expect(prompt).toContain("When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.");
+    expect(prompt).toContain("When the relevant Notion information is structured in a database, prefer notion_search_databases and notion_query_database over broad page summarization.");
     expect(prompt).toContain("Do not use markdown headings, separator lines, report-style sections, warning icons, or emojis in public Slack replies.");
     expect(prompt).toContain("If the user says things like 他には / ほかには / 他のタスク after a list or prioritization reply in the same thread");
   });

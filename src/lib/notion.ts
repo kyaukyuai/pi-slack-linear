@@ -21,6 +21,15 @@ export interface NotionPageSummary {
   icon?: unknown;
 }
 
+export interface NotionDatabaseSummary {
+  id: string;
+  object: string;
+  url?: string | null;
+  title?: string;
+  lastEditedTime?: string | null;
+  description?: string;
+}
+
 export interface NotionPageFacts extends NotionPageSummary {
   createdTime?: string | null;
   createdBy?: unknown;
@@ -41,6 +50,24 @@ export interface NotionPageContentLine {
 export interface NotionPageContent extends NotionPageSummary {
   lines: NotionPageContentLine[];
   excerpt: string;
+}
+
+export interface QueryNotionDatabaseInput {
+  databaseId: string;
+  pageSize?: number;
+}
+
+export interface NotionDatabaseRowSummary {
+  id: string;
+  object: string;
+  url?: string | null;
+  title?: string;
+  lastEditedTime?: string | null;
+  properties?: Record<string, unknown>;
+}
+
+export interface NotionDatabaseQueryResult extends NotionDatabaseSummary {
+  rows: NotionDatabaseRowSummary[];
 }
 
 function ensureNotionAuthConfigured(env: NotionCommandEnv = process.env): void {
@@ -128,6 +155,14 @@ function extractPageTitle(properties: unknown): string | undefined {
   return undefined;
 }
 
+function extractDatabaseTitle(value: unknown): string | undefined {
+  return firstRichTextPlainText(value);
+}
+
+function extractDatabaseDescription(value: unknown): string | undefined {
+  return firstRichTextPlainText(value);
+}
+
 function normalizePageSummary(raw: Record<string, unknown>): NotionPageSummary {
   return {
     id: String(raw.id ?? ""),
@@ -137,6 +172,17 @@ function normalizePageSummary(raw: Record<string, unknown>): NotionPageSummary {
     lastEditedTime: typeof raw.last_edited_time === "string" ? raw.last_edited_time : null,
     parent: raw.parent,
     icon: raw.icon,
+  };
+}
+
+function normalizeDatabaseSummary(raw: Record<string, unknown>): NotionDatabaseSummary {
+  return {
+    id: String(raw.id ?? ""),
+    object: String(raw.object ?? "unknown"),
+    url: typeof raw.url === "string" ? raw.url : null,
+    title: extractDatabaseTitle(raw.title),
+    lastEditedTime: typeof raw.last_edited_time === "string" ? raw.last_edited_time : null,
+    description: extractDatabaseDescription(raw.description),
   };
 }
 
@@ -209,6 +255,22 @@ export function buildSearchNotionArgs(input: SearchNotionInput): string[] {
   return ["api", "/v1/search", "--data", JSON.stringify(payload)];
 }
 
+export function buildSearchNotionDatabasesArgs(input: SearchNotionInput): string[] {
+  const query = input.query.trim();
+  if (!query) throw new Error("Search query is required");
+
+  const payload = {
+    query,
+    page_size: input.pageSize ?? 10,
+    filter: {
+      property: "object",
+      value: "database",
+    },
+  };
+
+  return ["api", "/v1/search", "--data", JSON.stringify(payload)];
+}
+
 export function buildGetNotionPageArgs(pageId: string): string[] {
   const trimmed = pageId.trim();
   if (!trimmed) throw new Error("Notion page ID is required");
@@ -225,6 +287,26 @@ export function buildListNotionBlockChildrenArgs(pageId: string, startCursor?: s
   return ["api", `/v1/blocks/${trimmed}/children?${search.toString()}`];
 }
 
+export function buildGetNotionDatabaseArgs(databaseId: string): string[] {
+  const trimmed = databaseId.trim();
+  if (!trimmed) throw new Error("Notion database ID is required");
+  return ["api", `/v1/databases/${trimmed}`];
+}
+
+export function buildQueryNotionDatabaseArgs(input: QueryNotionDatabaseInput, startCursor?: string): string[] {
+  const databaseId = input.databaseId.trim();
+  if (!databaseId) throw new Error("Notion database ID is required");
+
+  const payload: Record<string, unknown> = {
+    page_size: input.pageSize ?? 10,
+  };
+  if (startCursor?.trim()) {
+    payload.start_cursor = startCursor.trim();
+  }
+
+  return ["api", `/v1/databases/${databaseId}/query`, "--data", JSON.stringify(payload)];
+}
+
 export async function searchNotionPages(
   input: SearchNotionInput,
   env: NotionCommandEnv = process.env,
@@ -238,6 +320,21 @@ export async function searchNotionPages(
   return (payload.results ?? [])
     .filter((item) => item.object === "page")
     .map((item) => normalizePageSummary(item));
+}
+
+export async function searchNotionDatabases(
+  input: SearchNotionInput,
+  env: NotionCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<NotionDatabaseSummary[]> {
+  const payload = await execNotionJson<{ results?: Array<Record<string, unknown>> }>(
+    buildSearchNotionDatabasesArgs(input),
+    env,
+    signal,
+  );
+  return (payload.results ?? [])
+    .filter((item) => item.object === "database")
+    .map((item) => normalizeDatabaseSummary(item));
 }
 
 export async function getNotionPageFacts(
@@ -346,5 +443,129 @@ export async function getNotionPageContent(
     icon: facts.icon,
     lines,
     excerpt: buildExcerpt(lines),
+  };
+}
+
+function simplifyNotionPropertyValue(property: Record<string, unknown>): unknown {
+  const type = typeof property.type === "string" ? property.type : undefined;
+  if (!type) return undefined;
+
+  switch (type) {
+    case "title":
+      return firstRichTextPlainText(property.title);
+    case "rich_text":
+      return firstRichTextPlainText(property.rich_text);
+    case "select":
+      return property.select && typeof property.select === "object"
+        ? (property.select as Record<string, unknown>).name
+        : undefined;
+    case "multi_select":
+      return Array.isArray(property.multi_select)
+        ? property.multi_select
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+          .map((entry) => entry.name)
+          .filter((entry): entry is string => typeof entry === "string")
+        : [];
+    case "status":
+      return property.status && typeof property.status === "object"
+        ? (property.status as Record<string, unknown>).name
+        : undefined;
+    case "date":
+      return property.date && typeof property.date === "object"
+        ? {
+            start: (property.date as Record<string, unknown>).start,
+            end: (property.date as Record<string, unknown>).end,
+          }
+        : undefined;
+    case "people":
+      return Array.isArray(property.people)
+        ? property.people
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+          .map((entry) => entry.name ?? entry.id)
+          .filter((entry): entry is string => typeof entry === "string")
+        : [];
+    case "checkbox":
+      return Boolean(property.checkbox);
+    case "number":
+      return typeof property.number === "number" ? property.number : undefined;
+    case "url":
+    case "email":
+    case "phone_number":
+      return typeof property[type] === "string" ? property[type] : undefined;
+    case "relation":
+      return Array.isArray(property.relation)
+        ? property.relation
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+          .map((entry) => entry.id)
+          .filter((entry): entry is string => typeof entry === "string")
+        : [];
+    case "formula": {
+      const formula = property.formula;
+      if (!formula || typeof formula !== "object") return undefined;
+      const formulaRecord = formula as Record<string, unknown>;
+      const formulaType = typeof formulaRecord.type === "string" ? formulaRecord.type : undefined;
+      if (!formulaType) return undefined;
+      return formulaRecord[formulaType];
+    }
+    default:
+      return undefined;
+  }
+}
+
+function simplifyNotionPageProperties(properties: unknown): Record<string, unknown> | undefined {
+  if (!properties || typeof properties !== "object") {
+    return undefined;
+  }
+
+  const entries = Object.entries(properties as Record<string, unknown>)
+    .map(([key, value]) => {
+      if (!value || typeof value !== "object") {
+        return [key, undefined] as const;
+      }
+      return [key, simplifyNotionPropertyValue(value as Record<string, unknown>)] as const;
+    })
+    .filter(([, value]) => value !== undefined);
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
+}
+
+function normalizeDatabaseRowSummary(raw: Record<string, unknown>): NotionDatabaseRowSummary {
+  return {
+    id: String(raw.id ?? ""),
+    object: String(raw.object ?? "unknown"),
+    url: typeof raw.url === "string" ? raw.url : null,
+    title: extractPageTitle(raw.properties),
+    lastEditedTime: typeof raw.last_edited_time === "string" ? raw.last_edited_time : null,
+    properties: simplifyNotionPageProperties(raw.properties),
+  };
+}
+
+export async function queryNotionDatabase(
+  input: QueryNotionDatabaseInput,
+  env: NotionCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<NotionDatabaseQueryResult> {
+  const [database, payload] = await Promise.all([
+    execNotionJson<Record<string, unknown>>(
+      buildGetNotionDatabaseArgs(input.databaseId),
+      env,
+      signal,
+    ),
+    execNotionJson<{ results?: Array<Record<string, unknown>> }>(
+      buildQueryNotionDatabaseArgs(input),
+      env,
+      signal,
+    ),
+  ]);
+
+  return {
+    ...normalizeDatabaseSummary(database),
+    rows: (payload.results ?? [])
+      .filter((item) => item.object === "page")
+      .map((item) => normalizeDatabaseRowSummary(item)),
   };
 }

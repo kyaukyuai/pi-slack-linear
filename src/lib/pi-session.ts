@@ -302,6 +302,7 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "If Notion tools are available, use them as read-only reference material for specs, notes, and operating context. Do not treat Notion as the task system of record.",
     "For reference-material replies that mention multiple Notion pages or documents, use short bullet lines and include markdown links when URLs are available.",
     "When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.",
+    "When the relevant Notion information is structured in a database, prefer notion_search_databases and notion_query_database over broad page summarization.",
     "For reviews and heartbeat-style summaries, prefer one concrete follow-up request over broad list-making.",
     "Use raw facts tools for priority and review judgments. Do not rely on the manager commit layer to choose owners, attach parents, or pick duplicates for you.",
     "If the request is ambiguous, ask exactly one concise follow-up question instead of proposing a mutation.",

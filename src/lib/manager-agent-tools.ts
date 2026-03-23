@@ -13,6 +13,8 @@ import {
 import {
   getNotionPageContent,
   getNotionPageFacts,
+  queryNotionDatabase,
+  searchNotionDatabases,
   searchNotionPages,
   type NotionCommandEnv,
 } from "./notion.js";
@@ -120,6 +122,78 @@ function formatNotionPageContentText(page: {
     page.excerpt ? `Excerpt: ${page.excerpt}` : undefined,
     ...(bodyLines.length > 0 ? ["Page lines:", ...bodyLines.map((line) => `- ${line}`)] : []),
   ].filter(Boolean).join("\n");
+}
+
+function formatNotionDatabaseLabel(database: {
+  title?: string;
+  url?: string | null;
+  lastEditedTime?: string | null;
+  description?: string;
+}): string {
+  const title = database.title?.trim() || "Untitled database";
+  const linkedTitle = database.url ? `[${title}](${database.url})` : title;
+  const edited = formatDateLabel(database.lastEditedTime);
+  const description = database.description?.trim();
+  const suffix = [edited ? `最終更新: ${edited}` : undefined, description].filter(Boolean).join(" / ");
+  return suffix ? `${linkedTitle}（${suffix}）` : linkedTitle;
+}
+
+function formatNotionDatabaseSearchResultText(
+  databases: Array<{
+    title?: string;
+    url?: string | null;
+    lastEditedTime?: string | null;
+    description?: string;
+  }>,
+): string {
+  if (databases.length === 0) {
+    return "No matching Notion databases found.";
+  }
+  return [
+    "Notion databases:",
+    ...databases.map((database) => `- ${formatNotionDatabaseLabel(database)}`),
+  ].join("\n");
+}
+
+function formatNotionDatabaseRow(row: {
+  title?: string;
+  url?: string | null;
+  properties?: Record<string, unknown>;
+}): string {
+  const title = row.title?.trim() || "Untitled row";
+  const linkedTitle = row.url ? `[${title}](${row.url})` : title;
+  const propertySummary = Object.entries(row.properties ?? {})
+    .slice(0, 4)
+    .map(([key, value]) => {
+      if (Array.isArray(value)) {
+        return `${key}: ${value.join(", ")}`;
+      }
+      if (value && typeof value === "object") {
+        return `${key}: ${formatJsonDetails(value)}`;
+      }
+      return `${key}: ${String(value)}`;
+    })
+    .join(" / ");
+  return propertySummary ? `${linkedTitle}（${propertySummary}）` : linkedTitle;
+}
+
+function formatNotionDatabaseQueryText(result: {
+  title?: string;
+  url?: string | null;
+  lastEditedTime?: string | null;
+  description?: string;
+  rows: Array<{
+    title?: string;
+    url?: string | null;
+    properties?: Record<string, unknown>;
+  }>;
+}): string {
+  return [
+    `Database: ${formatNotionDatabaseLabel(result)}`,
+    result.rows.length > 0
+      ? ["Rows:", ...result.rows.slice(0, 5).map((row) => `- ${formatNotionDatabaseRow(row)}`)].join("\n")
+      : "Rows: (none)",
+  ].join("\n");
 }
 
 function businessDaysSince(leftIso: string | null | undefined, right = new Date()): number | undefined {
@@ -399,6 +473,23 @@ function createNotionReadTools(config: AppConfig): ToolDefinition[] {
       },
     },
     {
+      name: "notion_search_databases",
+      label: "Notion Search Databases",
+      description: "Search Notion databases as raw facts. Read-only.",
+      promptSnippet: "Use this when the answer likely lives in a structured Notion database rather than a page.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search text." }),
+        pageSize: Type.Optional(Type.Number({ description: "Maximum number of databases to return." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const databases = await searchNotionDatabases(params as { query: string; pageSize?: number }, env, signal);
+        return {
+          content: [{ type: "text", text: formatNotionDatabaseSearchResultText(databases) }],
+          details: databases,
+        };
+      },
+    },
+    {
       name: "notion_get_page_facts",
       label: "Notion Get Page Facts",
       description: "Load one Notion page as raw facts. Read-only.",
@@ -427,6 +518,23 @@ function createNotionReadTools(config: AppConfig): ToolDefinition[] {
         return {
           content: [{ type: "text", text: formatNotionPageContentText(page) }],
           details: page,
+        };
+      },
+    },
+    {
+      name: "notion_query_database",
+      label: "Notion Query Database",
+      description: "Load one Notion database and return a small read-only row sample.",
+      promptSnippet: "Use this after selecting a relevant Notion database when you need structured rows instead of free-form page text.",
+      parameters: Type.Object({
+        databaseId: Type.String({ description: "Notion database ID." }),
+        pageSize: Type.Optional(Type.Number({ description: "Maximum number of rows to return." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const result = await queryNotionDatabase(params as { databaseId: string; pageSize?: number }, env, signal);
+        return {
+          content: [{ type: "text", text: formatNotionDatabaseQueryText(result) }],
+          details: result,
         };
       },
     },
