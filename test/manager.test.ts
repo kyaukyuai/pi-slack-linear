@@ -91,6 +91,7 @@ describe("manager helpers", () => {
     expect(classifyManagerQuery("この件どうなってる？")).toBe("inspect-work");
     expect(classifyManagerQuery("AIC-38 の状況は？")).toBe("inspect-work");
     expect(classifyManagerQuery("既存 issue あったっけ？")).toBe("search-existing");
+    expect(classifyManagerQuery("Notion を確認して")).toBeUndefined();
   });
 
   it("extracts task segments from bullet lists", () => {

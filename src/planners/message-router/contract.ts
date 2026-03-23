@@ -7,6 +7,7 @@ export const managerQueryKindSchema = z.enum([
   "inspect-work",
   "search-existing",
   "recommend-next-step",
+  "reference-material",
 ]);
 
 export const managerQueryScopeSchema = z.enum(["self", "team", "thread-context"]);
@@ -80,7 +81,7 @@ export interface MessageRouterThreadContext {
 }
 
 export interface MessageRouterLastQueryContext {
-  kind: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step";
+  kind: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step" | "reference-material";
   scope: "self" | "team" | "thread-context";
   userMessage: string;
   replySummary: string;
@@ -112,7 +113,7 @@ export interface MessageRouterConversationResult {
 
 export interface MessageRouterQueryResult {
   action: "query";
-  queryKind: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step";
+  queryKind: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step" | "reference-material";
   queryScope: "self" | "team" | "thread-context";
   confidence: number;
   reasoningSummary: string;

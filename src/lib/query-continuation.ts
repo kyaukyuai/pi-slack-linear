@@ -8,7 +8,8 @@ export type ThreadQueryKind =
   | "what-should-i-do"
   | "inspect-work"
   | "search-existing"
-  | "recommend-next-step";
+  | "recommend-next-step"
+  | "reference-material";
 
 export type ThreadQueryScope = "self" | "team" | "thread-context";
 
@@ -34,7 +35,8 @@ function isThreadQueryKind(value: unknown): value is ThreadQueryKind {
     || value === "what-should-i-do"
     || value === "inspect-work"
     || value === "search-existing"
-    || value === "recommend-next-step";
+    || value === "recommend-next-step"
+    || value === "reference-material";
 }
 
 function isThreadQueryScope(value: unknown): value is ThreadQueryScope {

@@ -1510,7 +1510,7 @@ describe("handleManagerMessage clarification flow", () => {
             details: {
               intentReport: {
                 intent: "query",
-                queryKind: "search-existing",
+                queryKind: "reference-material",
                 queryScope: "team",
                 confidence: 0.84,
                 summary: "Notion の確認依頼です。",
@@ -1522,7 +1522,7 @@ describe("handleManagerMessage clarification flow", () => {
         invalidProposalCount: 0,
         intentReport: {
           intent: "query",
-          queryKind: "search-existing",
+          queryKind: "reference-material",
           queryScope: "team",
           confidence: 0.84,
           summary: "Notion の確認依頼です。",

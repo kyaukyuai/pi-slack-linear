@@ -35,7 +35,8 @@ export type ManagerQueryKind =
   | "what-should-i-do"
   | "inspect-work"
   | "search-existing"
-  | "recommend-next-step";
+  | "recommend-next-step"
+  | "reference-material";
 
 export interface QueryContinuationSnapshot {
   issueIds: string[];
@@ -945,6 +946,13 @@ export async function handleManagerQuery({
   const viewerDisplayLabel = viewerAssignee ? `${viewerAssignee} さんの担当` : undefined;
   const preferViewerOwned = shouldPreferViewerOwned(kind, queryScope, message.text, viewerAssignee);
   const viewerMappingMissing = !viewerAssignee && (queryScope === "self" || kind === "list-today" || kind === "what-should-i-do" || SELF_WORK_PATTERN.test(message.text));
+
+  if (kind === "reference-material") {
+    return {
+      handled: true,
+      reply: "いまは参照資料の内容を安全に確定できないため、確認したい Notion や資料名をもう少し具体的に教えてください。",
+    };
+  }
 
   if (kind === "recommend-next-step") {
     const resolution = await resolveInspectIssue(repositories.workgraph, workspaceDir, message);

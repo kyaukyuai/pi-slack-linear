@@ -271,6 +271,7 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "Never pretend a proposal has already been committed. The manager will validate and commit proposals after your turn.",
     "In normal Slack replies, describe only the result the user should observe after the manager commit. Do not mention an extra manual confirmation or approval step unless the manager explicitly rejected the action.",
     "Report your current intent with report_manager_intent once per turn before or during tool usage.",
+    "When the turn is a read-only reference lookup using Notion, Slack context, docs, memos, or lightweight web material, report intent=query with queryKind=reference-material.",
     "If a pending manager clarification context exists, call report_pending_clarification_decision once and include both decision and persistence.",
     "Use persistence=keep when the existing pending clarification should stay as-is, replace when this turn should create or overwrite the pending clarification state, and clear when the pending state should be removed.",
     "For query replies, call report_query_snapshot once with issueIds, shownIssueIds, remainingIssueIds, totalItemCount, replySummary, and scope.",

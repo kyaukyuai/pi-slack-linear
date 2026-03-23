@@ -122,7 +122,7 @@ function createIntentReportTool(): ToolDefinition {
     promptSnippet: "Call this early to tell the manager what kind of turn this is.",
     parameters: Type.Object({
       intent: Type.String({ description: "conversation | query | create_work | update_progress | update_completed | update_blocked | followup_resolution | review | heartbeat | scheduler" }),
-      queryKind: Type.Optional(Type.String({ description: "Optional query subtype." })),
+      queryKind: Type.Optional(Type.String({ description: "Optional query subtype: list-active | list-today | what-should-i-do | inspect-work | search-existing | recommend-next-step | reference-material." })),
       queryScope: Type.Optional(Type.String({ description: "Optional query scope self | team | thread-context." })),
       confidence: Type.Optional(Type.Number({ description: "Confidence between 0 and 1." })),
       summary: Type.Optional(Type.String({ description: "One short sentence explaining the intent." })),

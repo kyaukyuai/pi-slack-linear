@@ -225,7 +225,7 @@ export interface ManagerIntentReport {
     | "review"
     | "heartbeat"
     | "scheduler";
-  queryKind?: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step";
+  queryKind?: "list-active" | "list-today" | "what-should-i-do" | "inspect-work" | "search-existing" | "recommend-next-step" | "reference-material";
   queryScope?: "self" | "team" | "thread-context";
   confidence?: number;
   summary?: string;
@@ -556,6 +556,7 @@ export function extractIntentReport(toolCalls: ManagerAgentToolCall[]): ManagerI
         "inspect-work",
         "search-existing",
         "recommend-next-step",
+        "reference-material",
       ]).optional(),
       queryScope: z.enum(["self", "team", "thread-context"]).optional(),
       confidence: z.number().min(0).max(1).optional(),

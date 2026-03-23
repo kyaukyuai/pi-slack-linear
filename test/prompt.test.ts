@@ -316,7 +316,7 @@ describe("prompt helpers", () => {
     });
 
     expect(prompt).toContain("Reply with a single JSON object only.");
-    expect(prompt).toContain('"queryKind":"list-active"|"list-today"|"what-should-i-do"|"inspect-work"|"search-existing"|"recommend-next-step"');
+    expect(prompt).toContain('"queryKind":"list-active"|"list-today"|"what-should-i-do"|"inspect-work"|"search-existing"|"recommend-next-step"|"reference-material"');
     expect(prompt).toContain("Last query continuation context:");
     expect(prompt).toContain("- kind: what-should-i-do");
     expect(prompt).toContain('Example: "他にはどのようなタスクがある？" after a task-list reply in the same thread');

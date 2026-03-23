@@ -262,6 +262,44 @@ async function buildQueryTurn(
     };
   };
 
+  if (router.queryKind === "reference-material") {
+    const reply = args.buildReply({
+      kind: "reference-material",
+      facts: {
+        source: /notion|ノーション/i.test(input.text) ? "notion" : "reference",
+      },
+    }).reply;
+    return {
+      reply,
+      toolCalls: [
+        buildIntentToolCall({
+          intent: "query",
+          queryKind: "reference-material",
+          queryScope: router.queryScope,
+          confidence: router.confidence,
+          summary: router.reasoningSummary,
+        }),
+        buildQuerySnapshotToolCall({
+          issueIds: [],
+          shownIssueIds: [],
+          remainingIssueIds: [],
+          totalItemCount: 0,
+          replySummary: summarizeSlackReply(reply),
+          scope: router.queryScope,
+        }),
+      ],
+      proposals: [],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "query",
+        queryKind: "reference-material",
+        queryScope: router.queryScope,
+        confidence: router.confidence,
+        summary: router.reasoningSummary,
+      },
+    };
+  }
+
   if (router.queryKind === "search-existing") {
     const query = (() => {
       const explicit = input.text.replace(/(?:既存|issue|タスク|ある|あったっけ|探して|検索して|\?|？)/g, "").trim();
