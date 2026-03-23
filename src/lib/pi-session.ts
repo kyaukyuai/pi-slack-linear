@@ -275,8 +275,10 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "If a pending manager clarification context exists, call report_pending_clarification_decision once and include both decision and persistence.",
     "Use persistence=keep when the existing pending clarification should stay as-is, replace when this turn should create or overwrite the pending clarification state, and clear when the pending state should be removed.",
     "For query replies, call report_query_snapshot once with issueIds, shownIssueIds, remainingIssueIds, totalItemCount, replySummary, and scope.",
+    "For reference-material query replies, also include referenceItems in report_query_snapshot with id, title, url, and source for each page or document you surfaced.",
     "A query reply without report_query_snapshot is unsafe and will be rejected by the manager.",
     "When answering list or prioritization queries, include remainingIssueIds in report_query_snapshot whenever you can infer additional relevant issues for a follow-up like 他には？.",
+    "When the last query context contains referenceItems and the user asks to look deeper into a topic, inspect those stored reference items first before running a broader new search.",
     "Prefer existing work in this order: thread-linked issue, existing parent issue, existing duplicate, then new issue.",
     "For single-issue create proposals, decide explicitly whether the issue should stay standalone or attach under the existing thread parent issue.",
     "Express that decision in propose_create_issue with threadParentHandling=attach or ignore whenever a thread parent issue exists.",
@@ -665,6 +667,11 @@ function buildManagerReplyStyleHints(
     hints.push("For task-list replies, prefer a plain conversational sentence before any bullets.");
   }
 
+  if (lastQueryContext?.kind === "reference-material" && /(?:詳しく|詳細|項目|内容|範囲|確認|見て|読んで|教えて)/.test(normalized)) {
+    hints.push("Treat this as a follow-up on the previous reference-material reply unless the user clearly changes the topic.");
+    hints.push("Use the stored referenceItems from the last query context before starting a broader new search.");
+  }
+
   if (pendingClarification?.intent === "create_work") {
     hints.push("If the latest message looks like a clarification or intent correction, treat it as a continuation of the pending create request, not as a new topic.");
   }
@@ -683,6 +690,11 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
         `- shownIssueIds: ${input.lastQueryContext.shownIssueIds.join(", ") || "(none)"}`,
         `- remainingIssueIds: ${input.lastQueryContext.remainingIssueIds.join(", ") || "(none)"}`,
         `- totalItemCount: ${input.lastQueryContext.totalItemCount}`,
+        `- referenceItems: ${input.lastQueryContext.referenceItems?.length
+          ? input.lastQueryContext.referenceItems
+            .map((item) => [item.source, item.id, item.title, item.url].filter(Boolean).join(" / "))
+            .join(" | ")
+          : "(none)"}`,
         `- previousUserMessage: ${input.lastQueryContext.userMessage || "(none)"}`,
         `- previousReplySummary: ${input.lastQueryContext.replySummary || "(none)"}`,
         `- recordedAt: ${input.lastQueryContext.recordedAt}`,

@@ -34,6 +34,14 @@ describe("thread query continuation", () => {
       shownIssueIds: ["AIC-38"],
       remainingIssueIds: ["AIC-39"],
       totalItemCount: 2,
+      referenceItems: [
+        {
+          id: "notion-page-1",
+          title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+          url: "https://www.notion.so/notion-page-1",
+          source: "notion",
+        },
+      ],
       recordedAt: "2026-03-23T00:00:00.000Z",
     });
 
@@ -46,6 +54,14 @@ describe("thread query continuation", () => {
       shownIssueIds: ["AIC-38"],
       remainingIssueIds: ["AIC-39"],
       totalItemCount: 2,
+      referenceItems: [
+        {
+          id: "notion-page-1",
+          title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+          url: "https://www.notion.so/notion-page-1",
+          source: "notion",
+        },
+      ],
       recordedAt: "2026-03-23T00:00:00.000Z",
     });
 

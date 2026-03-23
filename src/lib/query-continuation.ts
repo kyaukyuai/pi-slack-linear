@@ -13,6 +13,13 @@ export type ThreadQueryKind =
 
 export type ThreadQueryScope = "self" | "team" | "thread-context";
 
+export interface ThreadQueryReferenceItem {
+  id: string;
+  title?: string;
+  url?: string | null;
+  source?: string;
+}
+
 export interface ThreadQueryContinuation {
   kind: ThreadQueryKind;
   scope: ThreadQueryScope;
@@ -22,6 +29,7 @@ export interface ThreadQueryContinuation {
   shownIssueIds: string[];
   remainingIssueIds: string[];
   totalItemCount: number;
+  referenceItems?: ThreadQueryReferenceItem[];
   recordedAt: string;
 }
 
@@ -57,6 +65,48 @@ function normalizeIssueIdList(value: unknown): string[] {
     : [];
 }
 
+function normalizeReferenceItems(value: unknown): ThreadQueryReferenceItem[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = value.flatMap((entry): ThreadQueryReferenceItem[] => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== "string" || record.id.trim().length === 0) {
+      return [];
+    }
+
+    return [{
+      id: record.id.trim(),
+      title: typeof record.title === "string" && record.title.trim()
+        ? record.title.trim()
+        : undefined,
+      url: typeof record.url === "string"
+        ? record.url
+        : record.url === null
+          ? null
+          : undefined,
+      source: typeof record.source === "string" && record.source.trim()
+        ? record.source.trim()
+        : undefined,
+    }];
+  });
+
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const deduped = new Map<string, ThreadQueryReferenceItem>();
+  for (const item of normalized) {
+    deduped.set(item.id, item);
+  }
+  return Array.from(deduped.values());
+}
+
 export function summarizeSlackReply(text: string, maxLength = 220): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
@@ -83,6 +133,7 @@ export async function loadThreadQueryContinuation(
     const totalItemCount = typeof parsed.totalItemCount === "number" && Number.isFinite(parsed.totalItemCount) && parsed.totalItemCount >= 0
       ? Math.trunc(parsed.totalItemCount)
       : Math.max(issueIds.length, shownIssueIds.length + remainingIssueIds.length);
+    const referenceItems = normalizeReferenceItems(parsed.referenceItems);
 
     return {
       kind: parsed.kind,
@@ -93,6 +144,7 @@ export async function loadThreadQueryContinuation(
       shownIssueIds: shownIssueIds.length > 0 ? shownIssueIds : issueIds,
       remainingIssueIds,
       totalItemCount,
+      referenceItems,
       recordedAt: parsed.recordedAt,
     };
   } catch (error) {

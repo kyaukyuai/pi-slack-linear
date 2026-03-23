@@ -214,8 +214,8 @@ function createQuerySnapshotTool(): ToolDefinition {
   return {
     name: "report_query_snapshot",
     label: "Report Query Snapshot",
-    description: "Record which issue IDs were shown in a query reply and which relevant issue IDs remain for continuation.",
-    promptSnippet: "Use this once for list/prioritize/search/inspect/next-step query replies when issue IDs are available.",
+    description: "Record which items were shown in a query reply and what remains available for continuation.",
+    promptSnippet: "Use this once for every query reply. Include referenceItems for Notion/docs/web replies when documents or pages were surfaced.",
     parameters: Type.Object({
       issueIds: Type.Array(Type.String({ description: "Issue IDs explicitly shown in this reply." })),
       shownIssueIds: Type.Array(Type.String({ description: "All issue IDs already shown in this query chain, including this reply." })),
@@ -223,6 +223,12 @@ function createQuerySnapshotTool(): ToolDefinition {
       totalItemCount: Type.Number({ description: "Total number of relevant issues in this query result set." }),
       replySummary: Type.String({ description: "One short sentence summarizing the reply." }),
       scope: Type.String({ description: "self | team | thread-context" }),
+      referenceItems: Type.Optional(Type.Array(Type.Object({
+        id: Type.String({ description: "Stable identifier for the referenced document or page." }),
+        title: Type.Optional(Type.String({ description: "Human-readable title." })),
+        url: Type.Optional(Type.String({ description: "Canonical URL when available." })),
+        source: Type.Optional(Type.String({ description: "Origin such as notion, web, slack, or docs." })),
+      }))),
     }),
     async execute(_toolCallId, params) {
       return {

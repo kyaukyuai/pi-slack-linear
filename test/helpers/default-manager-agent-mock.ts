@@ -95,6 +95,13 @@ function isContinuationQuery(text: string): boolean {
   return /(?:他には|ほかには|他の|ほかの|残り|続き|さらに)/.test(text);
 }
 
+function isReferenceMaterialContinuation(text: string, lastQueryContext?: ThreadQueryContinuation): boolean {
+  if (lastQueryContext?.kind !== "reference-material") {
+    return false;
+  }
+  return /(?:詳しく|詳細|項目|内容|範囲|確認|見て|読んで|教えて)/.test(text);
+}
+
 function getIssueAssigneeLabel(issue: LinearIssueFact): string | undefined {
   return issue.assignee?.displayName ?? issue.assignee?.name ?? issue.assignee?.email ?? undefined;
 }
@@ -263,10 +270,18 @@ async function buildQueryTurn(
   };
 
   if (router.queryKind === "reference-material") {
+    const referenceItems = input.lastQueryContext?.referenceItems ?? [{
+      id: "notion-page-1",
+      title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+      url: "https://www.notion.so/notion-page-1",
+      source: "notion",
+    }];
     const reply = args.buildReply({
       kind: "reference-material",
       facts: {
         source: /notion|ノーション/i.test(input.text) ? "notion" : "reference",
+        referenceItems,
+        followupTopic: input.text,
       },
     }).reply;
     return {
@@ -286,6 +301,7 @@ async function buildQueryTurn(
           totalItemCount: 0,
           replySummary: summarizeSlackReply(reply),
           scope: router.queryScope,
+          referenceItems,
         }),
       ],
       proposals: [],
@@ -577,6 +593,15 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
         queryScope: "thread-context",
         confidence: 0.9,
         reasoningSummary: "直前の query continuation です。",
+      };
+    }
+    if ((!router.queryKind || router.action === "conversation") && isReferenceMaterialContinuation(input.text, input.lastQueryContext)) {
+      router = {
+        action: "query",
+        queryKind: "reference-material",
+        queryScope: "thread-context",
+        confidence: 0.9,
+        reasoningSummary: "直前の reference-material query の続きです。",
       };
     }
     if (router.action === "query" && !router.queryScope) {

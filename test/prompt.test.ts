@@ -60,7 +60,9 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("If a pending manager clarification context exists, call report_pending_clarification_decision once and include both decision and persistence.");
     expect(prompt).toContain("Use persistence=keep when the existing pending clarification should stay as-is, replace when this turn should create or overwrite the pending clarification state, and clear when the pending state should be removed.");
     expect(prompt).toContain("For query replies, call report_query_snapshot once with issueIds, shownIssueIds, remainingIssueIds, totalItemCount, replySummary, and scope.");
+    expect(prompt).toContain("For reference-material query replies, also include referenceItems in report_query_snapshot with id, title, url, and source for each page or document you surfaced.");
     expect(prompt).toContain("A query reply without report_query_snapshot is unsafe and will be rejected by the manager.");
+    expect(prompt).toContain("When the last query context contains referenceItems and the user asks to look deeper into a topic, inspect those stored reference items first before running a broader new search.");
     expect(prompt).toContain("Prefer existing work in this order: thread-linked issue, existing parent issue, existing duplicate, then new issue.");
     expect(prompt).toContain("For single-issue create proposals, decide explicitly whether the issue should stay standalone or attach under the existing thread parent issue.");
     expect(prompt).toContain("Express that decision in propose_create_issue with threadParentHandling=attach or ignore whenever a thread parent issue exists.");
@@ -136,6 +138,14 @@ describe("prompt helpers", () => {
         shownIssueIds: ["AIC-38"],
         remainingIssueIds: ["AIC-39"],
         totalItemCount: 2,
+        referenceItems: [
+          {
+            id: "notion-page-1",
+            title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+            url: "https://www.notion.so/notion-page-1",
+            source: "notion",
+          },
+        ],
         recordedAt: "2026-03-23T07:54:00.000Z",
       },
     });
@@ -146,6 +156,7 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("- shownIssueIds: AIC-38");
     expect(prompt).toContain("- remainingIssueIds: AIC-39");
     expect(prompt).toContain("- totalItemCount: 2");
+    expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
     expect(prompt).toContain("Public reply style hints:");
     expect(prompt).toContain("Do not use markdown headings, separator lines, warning icons, or emojis.");
     expect(prompt).toContain("Treat this as a continuation of the previous list or prioritization reply in the same thread");
@@ -179,6 +190,41 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("- threadParentIssueId: AIC-39");
     expect(prompt).toContain("- originalUserMessage: 箇条書きや太文字が Slack にそのまま表示されているので、それを修正するタスクを作成してください。");
     expect(prompt).toContain("If the latest message looks like a clarification or intent correction");
+  });
+
+  it("adds reference-material follow-up guidance when prior pages are stored", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.679",
+      userId: "U123",
+      text: "PoC 対象範囲を詳しく見て",
+      currentDate: "2026-03-23",
+      lastQueryContext: {
+        kind: "reference-material",
+        scope: "team",
+        userMessage: "Notion を確認して",
+        replySummary: "Notion ページを 1 件確認しました。",
+        issueIds: [],
+        shownIssueIds: [],
+        remainingIssueIds: [],
+        totalItemCount: 0,
+        referenceItems: [
+          {
+            id: "notion-page-1",
+            title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+            url: "https://www.notion.so/notion-page-1",
+            source: "notion",
+          },
+        ],
+        recordedAt: "2026-03-23T08:19:00.000Z",
+      },
+    });
+
+    expect(prompt).toContain("Treat this as a follow-up on the previous reference-material reply unless the user clearly changes the topic.");
+    expect(prompt).toContain("Use the stored referenceItems from the last query context before starting a broader new search.");
+    expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
   });
 
   it("defines an issue-centric heartbeat prompt", () => {
@@ -312,6 +358,14 @@ describe("prompt helpers", () => {
         shownIssueIds: ["AIC-930"],
         remainingIssueIds: ["AIC-931"],
         totalItemCount: 2,
+        referenceItems: [
+          {
+            id: "notion-page-1",
+            title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+            url: "https://www.notion.so/notion-page-1",
+            source: "notion",
+          },
+        ],
         recordedAt: "2026-03-19T01:00:00.000Z",
       },
       taskKey: "router-test",

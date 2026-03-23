@@ -69,6 +69,7 @@ import {
   clearThreadQueryContinuation,
   loadThreadQueryContinuation,
   saveThreadQueryContinuation,
+  type ThreadQueryReferenceItem,
   type ThreadQueryContinuation,
   type ThreadQueryKind,
   type ThreadQueryScope,
@@ -344,12 +345,55 @@ interface ThreadQueryContinuationSnapshotInput {
   totalItemCount?: number;
   replySummary?: string;
   scope?: ThreadQueryScope;
+  referenceItems?: ThreadQueryReferenceItem[];
 }
 
 function normalizeQuerySnapshotIssueIds(values: unknown): string[] {
   return Array.isArray(values)
     ? Array.from(new Set(values.filter((value): value is string => typeof value === "string")))
     : [];
+}
+
+function normalizeQuerySnapshotReferenceItems(values: unknown): ThreadQueryReferenceItem[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+
+  const normalized = values.flatMap((entry): ThreadQueryReferenceItem[] => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== "string" || record.id.trim().length === 0) {
+      return [];
+    }
+
+    return [{
+      id: record.id.trim(),
+      title: typeof record.title === "string" && record.title.trim()
+        ? record.title.trim()
+        : undefined,
+      url: typeof record.url === "string"
+        ? record.url
+        : record.url === null
+          ? null
+          : undefined,
+      source: typeof record.source === "string" && record.source.trim()
+        ? record.source.trim()
+        : undefined,
+    }];
+  });
+
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const deduped = new Map<string, ThreadQueryReferenceItem>();
+  for (const item of normalized) {
+    deduped.set(item.id, item);
+  }
+  return Array.from(deduped.values());
 }
 
 function extractQuerySnapshot(toolCalls: Array<{ toolName: string; details?: unknown }>): ThreadQueryContinuationSnapshotInput | undefined {
@@ -375,6 +419,7 @@ function extractQuerySnapshot(toolCalls: Array<{ toolName: string; details?: unk
     const scope = snapshot.scope === "self" || snapshot.scope === "team" || snapshot.scope === "thread-context"
       ? snapshot.scope
       : undefined;
+    const referenceItems = normalizeQuerySnapshotReferenceItems(snapshot.referenceItems);
     return {
       issueIds,
       shownIssueIds,
@@ -382,6 +427,7 @@ function extractQuerySnapshot(toolCalls: Array<{ toolName: string; details?: unk
       totalItemCount,
       replySummary,
       scope,
+      referenceItems,
     };
   }
   return undefined;
@@ -394,6 +440,7 @@ interface CompleteThreadQueryContinuationSnapshotInput {
   totalItemCount: number;
   replySummary: string;
   scope: ThreadQueryScope;
+  referenceItems?: ThreadQueryReferenceItem[];
 }
 
 function hasCompleteQuerySnapshot(
@@ -429,6 +476,7 @@ function buildThreadQueryContinuation(args: {
     shownIssueIds: args.snapshot.shownIssueIds,
     remainingIssueIds: args.snapshot.remainingIssueIds,
     totalItemCount: args.snapshot.totalItemCount,
+    referenceItems: args.snapshot.referenceItems,
     recordedAt: args.recordedAt.toISOString(),
   };
 }

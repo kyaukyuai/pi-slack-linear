@@ -1492,19 +1492,27 @@ describe("handleManagerMessage clarification flow", () => {
               },
             },
           },
-          {
-            toolName: "report_query_snapshot",
-            details: {
-              querySnapshot: {
-                issueIds: [],
-                shownIssueIds: [],
-                remainingIssueIds: [],
-                totalItemCount: 0,
-                replySummary: "Notion の内容を確認します。",
-                scope: "team",
-              },
+        {
+          toolName: "report_query_snapshot",
+          details: {
+            querySnapshot: {
+              issueIds: [],
+              shownIssueIds: [],
+              remainingIssueIds: [],
+              totalItemCount: 0,
+              referenceItems: [
+                {
+                  id: "notion-page-1",
+                  title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+                  url: "https://www.notion.so/notion-page-1",
+                  source: "notion",
+                },
+              ],
+              replySummary: "Notion の内容を確認します。",
+              scope: "team",
             },
           },
+        },
           {
             toolName: "report_manager_intent",
             details: {
@@ -1550,6 +1558,162 @@ describe("handleManagerMessage clarification flow", () => {
 
     expect(result.handled).toBe(true);
     expect(result.reply).toContain("Notion の内容を確認します。");
+  });
+
+  it("passes stored reference-material items into the next follow-up turn", async () => {
+    piSessionMocks.runManagerAgentTurn
+      .mockResolvedValueOnce({
+        reply: "参照できる Notion ページは 1 件です。",
+        toolCalls: [
+          {
+            toolName: "report_manager_intent",
+            details: {
+              intentReport: {
+                intent: "query",
+                queryKind: "reference-material",
+                queryScope: "team",
+                confidence: 0.87,
+                summary: "Notion の参照依頼です。",
+              },
+            },
+          },
+          {
+            toolName: "report_query_snapshot",
+            details: {
+              querySnapshot: {
+                issueIds: [],
+                shownIssueIds: [],
+                remainingIssueIds: [],
+                totalItemCount: 0,
+                referenceItems: [
+                  {
+                    id: "notion-page-1",
+                    title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+                    url: "https://www.notion.so/notion-page-1",
+                    source: "notion",
+                  },
+                ],
+                replySummary: "参照できる Notion ページは 1 件です。",
+                scope: "team",
+              },
+            },
+          },
+        ],
+        proposals: [],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "query",
+          queryKind: "reference-material",
+          queryScope: "team",
+          confidence: 0.87,
+          summary: "Notion の参照依頼です。",
+        },
+      })
+      .mockImplementationOnce(async (_config: unknown, _paths: unknown, input: {
+        lastQueryContext?: {
+          kind: string;
+          referenceItems?: Array<{ id: string; title?: string; source?: string }>;
+        };
+      }) => {
+        expect(input.lastQueryContext).toMatchObject({
+          kind: "reference-material",
+          referenceItems: [
+            {
+              id: "notion-page-1",
+              title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+              source: "notion",
+            },
+          ],
+        });
+        return {
+          reply: "PoC 対象範囲として、金澤クローンを中心とした PoC 範囲の確認事項が記載されています。",
+          toolCalls: [
+            {
+              toolName: "report_manager_intent",
+              details: {
+                intentReport: {
+                  intent: "query",
+                  queryKind: "reference-material",
+                  queryScope: "thread-context",
+                  confidence: 0.9,
+                  summary: "直前の Notion ページの続きです。",
+                },
+              },
+            },
+            {
+              toolName: "report_query_snapshot",
+              details: {
+                querySnapshot: {
+                  issueIds: [],
+                  shownIssueIds: [],
+                  remainingIssueIds: [],
+                  totalItemCount: 0,
+                  referenceItems: [
+                    {
+                      id: "notion-page-1",
+                      title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+                      url: "https://www.notion.so/notion-page-1",
+                      source: "notion",
+                    },
+                  ],
+                  replySummary: "PoC 対象範囲の要点を返しました。",
+                  scope: "thread-context",
+                },
+              },
+            },
+          ],
+          proposals: [],
+          invalidProposalCount: 0,
+          intentReport: {
+            intent: "query",
+            queryKind: "reference-material",
+            queryScope: "thread-context",
+            confidence: 0.9,
+            summary: "直前の Notion ページの続きです。",
+          },
+        };
+      });
+
+    const first = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-followup",
+        messageTs: "msg-notion-1",
+        userId: "U1",
+        text: "Notion を確認して",
+      },
+      new Date("2026-03-23T08:19:00.000Z"),
+    );
+
+    expect(first.reply).toContain("Notion ページ");
+    await expect(
+      loadThreadQueryContinuation(buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-notion-followup")),
+    ).resolves.toMatchObject({
+      kind: "reference-material",
+      referenceItems: [
+        {
+          id: "notion-page-1",
+          title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+        },
+      ],
+    });
+
+    const followup = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-followup",
+        messageTs: "msg-notion-2",
+        userId: "U1",
+        text: "PoC 対象範囲を詳しく見て",
+      },
+      new Date("2026-03-23T08:20:00.000Z"),
+    );
+
+    expect(followup.reply).toContain("PoC 対象範囲");
   });
 
   it("searches for existing issues before new creation when asked conversationally", async () => {
