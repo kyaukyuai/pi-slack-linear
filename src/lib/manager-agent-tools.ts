@@ -470,6 +470,20 @@ function createProposalTools(): ToolDefinition[] {
       }),
     }),
     createProposalTool({
+      name: "propose_set_issue_parent",
+      label: "Propose Set Issue Parent",
+      description: "Propose making one issue a child of another issue. This does not execute the mutation.",
+      promptSnippet: "Use this when the user explicitly asks to make AIC-123 a child task of AIC-456.",
+      commandType: "set_issue_parent",
+      parameters: Type.Object({
+        issueId: Type.String({ description: "Child issue identifier like AIC-123." }),
+        parentIssueId: Type.String({ description: "Parent issue identifier like AIC-456." }),
+        reasonSummary: Type.String({ description: "Short reason for this proposal." }),
+        evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
+        dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
+      }),
+    }),
+    createProposalTool({
       name: "propose_followup_resolution",
       label: "Propose Followup Resolution",
       description: "Propose resolving an outstanding follow-up. This does not execute the mutation.",

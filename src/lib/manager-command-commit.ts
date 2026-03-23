@@ -162,6 +162,12 @@ const addRelationProposalSchema = proposalBaseSchema.extend({
   relationType: z.enum(["blocks", "blocked-by"]),
 });
 
+const setIssueParentProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("set_issue_parent"),
+  issueId: z.string().trim().min(1),
+  parentIssueId: z.string().trim().min(1),
+});
+
 const followupExtractedFieldsSchema = z.record(z.string(), z.string()).default({});
 
 const resolveFollowupProposalSchema = proposalBaseSchema.extend({
@@ -200,6 +206,7 @@ export const managerCommandProposalSchema = z.discriminatedUnion("commandType", 
   assignIssueProposalSchema,
   addCommentProposalSchema,
   addRelationProposalSchema,
+  setIssueParentProposalSchema,
   resolveFollowupProposalSchema,
   reviewFollowupProposalSchema,
 ]);
@@ -1055,6 +1062,46 @@ async function commitAddRelationProposal(
   };
 }
 
+async function commitSetIssueParentProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof setIssueParentProposalSchema>,
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  if (proposal.issueId === proposal.parentIssueId) {
+    return {
+      proposal,
+      reason: "親 issue と子 issue に同じ issue ID は使えません。親子関係を確認してください。",
+    };
+  }
+
+  const updatedIssue = await updateManagedLinearIssue(
+    {
+      issueId: proposal.issueId,
+      parent: proposal.parentIssueId,
+    },
+    args.env,
+  );
+
+  await args.repositories.workgraph.append([
+    {
+      type: "issue.parent_updated",
+      occurredAt: buildOccurredAt(args.now),
+      threadKey: buildWorkgraphThreadKey(args.message.channelId, args.message.rootThreadTs),
+      sourceChannelId: args.message.channelId,
+      sourceThreadTs: args.message.rootThreadTs,
+      sourceMessageTs: args.message.messageTs,
+      issueId: proposal.issueId,
+      parentIssueId: proposal.parentIssueId,
+      title: updatedIssue.title,
+    },
+  ]);
+
+  return {
+    commandType: proposal.commandType,
+    issueIds: [proposal.issueId, proposal.parentIssueId],
+    summary: `${proposal.issueId} を ${proposal.parentIssueId} の子 task として反映しました。`,
+  };
+}
+
 async function commitResolveFollowupProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof resolveFollowupProposalSchema>,
@@ -1208,6 +1255,8 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
               ? await commitAddCommentProposal(args, validatedProposal)
               : validatedProposal.commandType === "add_relation"
                 ? await commitAddRelationProposal(args, validatedProposal)
+                : validatedProposal.commandType === "set_issue_parent"
+                  ? await commitSetIssueParentProposal(args, validatedProposal)
                 : validatedProposal.commandType === "resolve_followup"
                   ? await commitResolveFollowupProposal(args, validatedProposal)
                   : await commitReviewFollowupProposal(args, validatedProposal);

@@ -210,6 +210,21 @@ export function projectWorkgraph(
             ?? event.parentIssueId;
         }
         break;
+      case "issue.parent_updated": {
+        const issue = getOrCreateIssue(projection, event.issueId);
+        issue.title = event.title ?? issue.title;
+        issue.parentIssueId = event.parentIssueId;
+        uniquePush(issue.threadKeys, event.threadKey);
+        const parentIssue = getOrCreateIssue(projection, event.parentIssueId);
+        uniquePush(parentIssue.threadKeys, event.threadKey);
+        if (thread) {
+          thread.parentIssueId = event.parentIssueId;
+          uniquePush(thread.childIssueIds, event.issueId);
+          thread.lastResolvedIssueId = event.issueId;
+          thread.latestFocusIssueId = event.issueId;
+        }
+        break;
+      }
       case "followup.requested": {
         const issue = getOrCreateIssue(projection, event.issueId);
         issue.followupStatus = "awaiting-response";

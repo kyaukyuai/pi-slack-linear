@@ -64,6 +64,12 @@ export const workgraphEventSchema = z.discriminatedUnion("type", [
     ownerResolution: z.enum(["mapped", "fallback"]).optional(),
   }),
   workgraphBaseEventSchema.extend({
+    type: z.literal("issue.parent_updated"),
+    issueId: z.string().min(1),
+    parentIssueId: z.string().min(1),
+    title: z.string().min(1).optional(),
+  }),
+  workgraphBaseEventSchema.extend({
     type: z.literal("followup.requested"),
     issueId: z.string().min(1),
     category: z.string().min(1),

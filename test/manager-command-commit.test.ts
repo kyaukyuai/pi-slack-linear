@@ -480,6 +480,69 @@ describe("manager command commit", () => {
     expect(result.committed[0]?.summary).toContain("親は AIC-39 AIマネージャーを実用レベルへ引き上げる です。");
   });
 
+  it("sets an existing issue parent directly", async () => {
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-40",
+      identifier: "AIC-40",
+      title: "コギトをシステム設定・プロンプトに命名として反映する",
+      url: "https://linear.app/kyaukyuai/issue/AIC-40",
+      parent: {
+        id: "parent-39",
+        identifier: "AIC-39",
+        title: "AIマネージャーを実用レベルへ引き上げる",
+      },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "set_issue_parent",
+          issueId: "AIC-40",
+          parentIssueId: "AIC-39",
+          reasonSummary: "AIC-40 を AIC-39 の子 task にする依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-parent-update",
+        messageTs: "msg-parent-update-1",
+        userId: "U1",
+        text: "AIC-40 を AIC-39 の子タスクとしてください",
+      },
+      now: new Date("2026-03-23T01:30:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-40",
+        parent: "AIC-39",
+      }),
+      expect.any(Object),
+    );
+    expect(result.committed[0]?.summary).toContain("AIC-40 を AIC-39 の子 task として反映しました。");
+
+    const projection = await repositories.workgraph.project();
+    expect(projection.issues["AIC-40"]).toMatchObject({
+      parentIssueId: "AIC-39",
+    });
+    expect(projection.threads["C0ALAMDRB9V:thread-parent-update"]).toMatchObject({
+      parentIssueId: "AIC-39",
+      childIssueIds: expect.arrayContaining(["AIC-40"]),
+    });
+  });
+
   it("rejects create proposals that omit required decision fields", async () => {
     const result = await commitManagerCommandProposals({
       config: { ...config, workspaceDir },

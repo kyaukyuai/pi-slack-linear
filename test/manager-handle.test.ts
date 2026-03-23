@@ -3559,4 +3559,91 @@ describe("handleManagerMessage clarification flow", () => {
     expect(result.reply).toContain("親は AIC-39 AIマネージャーを実用レベルへ引き上げる");
     expect(result.reply).toContain("子 task として <https://linear.app/kyaukyuai/issue/AIC-40|AIC-40 コギトをシステム設定・プロンプトに命名として反映する> を追加しています。");
   });
+
+  it("updates an existing issue parent directly when the user asks for a child-task relation", async () => {
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-40",
+      identifier: "AIC-40",
+      title: "コギトをシステム設定・プロンプトに命名として反映する",
+      url: "https://linear.app/kyaukyuai/issue/AIC-40",
+      parent: {
+        id: "parent-39",
+        identifier: "AIC-39",
+        title: "AIマネージャーを実用レベルへ引き上げる",
+      },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "AIC-40 を AIC-39 の子 task として反映します。",
+      toolCalls: [
+        {
+          toolName: "report_manager_intent",
+          details: {
+            intentReport: {
+              intent: "create_work",
+              confidence: 0.94,
+              summary: "既存 issue の親子付け替えです。",
+            },
+          },
+        },
+        {
+          toolName: "propose_set_issue_parent",
+          details: {
+            proposal: {
+              commandType: "set_issue_parent",
+              issueId: "AIC-40",
+              parentIssueId: "AIC-39",
+              reasonSummary: "AIC-40 を AIC-39 の子 task にする依頼です。",
+            },
+          },
+        },
+      ],
+      proposals: [
+        {
+          commandType: "set_issue_parent",
+          issueId: "AIC-40",
+          parentIssueId: "AIC-39",
+          reasonSummary: "AIC-40 を AIC-39 の子 task にする依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "create_work",
+        confidence: 0.94,
+        summary: "既存 issue の親子付け替えです。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-parent-update",
+        messageTs: "msg-parent-update-1",
+        userId: "U1",
+        text: "AIC-40 を AIC-39 の子タスクとしてください",
+      },
+      new Date("2026-03-23T01:30:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-40",
+        parent: "AIC-39",
+      }),
+      expect.any(Object),
+    );
+    expect(result.reply).toContain("AIC-40 を AIC-39 の子 task として反映しました。");
+
+    const thread = await loadThreadProjection("C0ALAMDRB9V:thread-parent-update");
+    expect(thread).toMatchObject({
+      parentIssueId: "AIC-39",
+      childIssueIds: expect.arrayContaining(["AIC-40"]),
+      lastResolvedIssueId: "AIC-40",
+    });
+  });
 });
