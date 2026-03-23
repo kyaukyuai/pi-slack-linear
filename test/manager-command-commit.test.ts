@@ -201,7 +201,7 @@ describe("manager command commit", () => {
   });
 
   it("commits completed status updates with a single update-and-comment call", async () => {
-    linearMocks.updateLinearIssueStateWithComment.mockResolvedValueOnce({
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
       id: "issue-1",
       identifier: "AIC-501",
       title: "完了済み task",
@@ -239,13 +239,74 @@ describe("manager command commit", () => {
     });
 
     expect(result.committed).toHaveLength(1);
-    expect(linearMocks.updateLinearIssueStateWithComment).toHaveBeenCalledWith(
-      "AIC-501",
-      "completed",
-      expect.stringContaining("## Completion source"),
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-501",
+        state: "completed",
+        comment: expect.stringContaining("## Completion source"),
+      }),
       expect.any(Object),
     );
     expect(linearMocks.addLinearComment).not.toHaveBeenCalled();
+  });
+
+  it("commits progress updates with a due date in one update call and records the new due date", async () => {
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-38",
+      identifier: "AIC-38",
+      title: "OPT社の社内チャネルへの招待依頼",
+      dueDate: "2026-03-27",
+      state: { id: "state-started", name: "Started", type: "started" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_issue_status",
+          issueId: "AIC-38",
+          signal: "progress",
+          dueDate: "2026-03-27",
+          reasonSummary: "今週を目処に完了予定です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-progress-due-date",
+        messageTs: "msg-progress-due-date-1",
+        userId: "U1",
+        text: "AIC-38 は今週を目処に完了させます",
+      },
+      now: new Date("2026-03-23T00:00:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-38",
+        dueDate: "2026-03-27",
+        comment: expect.stringContaining("## Progress update"),
+      }),
+      expect.any(Object),
+    );
+    expect(linearMocks.addLinearProgressComment).not.toHaveBeenCalled();
+    expect(result.committed[0]?.summary).toContain("期限は 2026-03-27 として反映しました。");
+
+    const projection = await repositories.workgraph.project();
+    expect(projection.issues["AIC-38"]).toMatchObject({
+      dueDate: "2026-03-27",
+      lastStatus: "progress",
+    });
   });
 
   it("inherits the thread parent for single issue creation proposals", async () => {

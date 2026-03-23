@@ -59,6 +59,8 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Express that duplicate decision in propose_create_issue with duplicateHandling=reuse-existing, reuse-and-attach-parent, clarify, or create-new.");
     expect(prompt).toContain("Express that owner decision with assigneeMode=assign or leave-unassigned.");
     expect(prompt).toContain("For progress, completion, and blocked signals, prefer the most specific child issue over the parent issue.");
+    expect(prompt).toContain("When a progress, completed, or blocked update includes a new target completion date, include dueDate in propose_update_issue_status.");
+    expect(prompt).toContain("If the user says 今週中 or 今週を目処 without a specific date, resolve it to the Friday of the current JST work week unless the user says otherwise.");
     expect(prompt).toContain("When research is required, save detailed findings to Linear and return only a short summary and next action to Slack.");
     expect(prompt).toContain("Do not use markdown headings, separator lines, report-style sections, warning icons, or emojis in public Slack replies.");
     expect(prompt).toContain("If the user says things like 他には / ほかには / 他のタスク after a list or prioritization reply in the same thread");

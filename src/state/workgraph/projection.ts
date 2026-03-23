@@ -243,6 +243,7 @@ export function projectWorkgraph(
           : event.type === "issue.completed"
             ? "completed"
             : "blocked";
+        issue.dueDate = event.dueDate ?? issue.dueDate;
         issue.lastStatus = status;
         issue.lastStatusAt = event.occurredAt;
         uniquePush(issue.threadKeys, event.threadKey);

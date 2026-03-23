@@ -41,6 +41,7 @@ export interface WorkgraphIssueSignalRecord {
   issueId: string;
   signal: "progress" | "completed" | "blocked";
   blockedStateApplied?: boolean;
+  dueDate?: string;
 }
 
 export interface WorkgraphIssueSignalsInput {
@@ -186,6 +187,7 @@ export async function recordIssueSignals(
           type: "issue.progressed" as const,
           occurredAt: input.occurredAt,
           issueId: issue.issueId,
+          dueDate: issue.dueDate,
           textSnippet: input.textSnippet,
           ...sourceFields,
         }
@@ -194,6 +196,7 @@ export async function recordIssueSignals(
             type: "issue.completed" as const,
             occurredAt: input.occurredAt,
             issueId: issue.issueId,
+            dueDate: issue.dueDate,
             textSnippet: input.textSnippet,
             ...sourceFields,
           }
@@ -202,6 +205,7 @@ export async function recordIssueSignals(
             occurredAt: input.occurredAt,
             issueId: issue.issueId,
             blockedStateApplied: issue.blockedStateApplied ?? false,
+            dueDate: issue.dueDate,
             textSnippet: input.textSnippet,
             ...sourceFields,
           }

@@ -140,6 +140,7 @@ const updateIssueStatusProposalSchema = proposalBaseSchema.extend({
   signal: z.enum(["progress", "completed", "blocked"]),
   commentBody: optionalStringSchema,
   state: optionalStringSchema,
+  dueDate: optionalDateSchema,
 });
 
 const assignIssueProposalSchema = proposalBaseSchema.extend({
@@ -917,19 +918,38 @@ async function commitUpdateIssueStatusProposal(
   const message = args.message;
   const updatedIssues: LinearIssue[] = [];
   const blockedStateByIssueId = new Map<string, boolean>();
+  const replyExtras: string[] = [];
 
   if (proposal.signal === "progress") {
-    await addLinearProgressComment(
-      proposal.issueId,
-      proposal.commentBody ?? buildStatusSourceComment(message, "## Progress source"),
-      args.env,
-    );
-    updatedIssues.push(await getLinearIssue(proposal.issueId, args.env));
+    const progressComment = proposal.commentBody ?? buildStatusSourceComment(message, "## Progress source");
+    if (proposal.dueDate || proposal.state) {
+      updatedIssues.push(await updateManagedLinearIssue(
+        {
+          issueId: proposal.issueId,
+          state: proposal.state,
+          dueDate: proposal.dueDate,
+          comment: progressComment.startsWith("## Progress update")
+            ? progressComment
+            : `## Progress update\n${progressComment.trim()}`,
+        },
+        args.env,
+      ));
+    } else {
+      await addLinearProgressComment(
+        proposal.issueId,
+        progressComment,
+        args.env,
+      );
+      updatedIssues.push(await getLinearIssue(proposal.issueId, args.env));
+    }
   } else if (proposal.signal === "completed") {
-    updatedIssues.push(await updateLinearIssueStateWithComment(
-      proposal.issueId,
-      proposal.state ?? "completed",
-      proposal.commentBody ?? buildStatusSourceComment(message, "## Completion source"),
+    updatedIssues.push(await updateManagedLinearIssue(
+      {
+        issueId: proposal.issueId,
+        state: proposal.state ?? "completed",
+        dueDate: proposal.dueDate,
+        comment: proposal.commentBody ?? buildStatusSourceComment(message, "## Completion source"),
+      },
       args.env,
     ));
   } else {
@@ -938,8 +958,26 @@ async function commitUpdateIssueStatusProposal(
       proposal.commentBody ?? buildStatusSourceComment(message, "## Blocked source"),
       args.env,
     );
-    updatedIssues.push(blocked.issue);
+    const blockedIssue = proposal.dueDate
+      ? await updateManagedLinearIssue(
+          {
+            issueId: proposal.issueId,
+            dueDate: proposal.dueDate,
+          },
+          args.env,
+        )
+      : blocked.issue;
+    updatedIssues.push(blockedIssue);
     blockedStateByIssueId.set(proposal.issueId, blocked.blockedStateApplied);
+  }
+
+  if (proposal.dueDate) {
+    const reflectedDueDate = updatedIssues
+      .map((issue) => issue.dueDate)
+      .find((dueDate): dueDate is string => Boolean(dueDate));
+    if (reflectedDueDate) {
+      replyExtras.push(`期限は ${reflectedDueDate} として反映しました。`);
+    }
   }
 
   const nextFollowups = updateFollowupsWithIssueResponse(
@@ -962,6 +1000,7 @@ async function commitUpdateIssueStatusProposal(
       issueId: issue.identifier,
       signal: proposal.signal,
       blockedStateApplied: blockedStateByIssueId.get(issue.identifier),
+      dueDate: issue.dueDate ?? undefined,
     })),
   });
   await recordFollowupTransitions(args.repositories.workgraph, followups, nextFollowups, {
@@ -976,7 +1015,7 @@ async function commitUpdateIssueStatusProposal(
   return {
     commandType: proposal.commandType,
     issueIds: updatedIssues.map((issue) => issue.identifier),
-    summary: formatStatusReply(proposal.signal, updatedIssues),
+    summary: formatStatusReply(proposal.signal, updatedIssues, replyExtras),
   };
 }
 

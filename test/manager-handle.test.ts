@@ -1372,6 +1372,115 @@ describe("handleManagerMessage clarification flow", () => {
     });
   });
 
+  it("updates the due date when the agent proposes a progress update with a new target date", async () => {
+    linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-38",
+      identifier: "AIC-38",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-38",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-progress-due-date",
+        messageTs: "msg-1",
+        userId: "U1",
+        text: "OPT社の社内チャネルへの招待依頼を追加して",
+      },
+      new Date("2026-03-23T00:00:00.000Z"),
+    );
+
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-38",
+      identifier: "AIC-38",
+      title: "OPT社の社内チャネルへの招待依頼",
+      url: "https://linear.app/kyaukyuai/issue/AIC-38",
+      dueDate: "2026-03-27",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-started", name: "Started", type: "started" },
+      relations: [],
+      inverseRelations: [],
+    });
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "AIC-38 の期限を今週金曜に更新し、進捗として反映します。",
+      toolCalls: [
+        {
+          toolName: "report_manager_intent",
+          details: {
+            intentReport: {
+              intent: "update_progress",
+              confidence: 0.92,
+              summary: "進捗更新と新しい完了目処の共有です。",
+            },
+          },
+        },
+        {
+          toolName: "propose_update_issue_status",
+          details: {
+            proposal: {
+              commandType: "update_issue_status",
+              issueId: "AIC-38",
+              signal: "progress",
+              dueDate: "2026-03-27",
+              reasonSummary: "今週を目処という表現から今週金曜を完了目標と判断しました。",
+            },
+          },
+        },
+      ],
+      proposals: [
+        {
+          commandType: "update_issue_status",
+          issueId: "AIC-38",
+          signal: "progress",
+          dueDate: "2026-03-27",
+          reasonSummary: "今週を目処という表現から今週金曜を完了目標と判断しました。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "update_progress",
+        confidence: 0.92,
+        summary: "進捗更新と新しい完了目処の共有です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-progress-due-date",
+        messageTs: "msg-2",
+        userId: "U1",
+        text: "AIC-38 は今週を目処に完了させます",
+      },
+      new Date("2026-03-23T00:02:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("進捗を反映しました。");
+    expect(result.reply).toContain("期限は 2026-03-27 として反映しました。");
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-38",
+        dueDate: "2026-03-27",
+      }),
+      expect.any(Object),
+    );
+
+    const projection = await createFileBackedManagerRepositories(systemPaths).workgraph.project();
+    expect(projection.issues["AIC-38"]).toMatchObject({
+      dueDate: "2026-03-27",
+      lastStatus: "progress",
+    });
+  });
+
   it("keeps status updates enabled when autoCreate is disabled", async () => {
     linearMocks.createManagedLinearIssue.mockResolvedValueOnce({
       id: "issue-1",

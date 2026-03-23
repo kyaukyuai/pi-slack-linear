@@ -81,17 +81,20 @@ export const workgraphEventSchema = z.discriminatedUnion("type", [
   workgraphBaseEventSchema.extend({
     type: z.literal("issue.progressed"),
     issueId: z.string().min(1),
+    dueDate: z.string().optional(),
     textSnippet: z.string().optional(),
   }),
   workgraphBaseEventSchema.extend({
     type: z.literal("issue.completed"),
     issueId: z.string().min(1),
+    dueDate: z.string().optional(),
     textSnippet: z.string().optional(),
   }),
   workgraphBaseEventSchema.extend({
     type: z.literal("issue.blocked"),
     issueId: z.string().min(1),
     blockedStateApplied: z.boolean(),
+    dueDate: z.string().optional(),
     textSnippet: z.string().optional(),
   }),
 ]);

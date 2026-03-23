@@ -420,6 +420,7 @@ function createProposalTools(): ToolDefinition[] {
         signal: Type.String({ description: "progress | completed | blocked" }),
         commentBody: Type.Optional(Type.String({ description: "Optional markdown body for the update." })),
         state: Type.Optional(Type.String({ description: "Optional target state name." })),
+        dueDate: Type.Optional(Type.String({ description: "Optional due date in YYYY-MM-DD when the user states a new target completion date." })),
         reasonSummary: Type.String({ description: "Short reason for this proposal." }),
         evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
         dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
