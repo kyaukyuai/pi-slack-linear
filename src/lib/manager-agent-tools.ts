@@ -260,6 +260,13 @@ function overdueDays(dueDate: string | null | undefined, right = new Date()): nu
   return Math.floor(diffMs / (24 * 60 * 60 * 1000));
 }
 
+function isOpenLinearState(state: LinearIssue["state"] | null | undefined): boolean {
+  const type = state?.type?.toLowerCase();
+  const name = state?.name?.toLowerCase();
+  return type !== "done" && type !== "completed" && type !== "canceled"
+    && name !== "done" && name !== "completed" && name !== "canceled";
+}
+
 function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
   const blockedState = issue.state?.name?.toLowerCase() === "blocked";
   const blockedByDependency = (issue.inverseRelations ?? []).some((relation) => relation.type === "blocked-by");
@@ -270,6 +277,10 @@ function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
     url: issue.url ?? undefined,
     description: issue.description ?? undefined,
     state: issue.state ?? undefined,
+    stateName: issue.state?.name ?? undefined,
+    stateType: issue.state?.type ?? undefined,
+    completedAt: issue.completedAt ?? undefined,
+    isOpen: isOpenLinearState(issue.state),
     dueDate: issue.dueDate ?? undefined,
     priority: issue.priority ?? undefined,
     priorityLabel: issue.priorityLabel ?? undefined,
@@ -291,6 +302,43 @@ function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
       blockedByDependency,
       recentBlockedUpdate,
     },
+  };
+}
+
+async function buildReviewIssueFacts(
+  issue: LinearIssue,
+  env: LinearCommandEnv,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const base = buildIssueFacts(issue);
+  const childIds = (issue.children ?? []).map((child) => child.identifier).filter(Boolean);
+  if (childIds.length === 0) {
+    return {
+      ...base,
+      openChildren: [],
+      closedChildren: [],
+    };
+  }
+
+  const children = (await Promise.all(
+    childIds.map(async (issueId) => {
+      try {
+        const child = await getLinearIssue(issueId, env, signal);
+        return buildIssueFacts(child);
+      } catch {
+        return {
+          identifier: issueId,
+          title: (issue.children ?? []).find((child) => child.identifier === issueId)?.title,
+        };
+      }
+    }),
+  ));
+
+  return {
+    ...base,
+    children,
+    openChildren: children.filter((child) => child.isOpen !== false),
+    closedChildren: children.filter((child) => child.isOpen === false),
   };
 }
 
@@ -421,15 +469,19 @@ function createLinearReadTools(
       name: "linear_list_review_facts",
       label: "Linear List Review Facts",
       description: "List active Linear issues with raw review-oriented facts such as overdueDays, staleBusinessDays, blockedSignals, ownerMissing, and dueMissing.",
-      promptSnippet: "Use this for review, heartbeat, and next-step suggestions. Select the important issues yourself from the facts.",
+      promptSnippet: "Use this for review, heartbeat, and next-step suggestions. Select the important issues yourself from the facts and treat openChildren as current work while keeping closedChildren only for improvement notes.",
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Maximum number of issues to fetch." })),
       }),
       async execute(_toolCallId, _params, signal) {
         const issues = await listOpenLinearIssues(env, signal);
+        const limit = (_params as { limit?: number } | undefined)?.limit ?? 50;
+        const facts = await Promise.all(
+          issues.slice(0, limit).map((issue) => buildReviewIssueFacts(issue, env, signal)),
+        );
         return {
-          content: [{ type: "text", text: issues.length > 0 ? formatJsonDetails(issues.slice(0, (_params as { limit?: number } | undefined)?.limit ?? 50).map((issue) => buildIssueFacts(issue))) : "No review facts found." }],
-          details: issues.slice(0, (_params as { limit?: number } | undefined)?.limit ?? 50).map((issue) => buildIssueFacts(issue)),
+          content: [{ type: "text", text: facts.length > 0 ? formatJsonDetails(facts) : "No review facts found." }],
+          details: facts,
         };
       },
     },

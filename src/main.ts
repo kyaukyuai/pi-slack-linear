@@ -14,6 +14,7 @@ import { analyzeOwnerMap } from "./lib/owner-map-diagnostics.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runManagerSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
 import { buildSlackMessagePayload } from "./lib/slack-format.js";
+import { mergeSystemReply } from "./lib/system-slack-reply.js";
 import { isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
 import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "./state/repositories/file-backed-manager-repositories.js";
@@ -41,19 +42,6 @@ class ThreadQueue {
 
     this.jobs.set(key, current);
   }
-}
-
-function mergeSystemReply(agentReply: string, commitSummaries: string[], commitRejections: string[]): string {
-  const parts = [agentReply.trim(), ...commitSummaries];
-  if (commitRejections.length === 1) {
-    parts.push(`一部は ${commitRejections[0]} ため、そのまま確定していません。`);
-  } else if (commitRejections.length > 1) {
-    parts.push([
-      "一部はそのまま確定できていません。",
-      ...commitRejections.map((reason) => `- ${reason}`),
-    ].join("\n"));
-  }
-  return parts.filter(Boolean).join("\n\n");
 }
 
 async function postSlackReply(
@@ -224,6 +212,18 @@ async function main(): Promise<void> {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+  const currentDateTimeInJst = () => {
+    const formatted = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date());
+    return `${formatted} JST`;
+  };
 
   const linearEnv = {
     ...process.env,
@@ -265,11 +265,11 @@ async function main(): Promise<void> {
         channelId: args.input.channelId,
         threadTs: args.input.rootThreadTs,
       });
-      return mergeSystemReply(
-        agentResult.reply,
-        commitResult.replySummaries,
-        commitResult.rejected.map((entry) => entry.reason),
-      );
+      return mergeSystemReply({
+        agentReply: agentResult.reply,
+        commitSummaries: commitResult.replySummaries,
+        commitRejections: commitResult.rejected.map((entry) => entry.reason),
+      });
     } catch (error) {
       logger.warn("Manager system agent fell back to safety-only response", {
         channelId: args.input.channelId,
@@ -461,6 +461,7 @@ async function main(): Promise<void> {
           rootThreadTs: "heartbeat",
           messageTs: "heartbeat",
           currentDate: currentDateInJst(),
+          runAtJst: currentDateTimeInJst(),
           text: prompt,
         },
         fallback: async () => {
@@ -521,6 +522,7 @@ async function main(): Promise<void> {
             rootThreadTs: job.id,
             messageTs: job.id,
             currentDate: currentDateInJst(),
+            runAtJst: currentDateTimeInJst(),
             text: job.prompt,
             metadata: {
               jobId: job.id,
@@ -568,6 +570,7 @@ async function main(): Promise<void> {
           rootThreadTs: job.id,
           messageTs: job.id,
           currentDate: currentDateInJst(),
+          runAtJst: currentDateTimeInJst(),
           text: job.prompt,
           metadata: {
             jobId: job.id,

@@ -18,6 +18,7 @@ import { createLinearCustomTools } from "../src/lib/linear-tools.js";
 import {
   buildAgentPrompt,
   buildManagerAgentPrompt,
+  buildManagerSystemPromptInput,
   buildSystemPrompt,
   type ThreadPromptContext,
 } from "../src/lib/pi-session.js";
@@ -87,7 +88,26 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Use notion_query_database filterProperty/filterOperator/filterValue when the user narrows a Notion database like 進行中だけ, 自分の担当だけ, or 期限が今週のもの.");
     expect(prompt).toContain("Use notion_query_database sortProperty/sortDirection when the user asks for an order like 期限が近い順 or 更新が新しい順.");
     expect(prompt).toContain("Do not use markdown headings, separator lines, report-style sections, warning icons, or emojis in public Slack replies.");
+    expect(prompt).toContain("For scheduled review or heartbeat replies, never use markdown tables, pipe tables, separator lines, or report-style section headings.");
+    expect(prompt).toContain("For review and heartbeat reasoning, treat any issue with isOpen=false or completedAt set as completed.");
     expect(prompt).toContain("If the user says things like 他には / ほかには / 他のタスク after a list or prioritization reply in the same thread");
+  });
+
+  it("includes runAtJst in manager system task prompts", () => {
+    const prompt = buildManagerSystemPromptInput({
+      kind: "evening-review",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "manager-review-evening",
+      messageTs: "manager-review-evening",
+      text: "manager review: evening",
+      currentDate: "2026-03-23",
+      runAtJst: "2026-03-23 17:00 JST",
+      metadata: {
+        reviewKind: "evening-review",
+      },
+    });
+
+    expect(prompt).toContain("- runAtJst: 2026-03-23 17:00 JST");
   });
 
   it("embeds thread-linked issue context into the runtime prompt", () => {

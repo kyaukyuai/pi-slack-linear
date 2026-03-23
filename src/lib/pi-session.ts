@@ -95,6 +95,7 @@ export interface ManagerSystemInput {
   messageTs: string;
   text: string;
   currentDate: string;
+  runAtJst: string;
   metadata?: Record<string, string>;
 }
 
@@ -312,6 +313,9 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "Use notion_query_database filterProperty/filterOperator/filterValue when the user narrows a Notion database like 進行中だけ, 自分の担当だけ, or 期限が今週のもの.",
     "Use notion_query_database sortProperty/sortDirection when the user asks for an order like 期限が近い順 or 更新が新しい順.",
     "For reviews and heartbeat-style summaries, prefer one concrete follow-up request over broad list-making.",
+    "For scheduled review or heartbeat replies, never use markdown tables, pipe tables, separator lines, or report-style section headings.",
+    "For review and heartbeat reasoning, treat any issue with isOpen=false or completedAt set as completed. Do not describe it as currently in progress or currently risky.",
+    "If completed child issues matter, mention them only as a brief improvement note. Keep the current action list focused on open issues.",
     "Use raw facts tools for priority and review judgments. Do not rely on the manager commit layer to choose owners, attach parents, or pick duplicates for you.",
     "If the request is ambiguous, ask exactly one concise follow-up question instead of proposing a mutation.",
     "Do not ask the user for API keys, workspace identifiers, or team identifiers. They are fixed in the environment.",
@@ -754,7 +758,7 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
   ].join("\n");
 }
 
-function buildManagerSystemPromptInput(input: ManagerSystemInput): string {
+export function buildManagerSystemPromptInput(input: ManagerSystemInput): string {
   const metadataLines = Object.entries(input.metadata ?? {})
     .map(([key, value]) => `- ${key}: ${value}`)
     .join("\n");
@@ -766,6 +770,7 @@ function buildManagerSystemPromptInput(input: ManagerSystemInput): string {
     `- rootThreadTs: ${input.rootThreadTs}`,
     `- sourceMessageTs: ${input.messageTs}`,
     `- currentDateJst: ${input.currentDate}`,
+    `- runAtJst: ${input.runAtJst}`,
     ...(metadataLines ? ["", "Metadata:", metadataLines] : []),
     "",
     "Task:",

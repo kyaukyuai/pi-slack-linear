@@ -65,6 +65,7 @@ export interface LinearIssue {
   title: string;
   url?: string | null;
   description?: string | null;
+  completedAt?: string | null;
   dueDate?: string | null;
   priority?: number | null;
   priorityLabel?: string | null;
@@ -183,6 +184,7 @@ interface CliIssueRef {
 
 interface CliIssuePayload extends CliIssueRef {
   description?: string | null;
+  completedAt?: string | null;
   priority?: number | null;
   priorityLabel?: string | null;
   updatedAt?: string | null;
@@ -513,6 +515,7 @@ export function normalizeLinearIssuePayload(raw: unknown): LinearIssue | undefin
     title,
     url: toNullableString(raw.url),
     description: toNullableString(raw.description),
+    completedAt: toNullableString(raw.completedAt),
     dueDate: toNullableString(raw.dueDate),
     priority: toNumberOrUndefined(raw.priority),
     priorityLabel: toNullableString(raw.priorityLabel),
