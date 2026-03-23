@@ -4,8 +4,8 @@ import type { AppConfig } from "./config.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import {
   getLinearIssue,
+  listOpenLinearIssues,
   listLinearTeamMembers,
-  listRiskyLinearIssues,
   searchLinearIssues,
   type LinearIssue,
   type LinearCommandEnv,
@@ -175,7 +175,6 @@ function createProposalTool(args: {
 
 function createLinearReadTools(
   config: AppConfig,
-  repositories: Pick<ManagerRepositories, "policy">,
 ): ToolDefinition[] {
   const env = buildLinearEnv(config);
 
@@ -189,14 +188,7 @@ function createLinearReadTools(
         limit: Type.Optional(Type.Number({ description: "Maximum number of issues to fetch." })),
       }),
       async execute(_toolCallId, params, signal) {
-        const issues = await listRiskyLinearIssues(
-          {
-            staleBusinessDays: (await repositories.policy.load()).staleBusinessDays,
-            urgentPriorityThreshold: (await repositories.policy.load()).urgentPriorityThreshold,
-          },
-          env,
-          signal,
-        );
+        const issues = await listOpenLinearIssues(env, signal);
         const limited = issues.slice(0, (params as { limit?: number }).limit ?? 20).map((issue) => buildIssueFacts(issue));
         return {
           content: [{ type: "text", text: limited.length > 0 ? formatJsonDetails(limited) : "No active issue facts found." }],
@@ -213,15 +205,7 @@ function createLinearReadTools(
         limit: Type.Optional(Type.Number({ description: "Maximum number of issues to fetch." })),
       }),
       async execute(_toolCallId, _params, signal) {
-        const policy = await repositories.policy.load();
-        const issues = await listRiskyLinearIssues(
-          {
-            staleBusinessDays: policy.staleBusinessDays,
-            urgentPriorityThreshold: policy.urgentPriorityThreshold,
-          },
-          env,
-          signal,
-        );
+        const issues = await listOpenLinearIssues(env, signal);
         return {
           content: [{ type: "text", text: issues.length > 0 ? formatJsonDetails(issues.slice(0, (_params as { limit?: number } | undefined)?.limit ?? 50).map((issue) => buildIssueFacts(issue))) : "No review facts found." }],
           details: issues.slice(0, (_params as { limit?: number } | undefined)?.limit ?? 50).map((issue) => buildIssueFacts(issue)),
@@ -539,7 +523,7 @@ export function createManagerAgentTools(
   return [
     createIntentReportTool(),
     createQuerySnapshotTool(),
-    ...createLinearReadTools(config, repositories),
+    ...createLinearReadTools(config),
     ...createSlackContextTools(config),
     ...createWorkgraphReadTools(repositories),
     ...createWebReadTools(),

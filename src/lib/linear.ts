@@ -1201,8 +1201,7 @@ export async function listLinearTeamMembers(
   return normalizeTeamMembersPayload(payload);
 }
 
-export async function listRiskyLinearIssues(
-  _policy: RiskPolicy,
+export async function listOpenLinearIssues(
   env: LinearCommandEnv = process.env,
   signal?: AbortSignal,
 ): Promise<LinearIssue[]> {
@@ -1251,4 +1250,12 @@ export async function listRiskyLinearIssues(
   );
 
   return enriched;
+}
+
+export async function listRiskyLinearIssues(
+  _policy: RiskPolicy,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<LinearIssue[]> {
+  return listOpenLinearIssues(env, signal);
 }

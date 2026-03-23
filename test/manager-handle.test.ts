@@ -14,6 +14,7 @@ import { ensureManagerStateFiles, loadFollowupsLedger } from "../src/lib/manager
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 import { recordPlanningOutcome } from "../src/state/workgraph/recorder.js";
+import { createDefaultTestManagerAgentTurn } from "./helpers/default-manager-agent-mock.js";
 
 const linearMocks = vi.hoisted(() => ({
   searchLinearIssues: vi.fn(),
@@ -28,6 +29,7 @@ const linearMocks = vi.hoisted(() => ({
   markLinearIssueBlocked: vi.fn(),
   updateLinearIssueState: vi.fn(),
   updateLinearIssueStateWithComment: vi.fn(),
+  listOpenLinearIssues: vi.fn(),
   listRiskyLinearIssues: vi.fn(),
 }));
 
@@ -64,6 +66,7 @@ vi.mock("../src/lib/linear.js", () => ({
   markLinearIssueBlocked: linearMocks.markLinearIssueBlocked,
   updateLinearIssueState: linearMocks.updateLinearIssueState,
   updateLinearIssueStateWithComment: linearMocks.updateLinearIssueStateWithComment,
+  listOpenLinearIssues: linearMocks.listOpenLinearIssues,
   listRiskyLinearIssues: linearMocks.listRiskyLinearIssues,
 }));
 
@@ -470,6 +473,7 @@ describe("handleManagerMessage clarification flow", () => {
       inverseRelations: [],
     });
     linearMocks.listRiskyLinearIssues.mockReset().mockResolvedValue([]);
+    linearMocks.listOpenLinearIssues.mockReset().mockImplementation(async (...args: unknown[]) => linearMocks.listRiskyLinearIssues(...args));
     slackContextMocks.getSlackThreadContext.mockReset().mockResolvedValue({
       channelId: "C0ALAMDRB9V",
       rootThreadTs: "thread-clarify",
@@ -482,7 +486,20 @@ describe("handleManagerMessage clarification flow", () => {
       title: "Example",
       snippet: "Example snippet",
     });
-    piSessionMocks.runManagerAgentTurn.mockReset().mockRejectedValue(new Error("manager agent fallback"));
+    piSessionMocks.runManagerAgentTurn.mockReset().mockImplementation(createDefaultTestManagerAgentTurn({
+      config: { ...config, workspaceDir },
+      systemPaths,
+      linearMocks: {
+        listOpenLinearIssues: linearMocks.listOpenLinearIssues,
+        searchLinearIssues: linearMocks.searchLinearIssues,
+        getLinearIssue: linearMocks.getLinearIssue,
+      },
+      slackContextMocks: {
+        getSlackThreadContext: slackContextMocks.getSlackThreadContext,
+      },
+      route: defaultMessageRouter,
+      buildReply: defaultManagerReply,
+    }));
     piSessionMocks.runManagerSystemTurn.mockReset().mockRejectedValue(new Error("manager system fallback"));
     piSessionMocks.runMessageRouterTurn.mockReset().mockImplementation(async (_config: unknown, _paths: unknown, input: { messageText: string; threadContext?: { pendingClarification?: boolean } }) => defaultMessageRouter(input));
     piSessionMocks.runManagerReplyTurn.mockReset().mockImplementation(async (_config: unknown, _paths: unknown, input: { kind: string; conversationKind?: string; facts?: Record<string, unknown> }) => defaultManagerReply(input));
@@ -1178,8 +1195,8 @@ describe("handleManagerMessage clarification flow", () => {
     expect(piSessionMocks.runTaskPlanningTurn).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy classifier when the LLM router fails technically", async () => {
-    piSessionMocks.runMessageRouterTurn.mockRejectedValueOnce(new Error("router failure"));
+  it("returns a safety-only conversation reply when the manager agent fails technically", async () => {
+    piSessionMocks.runManagerAgentTurn.mockRejectedValueOnce(new Error("agent failure"));
 
     const result = await handleManagerMessage(
       { ...config, workspaceDir },
@@ -1200,21 +1217,11 @@ describe("handleManagerMessage clarification flow", () => {
       source: "fallback",
       action: "conversation",
     });
-    expect(result.diagnostics?.router.technicalFailure).toContain("router failure");
+    expect(result.diagnostics?.router.technicalFailure).toContain("agent failure");
   });
 
-  it("falls back to the fixed query formatter when the reply planner fails technically", async () => {
-    linearMocks.listRiskyLinearIssues.mockResolvedValueOnce([
-      makeActiveIssue({
-        identifier: "AIC-880",
-        title: "期限が今日の task",
-        assignee: { id: "user-1", displayName: "y.kakui" },
-        dueDate: "2026-03-19",
-        priority: 1,
-        priorityLabel: "Urgent",
-      }),
-    ]);
-    piSessionMocks.runManagerReplyTurn.mockRejectedValueOnce(new Error("reply failure"));
+  it("returns a safety-only query reply when the manager agent fails technically", async () => {
+    piSessionMocks.runManagerAgentTurn.mockRejectedValueOnce(new Error("agent failure"));
 
     const result = await handleManagerMessage(
       { ...config, workspaceDir },
@@ -1230,8 +1237,7 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("AIC-880");
-    expect(result.reply).toContain("今日まず手を付けるなら");
+    expect(result.reply).toContain("issue ID か条件をもう少し具体的に教えてください");
   });
 
   it("searches for existing issues before new creation when asked conversationally", async () => {

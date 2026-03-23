@@ -7,6 +7,7 @@ import { ensureManagerStateFiles } from "../../src/lib/manager-state.js";
 import { buildSystemPaths } from "../../src/lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "../../src/state/repositories/file-backed-manager-repositories.js";
 import { recordPlanningOutcome } from "../../src/state/workgraph/recorder.js";
+import { createDefaultTestManagerAgentTurn } from "../helpers/default-manager-agent-mock.js";
 import { loadTranscriptFixture, runTranscriptFixture, type TranscriptTurnFixture } from "../helpers/transcript-harness.js";
 
 const linearMocks = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const linearMocks = vi.hoisted(() => ({
   markLinearIssueBlocked: vi.fn(),
   updateLinearIssueState: vi.fn(),
   updateLinearIssueStateWithComment: vi.fn(),
+  listOpenLinearIssues: vi.fn(),
   listRiskyLinearIssues: vi.fn(),
 }));
 
@@ -58,6 +60,7 @@ vi.mock("../../src/lib/linear.js", () => ({
   markLinearIssueBlocked: linearMocks.markLinearIssueBlocked,
   updateLinearIssueState: linearMocks.updateLinearIssueState,
   updateLinearIssueStateWithComment: linearMocks.updateLinearIssueStateWithComment,
+  listOpenLinearIssues: linearMocks.listOpenLinearIssues,
   listRiskyLinearIssues: linearMocks.listRiskyLinearIssues,
 }));
 
@@ -252,6 +255,7 @@ describe("manager transcript fixtures", () => {
       title: "done",
     });
     linearMocks.listRiskyLinearIssues.mockReset().mockResolvedValue([]);
+    linearMocks.listOpenLinearIssues.mockReset().mockImplementation(async (...args: unknown[]) => linearMocks.listRiskyLinearIssues(...args));
     slackContextMocks.getSlackThreadContext.mockReset().mockResolvedValue({
       channelId: "C0ALAMDRB9V",
       rootThreadTs: "thread-transcript",
@@ -264,7 +268,20 @@ describe("manager transcript fixtures", () => {
       title: "Example",
       snippet: "Example snippet",
     });
-    piSessionMocks.runManagerAgentTurn.mockReset().mockRejectedValue(new Error("manager agent fallback"));
+    piSessionMocks.runManagerAgentTurn.mockReset().mockImplementation(createDefaultTestManagerAgentTurn({
+      config: { ...config, workspaceDir },
+      systemPaths,
+      linearMocks: {
+        listOpenLinearIssues: linearMocks.listOpenLinearIssues,
+        searchLinearIssues: linearMocks.searchLinearIssues,
+        getLinearIssue: linearMocks.getLinearIssue,
+      },
+      slackContextMocks: {
+        getSlackThreadContext: slackContextMocks.getSlackThreadContext,
+      },
+      route: defaultMessageRouter,
+      buildReply: defaultManagerReply,
+    }));
     piSessionMocks.runManagerSystemTurn.mockReset().mockRejectedValue(new Error("manager system fallback"));
     piSessionMocks.runMessageRouterTurn.mockReset().mockImplementation(async (_config: unknown, _paths: unknown, input: { messageText: string; threadContext?: { pendingClarification?: boolean } }) => defaultMessageRouter(input));
     piSessionMocks.runManagerReplyTurn.mockReset().mockImplementation(async (_config: unknown, _paths: unknown, input: { kind: string; conversationKind?: string; facts?: Record<string, unknown> }) => defaultManagerReply(input));

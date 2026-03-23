@@ -984,29 +984,6 @@ export async function handleManagerMessage(
       },
     };
   } catch (error) {
-    if (process.env.NODE_ENV === "test") {
-      const legacyResult = await handleManagerMessageLegacy(
-        config,
-        systemPaths,
-        message,
-        repositories,
-        now,
-      );
-      return {
-        ...legacyResult,
-        diagnostics: {
-          ...legacyResult.diagnostics,
-          agent: {
-            source: "fallback",
-            toolCalls: [],
-            proposalCount: 0,
-            committedCommands: [],
-            commitRejections: [],
-            technicalFailure: error instanceof Error ? error.message : String(error),
-          },
-        },
-      };
-    }
     const safetyFallback = buildSafetyOnlyManagerFallbackReply(message);
     return {
       handled: true,
