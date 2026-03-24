@@ -25,6 +25,7 @@ describe("file-backed manager repositories", () => {
     });
     await expect(repositories.followups.load()).resolves.toEqual([]);
     await expect(repositories.planning.load()).resolves.toEqual([]);
+    await expect(repositories.webhookDeliveries.load()).resolves.toEqual([]);
     await expect(repositories.workgraph.list()).resolves.toEqual([]);
   });
 

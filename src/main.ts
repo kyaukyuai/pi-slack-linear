@@ -1,22 +1,40 @@
 import "dotenv/config";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage } from "node:http";
 import { basename, join } from "node:path";
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import { loadConfig } from "./lib/config.js";
 import { HeartbeatService } from "./lib/heartbeat.js";
-import { verifyLinearCli } from "./lib/linear.js";
+import { ensureLinearIssueCreatedWebhook, getLinearIssue, verifyLinearCli } from "./lib/linear.js";
+import {
+  LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+  isDuplicateWebhookDelivery,
+  isLoopedWebhookIssue,
+  parseLinearWebhookEvent,
+  updateWebhookDeliveryStatus,
+  upsertWebhookDelivery,
+  verifyLinearWebhookRequest,
+} from "./lib/linear-webhook.js";
 import { Logger } from "./lib/logger.js";
 import { handleManagerMessage } from "./lib/manager.js";
 import { commitManagerCommandProposals } from "./lib/manager-command-commit.js";
 import { ensureManagerStateFiles } from "./lib/manager-state.js";
 import { analyzeOwnerMap } from "./lib/owner-map-diagnostics.js";
+import { handleIssueCreatedWebhook } from "./orchestrators/webhooks/handle-issue-created.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runManagerSystemTurn } from "./lib/pi-session.js";
 import { SchedulerService } from "./lib/scheduler.js";
 import { postSlackProcessingNotice, sendSlackReply } from "./lib/slack-replies.js";
 import { mergeSystemReply } from "./lib/system-slack-reply.js";
 import { isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
-import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace, type SchedulerJob } from "./lib/system-workspace.js";
+import {
+  buildHeartbeatPaths,
+  buildSchedulerPaths,
+  buildSystemPaths,
+  buildWebhookPaths,
+  ensureSystemWorkspace,
+  type SchedulerJob,
+} from "./lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "./state/repositories/file-backed-manager-repositories.js";
 import { runWorkgraphMaintenance } from "./state/workgraph/maintenance.js";
 import {
@@ -42,6 +60,14 @@ class ThreadQueue {
 
     this.jobs.set(key, current);
   }
+}
+
+async function readRawBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function extractSchedulerRunCommitSummary(rawReply: string, postedReply: string): string | undefined {
@@ -107,9 +133,12 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const logger = new Logger(config.logLevel);
   const queue = new ThreadQueue();
+  const webhookQueue = new ThreadQueue();
   const socketClient = new SocketModeClient({ appToken: config.slackAppToken });
   const webClient = new WebClient(config.slackBotToken);
   const systemPaths = buildSystemPaths(config.workspaceDir);
+  let webhookListenerEnabled = config.linearWebhookEnabled;
+  let ensuredWebhookId: string | undefined;
   const cleanupTimer = setInterval(() => {
     void disposeIdleThreadRuntimes().catch((error) => {
       logger.warn("Idle thread runtime cleanup failed", {
@@ -355,12 +384,181 @@ async function main(): Promise<void> {
     };
   };
 
+  if (config.linearWebhookEnabled) {
+    try {
+      const ensuredWebhook = await ensureLinearIssueCreatedWebhook(
+        {
+          label: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+          url: `${config.linearWebhookPublicUrl}${config.linearWebhookPath}`,
+          teamKey: config.linearTeamKey,
+          secret: config.linearWebhookSecret ?? "",
+        },
+        linearEnv,
+      );
+      if (ensuredWebhook.status === "disabled-duplicate") {
+        webhookListenerEnabled = false;
+        logger.error("Linear webhook auto-processing disabled because multiple matching webhooks exist", {
+          webhookLabel: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+          duplicateWebhookIds: ensuredWebhook.duplicateWebhooks?.map((entry) => entry.id),
+        });
+      } else {
+        ensuredWebhookId = ensuredWebhook.webhook?.id;
+        logger.info("Linear issue-created webhook reconciled", {
+          webhookLabel: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+          webhookStatus: ensuredWebhook.status,
+          webhookId: ensuredWebhook.webhook?.id,
+          webhookUrl: ensuredWebhook.webhook?.url,
+        });
+      }
+    } catch (error) {
+      logger.error("Linear webhook reconcile failed", {
+        webhookLabel: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const processIssueCreatedWebhookDelivery = async (event: {
+    deliveryId: string;
+    webhookId?: string;
+    issueId: string;
+    issueIdentifier: string;
+    receivedAt: string;
+  }): Promise<void> => {
+    const currentPolicy = await managerRepositories.policy.load();
+    const deliveries = await managerRepositories.webhookDeliveries.load();
+    if (isLoopedWebhookIssue(deliveries, event.issueId, event.issueIdentifier)) {
+      const nextDeliveries = updateWebhookDeliveryStatus(deliveries, event.deliveryId, {
+        status: "ignored-loop",
+        reason: `${event.issueIdentifier} was created by prior webhook automation`,
+      });
+      await managerRepositories.webhookDeliveries.save(nextDeliveries);
+      logger.info("Ignored webhook issue create due to loop prevention", {
+        deliveryId: event.deliveryId,
+        issueId: event.issueId,
+        issueIdentifier: event.issueIdentifier,
+      });
+      return;
+    }
+
+    const issue = await getLinearIssue(event.issueIdentifier, linearEnv).catch(async () => {
+      return getLinearIssue(event.issueId, linearEnv);
+    });
+    if (!issue.identifier.startsWith(`${config.linearTeamKey}-`)) {
+      const nextDeliveries = updateWebhookDeliveryStatus(deliveries, event.deliveryId, {
+        status: "ignored-unsupported",
+        reason: `${issue.identifier} is outside team ${config.linearTeamKey}`,
+      });
+      await managerRepositories.webhookDeliveries.save(nextDeliveries);
+      logger.info("Ignored webhook issue create outside configured team", {
+        deliveryId: event.deliveryId,
+        issueIdentifier: issue.identifier,
+      });
+      return;
+    }
+
+    const paths = buildWebhookPaths(config.workspaceDir, issue.identifier);
+    await ensureThreadWorkspace(paths);
+    await appendThreadLog(paths, {
+      type: "system",
+      ts: `${Date.now() / 1000}`,
+      threadTs: `webhook:${issue.identifier}`,
+      text: `linear webhook issue created: ${issue.identifier}`,
+    });
+
+    const result = await handleIssueCreatedWebhook({
+      config,
+      paths,
+      repositories: managerRepositories,
+      policy: currentPolicy,
+      issue,
+      deliveryId: event.deliveryId,
+      webhookId: event.webhookId,
+      now: new Date(),
+      env: linearEnv,
+      currentDate: currentDateInJst(),
+      runAtJst: currentDateTimeInJst(),
+      runSchedulerJobNow: async (job) => {
+        try {
+          const runResult = await executeCustomSchedulerJob(job, "manual");
+          return {
+            status: "ok" as const,
+            persistedSummary: runResult.postedReply,
+            commitSummary: runResult.commitSummary,
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          return {
+            status: "error" as const,
+            persistedSummary: errorMessage,
+            commitSummary: errorMessage,
+          };
+        }
+      },
+    });
+
+    const nextDeliveries = updateWebhookDeliveryStatus(
+      await managerRepositories.webhookDeliveries.load(),
+      event.deliveryId,
+      {
+        status: result.status,
+        reason: result.reason,
+        createdIssueIds: result.createdIssueIds,
+      },
+    );
+    await managerRepositories.webhookDeliveries.save(nextDeliveries);
+
+    if (result.agentResult) {
+      logger.info("Manager webhook agent result", {
+        intent: result.agentResult.intentReport?.intent,
+        queryKind: result.agentResult.intentReport?.queryKind,
+        queryScope: result.agentResult.intentReport?.queryScope,
+        toolCalls: result.agentResult.toolCalls.map((call) => call.toolName),
+        proposalCount: result.agentResult.proposals.length,
+        invalidProposalCount: result.agentResult.invalidProposalCount,
+        committedCommands: result.commitResult?.committed.map((entry) => entry.commandType) ?? [],
+        commitRejections: result.commitResult?.rejected.map((entry) => entry.reason) ?? [],
+        deliveryId: event.deliveryId,
+        issueIdentifier: issue.identifier,
+      });
+    }
+
+    if (result.status === "noop") {
+      logger.info("Webhook issue create resulted in no-op", {
+        deliveryId: event.deliveryId,
+        issueIdentifier: issue.identifier,
+      });
+      return;
+    }
+
+    const notificationReply = result.status === "committed"
+      ? [`${issue.identifier} に対して自動処理を実施しました。`, result.reply].filter(Boolean).join("\n\n")
+      : [`${issue.identifier} の webhook 自動処理に失敗しました。`, result.reply ?? result.reason].filter(Boolean).join("\n\n");
+
+    const postedReply = await sendSlackReply(webClient, {
+      channel: currentPolicy.controlRoomChannelId,
+      reply: notificationReply,
+      linearWorkspace: config.linearWorkspace,
+    });
+    await appendThreadLog(paths, {
+      type: "assistant",
+      ts: `${Date.now() / 1000}`,
+      threadTs: `webhook:${issue.identifier}`,
+      text: postedReply,
+    });
+  };
+
   logger.info("Slack assistant starting", {
     assistantName: managerPolicy.assistantName,
     channels: Array.from(config.slackAllowedChannelIds),
     model: config.botModel,
     linearWorkspace: config.linearWorkspace,
     linearTeamKey: config.linearTeamKey,
+    webhookEnabled: webhookListenerEnabled,
+    webhookPort: config.linearWebhookPort,
+    webhookPath: config.linearWebhookPath,
+    webhookLabel: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+    ensuredWebhookId,
     heartbeatEnabled: managerPolicy.heartbeatEnabled,
     heartbeatIntervalMin: managerPolicy.heartbeatIntervalMin,
     heartbeatActiveLookbackHours: managerPolicy.heartbeatActiveLookbackHours,
@@ -551,10 +749,141 @@ async function main(): Promise<void> {
     });
   });
 
+  const webhookServer = webhookListenerEnabled
+    ? createServer(async (request, response) => {
+      if ((request.url ?? "") !== config.linearWebhookPath) {
+        response.statusCode = 404;
+        response.end("Not found");
+        return;
+      }
+      if (request.method !== "POST") {
+        response.statusCode = 405;
+        response.end("Method not allowed");
+        return;
+      }
+
+      const rawBody = await readRawBody(request);
+      const verification = verifyLinearWebhookRequest({
+        headers: request.headers,
+        rawBody,
+        secret: config.linearWebhookSecret ?? "",
+      });
+      if (!verification.ok) {
+        response.statusCode = verification.statusCode;
+        response.end(verification.error ?? "Invalid webhook");
+        return;
+      }
+
+      const receivedAt = new Date().toISOString();
+      let parsedEvent;
+      try {
+        parsedEvent = parseLinearWebhookEvent({
+          headers: request.headers,
+          rawBody,
+          receivedAt,
+        });
+      } catch (error) {
+        response.statusCode = 400;
+        response.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
+
+      if (parsedEvent.kind === "unsupported") {
+        const deliveries = await managerRepositories.webhookDeliveries.load();
+        const nextDeliveries = upsertWebhookDelivery(deliveries, parsedEvent.record);
+        await managerRepositories.webhookDeliveries.save(nextDeliveries);
+        response.statusCode = 200;
+        response.end("ok");
+        return;
+      }
+
+      const deliveries = await managerRepositories.webhookDeliveries.load();
+      if (isDuplicateWebhookDelivery(deliveries, parsedEvent.event.deliveryId)) {
+        const existing = deliveries.find((entry) => entry.deliveryId === parsedEvent.event.deliveryId);
+        if (existing?.status === "received") {
+          const nextDeliveries = updateWebhookDeliveryStatus(deliveries, parsedEvent.event.deliveryId, {
+            status: "ignored-duplicate",
+            reason: "duplicate Linear-Delivery ignored while original processing is already in flight",
+          });
+          await managerRepositories.webhookDeliveries.save(nextDeliveries);
+        }
+        response.statusCode = 200;
+        response.end("ok");
+        return;
+      }
+
+      const receivedEntry = {
+        deliveryId: parsedEvent.event.deliveryId,
+        webhookId: parsedEvent.event.webhookId,
+        issueId: parsedEvent.event.issueId,
+        issueIdentifier: parsedEvent.event.issueIdentifier,
+        receivedAt: parsedEvent.event.receivedAt,
+        status: "received" as const,
+        createdIssueIds: [],
+      };
+      await managerRepositories.webhookDeliveries.save(
+        upsertWebhookDelivery(deliveries, receivedEntry),
+      );
+
+      webhookQueue.enqueue("linear-webhook", async () => {
+        try {
+          await processIssueCreatedWebhookDelivery(parsedEvent.event);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.error("Webhook issue create processing failed", {
+            deliveryId: parsedEvent.event.deliveryId,
+            issueId: parsedEvent.event.issueId,
+            issueIdentifier: parsedEvent.event.issueIdentifier,
+            error: errorMessage,
+          });
+          const nextDeliveries = updateWebhookDeliveryStatus(
+            await managerRepositories.webhookDeliveries.load(),
+            parsedEvent.event.deliveryId,
+            {
+              status: "failed",
+              reason: errorMessage,
+            },
+          );
+          await managerRepositories.webhookDeliveries.save(nextDeliveries);
+
+          const currentPolicy = await managerRepositories.policy.load();
+          await sendSlackReply(webClient, {
+            channel: currentPolicy.controlRoomChannelId,
+            reply: `${parsedEvent.event.issueIdentifier} の webhook 自動処理に失敗しました。\n\n${errorMessage}`,
+            linearWorkspace: config.linearWorkspace,
+          }).catch((notifyError) => {
+            logger.error("Failed to notify control room about webhook failure", {
+              deliveryId: parsedEvent.event.deliveryId,
+              error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+            });
+          });
+        }
+      });
+
+      response.statusCode = 200;
+      response.end("ok");
+    })
+    : undefined;
+
   await socketClient.start();
   logger.info("Slack assistant connected", {
     assistantName: managerPolicy.assistantName,
   });
+
+  if (webhookServer) {
+    await new Promise<void>((resolve, reject) => {
+      webhookServer.once("error", reject);
+      webhookServer.listen(config.linearWebhookPort, () => {
+        webhookServer.off("error", reject);
+        resolve();
+      });
+    });
+    logger.info("Linear webhook listener started", {
+      webhookPort: config.linearWebhookPort,
+      webhookPath: config.linearWebhookPath,
+      webhookLabel: LINEAR_ISSUE_CREATED_WEBHOOK_LABEL,
+    });
+  }
 
   heartbeatService = new HeartbeatService({
     logger,
@@ -687,6 +1016,7 @@ async function main(): Promise<void> {
     clearInterval(cleanupTimer);
     heartbeatService.stop();
     schedulerService.stop();
+    webhookServer?.close();
     await socketClient.disconnect();
     await disposeAllThreadRuntimes();
     process.exit(0);

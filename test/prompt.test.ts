@@ -36,6 +36,11 @@ const config: AppConfig = {
   notionAgendaParentPageId: "parent-page-1",
   botModel: "claude-sonnet-4-6",
   workspaceDir: "/tmp/cogito-work-manager",
+  linearWebhookEnabled: false,
+  linearWebhookPublicUrl: undefined,
+  linearWebhookSecret: undefined,
+  linearWebhookPort: 8787,
+  linearWebhookPath: "/hooks/linear",
   heartbeatIntervalMin: 30,
   heartbeatActiveLookbackHours: 24,
   schedulerPollSec: 30,
@@ -59,6 +64,9 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Slack thread is the primary operator surface for day-to-day work.");
     expect(prompt).toContain("Only use the control room for proactive reviews, urgent follow-ups, and fallback-owner notices.");
     expect(prompt).toContain("Use read tools to inspect Linear, workgraph, Slack context, optional Notion reference material, and lightweight web results.");
+    expect(prompt).toContain("When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether immediate AI action has clear value.");
+    expect(prompt).toContain("For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.");
+    expect(prompt).toContain("Webhook issue-created processing has no Slack thread context.");
     expect(prompt).toContain("When the user asks about schedules, scheduler jobs, cron-style tasks, morning/evening/weekly review settings, or heartbeat settings, use the dedicated scheduler tools.");
     expect(prompt).toContain("Use intent=query_schedule for schedule inspection, create_schedule for custom job creation, run_schedule for immediate custom job execution, update_schedule for custom job updates or built-in disable/retime changes, and delete_schedule only for custom job deletion.");
     expect(prompt).toContain("Built-in schedules are morning-review, evening-review, weekly-review, and heartbeat.");
@@ -134,6 +142,28 @@ describe("prompt helpers", () => {
     });
 
     expect(prompt).toContain("- runAtJst: 2026-03-23 17:00 JST");
+  });
+
+  it("supports webhook issue-created system prompts", () => {
+    const prompt = buildManagerSystemPromptInput({
+      kind: "webhook-issue-created",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "webhook:AIC-123",
+      messageTs: "delivery-1",
+      text: "Linear issue created webhook context",
+      currentDate: "2026-03-24",
+      runAtJst: "2026-03-24 12:00 JST",
+      metadata: {
+        deliveryId: "delivery-1",
+        issueIdentifier: "AIC-123",
+        trigger: "linear-webhook",
+      },
+    });
+
+    expect(prompt).toContain("- runKind: webhook-issue-created");
+    expect(prompt).toContain("- runAtJst: 2026-03-24 12:00 JST");
+    expect(prompt).toContain("- deliveryId: delivery-1");
+    expect(prompt).toContain("- issueIdentifier: AIC-123");
   });
 
   it("embeds thread-linked issue context into the runtime prompt", () => {

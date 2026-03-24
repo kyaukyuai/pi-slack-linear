@@ -11,6 +11,7 @@ export interface SystemPaths {
   ownerMapFile: string;
   followupsFile: string;
   planningLedgerFile: string;
+  webhookDeliveriesFile: string;
   workgraphEventsFile: string;
   workgraphSnapshotFile: string;
   sessionsDir: string;
@@ -103,6 +104,7 @@ export function buildSystemPaths(workspaceDir: string): SystemPaths {
     ownerMapFile: join(rootDir, "owner-map.json"),
     followupsFile: join(rootDir, "followups.json"),
     planningLedgerFile: join(rootDir, "planning-ledger.json"),
+    webhookDeliveriesFile: join(rootDir, "webhook-deliveries.json"),
     workgraphEventsFile: join(rootDir, "workgraph-events.jsonl"),
     workgraphSnapshotFile: join(rootDir, "workgraph-snapshot.json"),
     sessionsDir: join(rootDir, "sessions"),
@@ -124,6 +126,18 @@ export function buildHeartbeatPaths(workspaceDir: string, channelId: string): Th
 export function buildSchedulerPaths(workspaceDir: string, jobId: string): ThreadPaths {
   const safeJobId = sanitizeSegment(jobId);
   const rootDir = join(workspaceDir, "system", "sessions", "cron", safeJobId);
+  return {
+    rootDir,
+    sessionFile: join(rootDir, "session.jsonl"),
+    logFile: join(rootDir, "log.jsonl"),
+    attachmentsDir: join(rootDir, "attachments"),
+    scratchDir: join(rootDir, "scratch"),
+  };
+}
+
+export function buildWebhookPaths(workspaceDir: string, issueIdentifierOrId: string): ThreadPaths {
+  const safeIssue = sanitizeSegment(issueIdentifierOrId);
+  const rootDir = join(workspaceDir, "system", "sessions", "webhook", safeIssue);
   return {
     rootDir,
     sessionFile: join(rootDir, "session.jsonl"),

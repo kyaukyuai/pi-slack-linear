@@ -1,15 +1,15 @@
 import { resolve } from "node:path";
 import { buildManagerIssueDiagnostics, buildManagerThreadDiagnostics } from "../src/lib/manager-diagnostics.js";
 import type { AppConfig } from "../src/lib/config.js";
-import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
+import { ensureManagerStateFiles, loadWebhookDeliveries } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 
-type Command = "thread" | "issue";
+type Command = "thread" | "issue" | "webhook";
 
 function parseCommand(value: string | undefined): Command {
-  if (value === "thread" || value === "issue") return value;
-  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue> <arg1> <arg2?> [workspaceDir]");
+  if (value === "thread" || value === "issue" || value === "webhook") return value;
+  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook> <arg1> <arg2?> [workspaceDir]");
 }
 
 function buildRuntimeConfig(workspaceDir: string): AppConfig {
@@ -26,8 +26,15 @@ function buildRuntimeConfig(workspaceDir: string): AppConfig {
     linearApiKey: process.env.LINEAR_API_KEY ?? "",
     linearWorkspace: process.env.LINEAR_WORKSPACE ?? "",
     linearTeamKey: process.env.LINEAR_TEAM_KEY ?? "",
+    notionApiToken: process.env.NOTION_API_TOKEN,
+    notionAgendaParentPageId: process.env.NOTION_AGENDA_PARENT_PAGE_ID,
     botModel: process.env.BOT_MODEL ?? "claude-sonnet-4-5",
     workspaceDir,
+    linearWebhookEnabled: process.env.LINEAR_WEBHOOK_ENABLED === "true",
+    linearWebhookPublicUrl: process.env.LINEAR_WEBHOOK_PUBLIC_URL,
+    linearWebhookSecret: process.env.LINEAR_WEBHOOK_SECRET,
+    linearWebhookPort: Number(process.env.LINEAR_WEBHOOK_PORT ?? 8787),
+    linearWebhookPath: process.env.LINEAR_WEBHOOK_PATH ?? "/hooks/linear",
     heartbeatIntervalMin: Number(process.env.HEARTBEAT_INTERVAL_MIN ?? 30),
     heartbeatActiveLookbackHours: Number(process.env.HEARTBEAT_ACTIVE_LOOKBACK_HOURS ?? 24),
     schedulerPollSec: Number(process.env.SCHEDULER_POLL_SEC ?? 30),
@@ -63,6 +70,12 @@ async function main(): Promise<void> {
       rootThreadTs,
     });
     process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+    return;
+  }
+
+  if (command === "webhook") {
+    const deliveries = await loadWebhookDeliveries(systemPaths);
+    process.stdout.write(`${JSON.stringify(deliveries.slice(-20), null, 2)}\n`);
     return;
   }
 

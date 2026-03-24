@@ -1,6 +1,6 @@
 # Deploying `cogito-work-manager` on `exe.dev`
 
-この bot は Slack Socket Mode を使うため、外部から受ける Webhook は不要です。`exe.dev` では VM 上で Docker Compose を常駐させるだけで動かせます。
+この bot は Slack Socket Mode だけでも動きますが、Linear issue create webhook を使う場合は追加で public HTTP endpoint が必要です。`exe.dev` では VM 上で Docker Compose を常駐させ、必要なら公開 proxy から webhook port へ流します。
 
 ## Overview
 
@@ -12,9 +12,10 @@
   - Anthropic
   - Linear API
   - Optional: Notion API
+  - Optional: Linear webhook registration
 - Bundled CLI: `linear-cli v2.8.0`
 
-`exe.dev` の HTTP proxy は必須ではありません。この bot は常駐 daemon として動けば十分です。
+`exe.dev` の HTTP proxy は Slack Socket Mode だけなら不要です。Linear webhook を有効にする場合だけ、`LINEAR_WEBHOOK_PUBLIC_URL` が到達するように VM 上の `LINEAR_WEBHOOK_PORT` へ公開経路を用意してください。
 
 ## Prerequisites
 
@@ -28,6 +29,12 @@
   - `LINEAR_API_KEY`
   - `LINEAR_WORKSPACE`
   - `LINEAR_TEAM_KEY`
+  - Optional webhook
+    - `LINEAR_WEBHOOK_ENABLED`
+    - `LINEAR_WEBHOOK_PUBLIC_URL`
+    - `LINEAR_WEBHOOK_SECRET`
+    - `LINEAR_WEBHOOK_PORT`
+    - `LINEAR_WEBHOOK_PATH`
 - Optional: Notion
   - `NOTION_API_TOKEN`
   - `NOTION_AGENDA_PARENT_PAGE_ID`
@@ -77,6 +84,11 @@ SLACK_ALLOWED_CHANNEL_IDS=C0ALAMDRB9V
 LINEAR_API_KEY=lin_api_...
 LINEAR_WORKSPACE=kyaukyuai
 LINEAR_TEAM_KEY=AIC
+LINEAR_WEBHOOK_ENABLED=false
+LINEAR_WEBHOOK_PUBLIC_URL=https://example.com
+LINEAR_WEBHOOK_SECRET=replace-with-long-random-secret
+LINEAR_WEBHOOK_PORT=8787
+LINEAR_WEBHOOK_PATH=/hooks/linear
 ANTHROPIC_API_KEY=sk-ant-...
 BOT_MODEL=claude-sonnet-4-6
 WORKSPACE_DIR=/workspace
@@ -98,6 +110,9 @@ NOTION_AGENDA_PARENT_PAGE_ID=notion-page-id-...
 - `NOTION_API_TOKEN` を入れると bundled `ntn v0.4.0` で Notion page search / page facts / page content excerpt / database search / database query が使えます。
 - `NOTION_AGENDA_PARENT_PAGE_ID` を追加すると、その parent page 配下に agenda page を作成できます。
 - 既存 Notion page への title 更新、append-only の追記、archive/trash も Slack から扱えます。database row の更新・削除は未対応です。
+- `LINEAR_WEBHOOK_ENABLED=true` の場合は、`LINEAR_WEBHOOK_PUBLIC_URL` と `LINEAR_WEBHOOK_SECRET` が必須です。
+- webhook listener は `LINEAR_WEBHOOK_PORT` / `LINEAR_WEBHOOK_PATH` で待ち受けます。Compose では同 port を host に公開します。
+- Linear webhook の対象は `Issue create` のみです。no-op は silent で、action/failed のみ control room に通知します。
 - headless 運用では `ANTHROPIC_API_KEY` を推奨します。
 - manager review と heartbeat を既定で使うなら `HEARTBEAT_INTERVAL_MIN=30` のままにします。
 - `WORKGRAPH_MAINTENANCE_INTERVAL_MIN=15` なら 15 分ごとに health check と auto compaction 判定を行います。
@@ -131,7 +146,7 @@ Compose で起動します。
 docker compose up -d --build
 ```
 
-この image は `linear-cli v2.8.0` と `ntn v0.4.0` を同梱します。Linear では `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を前提に動きます。Notion は page search / page facts / page content excerpt / database search / database query の参照に加えて、設定済み parent page 配下への agenda page 作成、既存 page の title 更新、append-only の追記、archive/trash をサポートします。
+この image は `linear-cli v2.8.0` と `ntn v0.4.0` を同梱します。Linear では `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json`, `webhook list/create/update --json` を前提に動きます。Notion は page search / page facts / page content excerpt / database search / database query の参照に加えて、設定済み parent page 配下への agenda page 作成、既存 page の title 更新、append-only の追記、archive/trash をサポートします。
 
 ログ確認:
 
@@ -143,6 +158,8 @@ docker compose logs -f
 
 - `Slack assistant starting`
 - `Slack assistant connected`
+- Optional: `Linear issue-created webhook reconciled`
+- Optional: `Linear webhook listener started`
 
 ## 6. Verify in Slack
 
@@ -195,6 +212,7 @@ AIC-2 の期限を 2026-03-20 にして
 - `タスク確認` は active issue を返す
 - 同じ Slack thread では会話が継続する
 - `09:00`, `17:00`, `Mon 09:30` に manager review jobs が自動で動く
+- Optional: Linear で AIC issue を新規作成すると、必要な自動処理だけが control room に通知される
 
 ## 7. Restart and updates
 
@@ -223,6 +241,7 @@ docker compose down
 - `workgraph-snapshot.json`
 - `jobs.json`
 - `HEARTBEAT.md`
+- `webhook-deliveries.json`
 
 このうち、明示的に編集したくなるのは主に `policy.json`, `owner-map.json`, `HEARTBEAT.md` です。
 
@@ -270,6 +289,7 @@ thread の解釈や issue context を確認する場合:
 ```bash
 npm run manager:diagnostics -- thread C0ALAMDRB9V 1773806473.747499 /workspace
 npm run manager:diagnostics -- issue AIC-38 /workspace
+npm run manager:diagnostics -- webhook /workspace
 ```
 
 replay recovery 手順:

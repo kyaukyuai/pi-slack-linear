@@ -2,18 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateIssueArgs,
   buildCreateBatchArgs,
+  buildCreateLinearWebhookArgs,
+  buildDeleteLinearWebhookArgs,
   buildIssueChildrenArgs,
   buildIssueCommentAddArgs,
   buildGetIssueArgs,
   buildIssueUrlArgs,
   buildListActiveIssuesArgs,
+  buildListLinearWebhooksArgs,
   buildSearchIssuesArgs,
   buildTeamMembersArgs,
+  buildUpdateLinearWebhookArgs,
   buildUpdateIssueArgs,
   normalizeLinearIssuePayload,
+  normalizeLinearWebhookPayload,
   normalizeRelationListPayload,
   normalizeTeamMembersPayload,
   parseLinearBatchCreateFailure,
+  planLinearIssueCreatedWebhookReconcile,
 } from "../src/lib/linear.js";
 
 describe("linear command builders", () => {
@@ -193,6 +199,78 @@ describe("linear command builders", () => {
         LINEAR_API_KEY: "lin_api_test",
       }),
     ).toEqual(["issue", "create-batch", "--file", "/tmp/issue-batch.json", "--json"]);
+  });
+
+  it("builds Linear webhook list/create/update/delete args", () => {
+    expect(
+      buildListLinearWebhooksArgs("AIC", {
+        LINEAR_API_KEY: "lin_api_test",
+      }),
+    ).toEqual(["webhook", "list", "--team", "AIC", "--json"]);
+
+    expect(
+      buildCreateLinearWebhookArgs(
+        {
+          label: "cogito-work-manager-issue-created",
+          url: "https://example.com/hooks/linear",
+          teamKey: "AIC",
+          secret: "secret-1",
+        },
+        {
+          LINEAR_API_KEY: "lin_api_test",
+        },
+      ),
+    ).toEqual([
+      "webhook",
+      "create",
+      "--url",
+      "https://example.com/hooks/linear",
+      "--resource-types",
+      "Issue",
+      "--label",
+      "cogito-work-manager-issue-created",
+      "--team",
+      "AIC",
+      "--secret",
+      "secret-1",
+      "--json",
+    ]);
+
+    expect(
+      buildUpdateLinearWebhookArgs(
+        "webhook-1",
+        {
+          label: "cogito-work-manager-issue-created",
+          url: "https://example.com/hooks/linear",
+          teamKey: "AIC",
+          secret: "secret-1",
+        },
+        {
+          LINEAR_API_KEY: "lin_api_test",
+        },
+      ),
+    ).toEqual([
+      "webhook",
+      "update",
+      "webhook-1",
+      "--url",
+      "https://example.com/hooks/linear",
+      "--resource-types",
+      "Issue",
+      "--label",
+      "cogito-work-manager-issue-created",
+      "--team",
+      "AIC",
+      "--secret",
+      "secret-1",
+      "--json",
+    ]);
+
+    expect(
+      buildDeleteLinearWebhookArgs("webhook-1", {
+        LINEAR_API_KEY: "lin_api_test",
+      }),
+    ).toEqual(["webhook", "delete", "webhook-1", "--json"]);
   });
 
   it("parses structured create-batch partial failures from linear-cli v2.8.0", () => {
@@ -404,5 +482,73 @@ describe("linear command builders", () => {
         email: "alice@example.com",
       },
     ]);
+  });
+
+  it("normalizes webhook payloads and plans reconcile actions", () => {
+    const webhook = normalizeLinearWebhookPayload({
+      id: "webhook-1",
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      enabled: true,
+      resourceTypes: ["Issue"],
+      secretConfigured: true,
+      team: {
+        id: "team-1",
+        key: "AIC",
+      },
+    });
+
+    expect(webhook).toEqual({
+      id: "webhook-1",
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      enabled: true,
+      resourceTypes: ["Issue"],
+      teamId: "team-1",
+      teamKey: "AIC",
+      secretConfigured: true,
+    });
+
+    expect(planLinearIssueCreatedWebhookReconcile([], {
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      teamKey: "AIC",
+      secret: "secret-1",
+    })).toEqual({ action: "create" });
+
+    expect(planLinearIssueCreatedWebhookReconcile([webhook!], {
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      teamKey: "AIC",
+      secret: "secret-1",
+    })).toEqual({
+      action: "unchanged",
+      webhook,
+    });
+
+    expect(planLinearIssueCreatedWebhookReconcile([
+      webhook!,
+      { ...webhook!, id: "webhook-2" },
+    ], {
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      teamKey: "AIC",
+      secret: "secret-1",
+    })).toEqual({
+      action: "disabled-duplicate",
+      duplicateWebhooks: [webhook, { ...webhook!, id: "webhook-2" }],
+    });
+
+    expect(planLinearIssueCreatedWebhookReconcile([
+      { ...webhook!, url: "https://example.com/old" },
+    ], {
+      label: "cogito-work-manager-issue-created",
+      url: "https://example.com/hooks/linear",
+      teamKey: "AIC",
+      secret: "secret-1",
+    })).toEqual({
+      action: "update",
+      webhook: { ...webhook!, url: "https://example.com/old" },
+    });
   });
 });

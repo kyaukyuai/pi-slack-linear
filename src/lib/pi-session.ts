@@ -89,7 +89,7 @@ export interface ManagerAgentInput {
 }
 
 export interface ManagerSystemInput {
-  kind: "heartbeat" | "scheduler" | "morning-review" | "evening-review" | "weekly-review";
+  kind: "heartbeat" | "scheduler" | "morning-review" | "evening-review" | "weekly-review" | "webhook-issue-created";
   channelId: string;
   rootThreadTs: string;
   messageTs: string;
@@ -270,6 +270,9 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "Use read tools to inspect Linear, workgraph, Slack context, optional Notion reference material, and lightweight web results.",
     "Use proposal tools for create/update/follow-up actions. Proposal tools do not execute side effects.",
     "Never pretend a proposal has already been committed. The manager will validate and commit proposals after your turn.",
+    "When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether immediate AI action has clear value.",
+    "For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.",
+    "Webhook issue-created processing has no Slack thread context. Use the issue facts you are given plus normal read tools, and assume the control room is the only operator surface.",
     "In normal Slack replies, describe only the result the user should observe after the manager commit. Do not mention an extra manual confirmation or approval step unless the manager explicitly rejected the action.",
     "Report your current intent with report_manager_intent once per turn before or during tool usage.",
     "When the turn is a read-only reference lookup using Notion, Slack context, docs, memos, or lightweight web material, report intent=query with queryKind=reference-material.",

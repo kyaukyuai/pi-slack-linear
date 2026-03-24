@@ -93,11 +93,35 @@ export const planningLedgerEntrySchema = z.object({
 export const followupsLedgerSchema = z.array(followupLedgerEntrySchema);
 export const planningLedgerSchema = z.array(planningLedgerEntrySchema);
 
+export const webhookDeliveryStatusSchema = z.enum([
+  "received",
+  "noop",
+  "committed",
+  "failed",
+  "ignored-duplicate",
+  "ignored-loop",
+  "ignored-unsupported",
+]);
+
+export const webhookDeliveryEntrySchema = z.object({
+  deliveryId: z.string().min(1),
+  webhookId: z.string().min(1).optional(),
+  issueId: z.string().min(1),
+  issueIdentifier: z.string().min(1),
+  receivedAt: z.string().datetime(),
+  status: webhookDeliveryStatusSchema,
+  reason: z.string().min(1).optional(),
+  createdIssueIds: z.array(z.string().min(1)).default([]),
+});
+
+export const webhookDeliveriesSchema = z.array(webhookDeliveryEntrySchema);
+
 export type ManagerPolicy = z.infer<typeof managerPolicySchema>;
 export type OwnerMap = z.infer<typeof ownerMapSchema>;
 export type OwnerMapEntry = z.infer<typeof ownerMapEntrySchema>;
 export type FollowupLedgerEntry = z.infer<typeof followupLedgerEntrySchema>;
 export type PlanningLedgerEntry = z.infer<typeof planningLedgerEntrySchema>;
+export type WebhookDeliveryEntry = z.infer<typeof webhookDeliveryEntrySchema>;
 
 export const DEFAULT_POLICY: ManagerPolicy = {
   controlRoomChannelId: "C0ALAMDRB9V",

@@ -9,6 +9,7 @@ import {
   type OwnerMap,
   type OwnerMapEntry,
   type PlanningLedgerEntry,
+  type WebhookDeliveryEntry,
 } from "../state/manager-state-contract.js";
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import { EMPTY_WORKGRAPH_SNAPSHOT } from "../state/workgraph/snapshot.js";
@@ -59,6 +60,7 @@ export async function ensureManagerStateFiles(paths: SystemPaths): Promise<void>
   await ensureJsonFile(paths.ownerMapFile, DEFAULT_OWNER_MAP);
   await ensureJsonFile(paths.followupsFile, []);
   await ensureJsonFile(paths.planningLedgerFile, []);
+  await ensureJsonFile(paths.webhookDeliveriesFile, []);
   await ensureTextFile(paths.workgraphEventsFile, "");
   await ensureJsonFile(paths.workgraphSnapshotFile, EMPTY_WORKGRAPH_SNAPSHOT);
   await rm(join(paths.rootDir, "intake-ledger.json"), { force: true });
@@ -98,4 +100,12 @@ export async function loadPlanningLedger(paths: SystemPaths): Promise<PlanningLe
 
 export async function savePlanningLedger(paths: SystemPaths, ledger: PlanningLedgerEntry[]): Promise<void> {
   await createFileBackedManagerRepositories(paths).planning.save(ledger);
+}
+
+export async function loadWebhookDeliveries(paths: SystemPaths): Promise<WebhookDeliveryEntry[]> {
+  return createFileBackedManagerRepositories(paths).webhookDeliveries.load();
+}
+
+export async function saveWebhookDeliveries(paths: SystemPaths, ledger: WebhookDeliveryEntry[]): Promise<void> {
+  await createFileBackedManagerRepositories(paths).webhookDeliveries.save(ledger);
 }

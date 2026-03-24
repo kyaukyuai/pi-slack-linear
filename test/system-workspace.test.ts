@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureManagerStateFiles, loadManagerPolicy, loadOwnerMap, saveManagerPolicy } from "../src/lib/manager-state.js";
-import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "../src/lib/system-workspace.js";
+import {
+  buildHeartbeatPaths,
+  buildSchedulerPaths,
+  buildSystemPaths,
+  buildWebhookPaths,
+  ensureSystemWorkspace,
+} from "../src/lib/system-workspace.js";
 
 describe("system workspace helpers", () => {
   it("builds system root paths", () => {
@@ -14,6 +20,7 @@ describe("system workspace helpers", () => {
     expect(paths.heartbeatPromptFile).toBe("/workspace/system/HEARTBEAT.md");
     expect(paths.policyFile).toBe("/workspace/system/policy.json");
     expect(paths.ownerMapFile).toBe("/workspace/system/owner-map.json");
+    expect(paths.webhookDeliveriesFile).toBe("/workspace/system/webhook-deliveries.json");
     expect(paths.workgraphEventsFile).toBe("/workspace/system/workgraph-events.jsonl");
     expect(paths.workgraphSnapshotFile).toBe("/workspace/system/workgraph-snapshot.json");
   });
@@ -32,6 +39,13 @@ describe("system workspace helpers", () => {
     expect(paths.sessionFile).toBe("/workspace/system/sessions/cron/job_1/session.jsonl");
   });
 
+  it("builds webhook session paths", () => {
+    const paths = buildWebhookPaths("/workspace", "AIC:123");
+
+    expect(paths.rootDir).toBe("/workspace/system/sessions/webhook/AIC_123");
+    expect(paths.sessionFile).toBe("/workspace/system/sessions/webhook/AIC_123/session.jsonl");
+  });
+
   it("creates default manager files and review jobs", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-system-"));
     const paths = buildSystemPaths(workspaceDir);
@@ -41,10 +55,12 @@ describe("system workspace helpers", () => {
     const policy = await loadManagerPolicy(paths);
     const ownerMap = await loadOwnerMap(paths);
     const jobs = JSON.parse(await readFile(paths.jobsFile, "utf8")) as Array<{ id: string }>;
+    const deliveries = JSON.parse(await readFile(paths.webhookDeliveriesFile, "utf8")) as unknown[];
 
     expect(policy.controlRoomChannelId).toBe("C0ALAMDRB9V");
     expect(policy.assistantName).toBe("コギト");
     expect(ownerMap.defaultOwner).toBe("kyaukyuai");
+    expect(deliveries).toEqual([]);
     expect(jobs.map((job) => job.id)).toEqual(
       expect.arrayContaining([
         "manager-review-morning",

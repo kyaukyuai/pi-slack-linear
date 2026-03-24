@@ -7,6 +7,8 @@ services:
       - .env
     environment:
       WORKSPACE_DIR: /workspace
+    ports:
+      - "${LINEAR_WEBHOOK_PORT:-8787}:${LINEAR_WEBHOOK_PORT:-8787}"
     volumes:
       - ./workspace:/workspace
       - ${HOME}/.pi/agent/auth.json:/workspace/.pi/agent/auth.json:ro

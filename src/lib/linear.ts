@@ -149,6 +149,36 @@ export interface LinearBatchCreateFailureDetails {
   retryHint?: string;
 }
 
+export interface LinearWebhook {
+  id: string;
+  label: string;
+  url: string;
+  enabled: boolean;
+  resourceTypes: string[];
+  teamKey?: string;
+  teamId?: string;
+  secretConfigured?: boolean;
+}
+
+export interface EnsureLinearIssueCreatedWebhookInput {
+  label: string;
+  url: string;
+  teamKey: string;
+  secret: string;
+}
+
+export interface EnsureLinearIssueCreatedWebhookResult {
+  status: "created" | "updated" | "unchanged" | "disabled-duplicate";
+  webhook?: LinearWebhook;
+  duplicateWebhooks?: LinearWebhook[];
+}
+
+export interface LinearWebhookReconcilePlan {
+  action: "create" | "update" | "unchanged" | "disabled-duplicate";
+  webhook?: LinearWebhook;
+  duplicateWebhooks?: LinearWebhook[];
+}
+
 export interface RiskPolicy {
   staleBusinessDays: number;
   urgentPriorityThreshold: number;
@@ -262,6 +292,23 @@ interface CliCommentPayload {
 interface CliBatchCreatePayload {
   parent?: CliIssuePayload;
   children?: CliIssuePayload[];
+}
+
+interface CliWebhookPayload {
+  id?: string;
+  label?: string;
+  url?: string;
+  enabled?: boolean;
+  resourceTypes?: string[];
+  resource_types?: string[];
+  secretConfigured?: boolean;
+  secret_configured?: boolean;
+  teamKey?: string;
+  teamId?: string;
+  team?: {
+    key?: string;
+    id?: string;
+  } | null;
 }
 
 interface CliJsonErrorEnvelope {
@@ -512,6 +559,36 @@ export function normalizeRelationListPayload(raw: unknown): Pick<LinearIssue, "r
 export function normalizeTeamMembersPayload(raw: unknown): LinearUser[] {
   if (!isRecord(raw) || !Array.isArray(raw.members)) return [];
   return raw.members.map((member) => normalizeLinearUser(member)).filter(Boolean) as LinearUser[];
+}
+
+export function normalizeLinearWebhookPayload(raw: unknown): LinearWebhook | undefined {
+  if (!isRecord(raw)) return undefined;
+  const id = toStringOrUndefined(raw.id);
+  const label = toStringOrUndefined(raw.label);
+  const url = toStringOrUndefined(raw.url);
+  if (!id || !label || !url) return undefined;
+
+  const resourceTypes = Array.isArray(raw.resourceTypes)
+    ? raw.resourceTypes.map((value) => toStringOrUndefined(value)).filter(Boolean) as string[]
+    : Array.isArray(raw.resource_types)
+      ? raw.resource_types.map((value) => toStringOrUndefined(value)).filter(Boolean) as string[]
+      : [];
+  const team = isRecord(raw.team) ? raw.team : undefined;
+
+  return {
+    id,
+    label,
+    url,
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
+    resourceTypes,
+    teamKey: toStringOrUndefined(raw.teamKey) ?? toStringOrUndefined(team?.key),
+    teamId: toStringOrUndefined(raw.teamId) ?? toStringOrUndefined(team?.id),
+    secretConfigured: typeof raw.secretConfigured === "boolean"
+      ? raw.secretConfigured
+      : typeof raw.secret_configured === "boolean"
+        ? raw.secret_configured
+        : undefined,
+  };
 }
 
 export function normalizeLinearIssuePayload(raw: unknown): LinearIssue | undefined {
@@ -934,6 +1011,76 @@ export function buildTeamMembersArgs(env: LinearCommandEnv = process.env): strin
   return ["team", "members", ...workspaceArgs(env), teamKey, "--json"];
 }
 
+export function buildListLinearWebhooksArgs(
+  teamKey: string,
+  env: LinearCommandEnv = process.env,
+): string[] {
+  ensureLinearAuthConfigured(env);
+  return ["webhook", "list", ...workspaceArgs(env), "--team", teamKey, "--json"];
+}
+
+export function buildCreateLinearWebhookArgs(
+  input: EnsureLinearIssueCreatedWebhookInput,
+  env: LinearCommandEnv = process.env,
+): string[] {
+  ensureLinearAuthConfigured(env);
+  return [
+    "webhook",
+    "create",
+    ...workspaceArgs(env),
+    "--url",
+    input.url,
+    "--resource-types",
+    "Issue",
+    "--label",
+    input.label,
+    "--team",
+    input.teamKey,
+    "--secret",
+    input.secret,
+    "--json",
+  ];
+}
+
+export function buildUpdateLinearWebhookArgs(
+  webhookId: string,
+  input: EnsureLinearIssueCreatedWebhookInput,
+  env: LinearCommandEnv = process.env,
+): string[] {
+  if (!webhookId.trim()) {
+    throw new Error("Webhook ID is required");
+  }
+  ensureLinearAuthConfigured(env);
+  return [
+    "webhook",
+    "update",
+    ...workspaceArgs(env),
+    webhookId.trim(),
+    "--url",
+    input.url,
+    "--resource-types",
+    "Issue",
+    "--label",
+    input.label,
+    "--team",
+    input.teamKey,
+    "--secret",
+    input.secret,
+    "--json",
+  ];
+}
+
+export function buildDeleteLinearWebhookArgs(
+  webhookId: string,
+  env: LinearCommandEnv = process.env,
+): string[] {
+  if (!webhookId.trim()) {
+    throw new Error("Webhook ID is required");
+  }
+  ensureLinearAuthConfigured(env);
+  return ["webhook", "delete", ...workspaceArgs(env), webhookId.trim(), "--json"];
+}
+
 export function buildIssueParentArgs(issueId: string, env: LinearCommandEnv = process.env): string[] {
   const trimmed = issueId.trim();
   if (!trimmed) throw new Error("Issue ID is required");
@@ -976,6 +1123,9 @@ export async function verifyLinearCli(teamKey: string): Promise<void> {
   await execLinear(["issue", "parent", "--help"], process.env);
   await execLinear(["issue", "create-batch", "--help"], process.env);
   await execLinear(["team", "members", "--help"], process.env);
+  await execLinear(["webhook", "list", "--help"], process.env);
+  await execLinear(["webhook", "create", "--help"], process.env);
+  await execLinear(["webhook", "update", "--help"], process.env);
 
   const teamList = await execLinear(["team", "list"], process.env);
   const lines = teamList.stdout
@@ -1262,6 +1412,129 @@ export async function listLinearTeamMembers(
   ensureLinearAuthConfigured(env);
   const payload = await execLinearJson<CliTeamMembersPayload>(buildTeamMembersArgs(env), env, signal);
   return normalizeTeamMembersPayload(payload);
+}
+
+export async function listLinearWebhooks(
+  teamKey: string,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<LinearWebhook[]> {
+  ensureLinearAuthConfigured(env);
+  const payload = await execLinearJson<CliWebhookPayload[]>(buildListLinearWebhooksArgs(teamKey, env), env, signal);
+  return payload.map((entry) => normalizeLinearWebhookPayload(entry)).filter(Boolean) as LinearWebhook[];
+}
+
+export async function createLinearWebhook(
+  input: EnsureLinearIssueCreatedWebhookInput,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<LinearWebhook> {
+  const payload = await execLinearJson<CliWebhookPayload>(buildCreateLinearWebhookArgs(input, env), env, signal);
+  const webhook = normalizeLinearWebhookPayload(payload);
+  if (!webhook) {
+    throw new Error("Linear webhook creation returned no webhook");
+  }
+  return webhook;
+}
+
+export async function updateLinearWebhook(
+  webhookId: string,
+  input: EnsureLinearIssueCreatedWebhookInput,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<LinearWebhook> {
+  const payload = await execLinearJson<CliWebhookPayload>(buildUpdateLinearWebhookArgs(webhookId, input, env), env, signal);
+  const webhook = normalizeLinearWebhookPayload(payload);
+  if (!webhook) {
+    throw new Error("Linear webhook update returned no webhook");
+  }
+  return webhook;
+}
+
+export async function deleteLinearWebhook(
+  webhookId: string,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<void> {
+  await execLinearJson(buildDeleteLinearWebhookArgs(webhookId, env), env, signal);
+}
+
+function shouldUpdateLinearWebhook(
+  existing: LinearWebhook,
+  desired: EnsureLinearIssueCreatedWebhookInput,
+): boolean {
+  const resourceTypes = [...existing.resourceTypes].sort();
+  return existing.url !== desired.url
+    || existing.label !== desired.label
+    || existing.enabled !== true
+    || resourceTypes.length !== 1
+    || resourceTypes[0] !== "Issue"
+    || (existing.teamKey !== undefined && existing.teamKey !== desired.teamKey)
+    || existing.secretConfigured === false;
+}
+
+export function planLinearIssueCreatedWebhookReconcile(
+  existing: LinearWebhook[],
+  input: EnsureLinearIssueCreatedWebhookInput,
+): LinearWebhookReconcilePlan {
+  const matching = existing.filter((webhook) => webhook.label === input.label);
+
+  if (matching.length > 1) {
+    return {
+      action: "disabled-duplicate",
+      duplicateWebhooks: matching,
+    };
+  }
+
+  if (matching.length === 0) {
+    return { action: "create" };
+  }
+
+  const current = matching[0]!;
+  if (!shouldUpdateLinearWebhook(current, input)) {
+    return {
+      action: "unchanged",
+      webhook: current,
+    };
+  }
+
+  return {
+    action: "update",
+    webhook: current,
+  };
+}
+
+export async function ensureLinearIssueCreatedWebhook(
+  input: EnsureLinearIssueCreatedWebhookInput,
+  env: LinearCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<EnsureLinearIssueCreatedWebhookResult> {
+  const existing = await listLinearWebhooks(input.teamKey, env, signal);
+  const plan = planLinearIssueCreatedWebhookReconcile(existing, input);
+
+  if (plan.action === "disabled-duplicate") {
+    return {
+      status: "disabled-duplicate",
+      duplicateWebhooks: plan.duplicateWebhooks,
+    };
+  }
+  if (plan.action === "create") {
+    return {
+      status: "created",
+      webhook: await createLinearWebhook(input, env, signal),
+    };
+  }
+  if (plan.action === "unchanged") {
+    return {
+      status: "unchanged",
+      webhook: plan.webhook,
+    };
+  }
+
+  return {
+    status: "updated",
+    webhook: await updateLinearWebhook(plan.webhook!.id, input, env, signal),
+  };
 }
 
 export async function listOpenLinearIssues(

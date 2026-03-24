@@ -9,10 +9,12 @@ import {
   managerPolicySchema,
   ownerMapSchema,
   planningLedgerSchema,
+  webhookDeliveriesSchema,
   type FollowupLedgerEntry,
   type ManagerPolicy,
   type OwnerMap,
   type PlanningLedgerEntry,
+  type WebhookDeliveryEntry,
 } from "../manager-state-contract.js";
 import { createFileBackedWorkgraphRepository, type WorkgraphRepository } from "../workgraph/file-backed-workgraph-repository.js";
 
@@ -28,12 +30,14 @@ export type PolicyRepository = ReadonlyRepository<ManagerPolicy>;
 export type OwnerMapRepository = ReadonlyRepository<OwnerMap>;
 export type FollowupRepository = MutableRepository<FollowupLedgerEntry[]>;
 export type PlanningRepository = MutableRepository<PlanningLedgerEntry[]>;
+export type WebhookDeliveryRepository = MutableRepository<WebhookDeliveryEntry[]>;
 
 export interface ManagerRepositories {
   policy: PolicyRepository;
   ownerMap: OwnerMapRepository;
   followups: FollowupRepository;
   planning: PlanningRepository;
+  webhookDeliveries: WebhookDeliveryRepository;
   workgraph: WorkgraphRepository;
 }
 
@@ -86,6 +90,7 @@ export function createFileBackedManagerRepositories(paths: SystemPaths): Manager
     ownerMap: createReadonlyJsonRepository(paths.ownerMapFile, ownerMapSchema, DEFAULT_OWNER_MAP),
     followups: createMutableJsonRepository(paths.followupsFile, followupsLedgerSchema, []),
     planning: createMutableJsonRepository(paths.planningLedgerFile, planningLedgerSchema, []),
+    webhookDeliveries: createMutableJsonRepository(paths.webhookDeliveriesFile, webhookDeliveriesSchema, []),
     workgraph: createFileBackedWorkgraphRepository(paths),
   };
 }
