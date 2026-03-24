@@ -18,7 +18,7 @@ describe("slack reply helpers", () => {
     expect(postMessage).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "111.222",
-      text: "考え中です。少し待ってください。",
+      text: "考え中...",
     });
   });
 

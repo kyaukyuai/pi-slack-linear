@@ -1,7 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import { buildSlackMessagePayload } from "./slack-format.js";
 
-const DEFAULT_PROCESSING_NOTICE = "考え中です。少し待ってください。";
+const DEFAULT_PROCESSING_NOTICE = "考え中...";
 
 type SlackChatClient = Pick<WebClient, "chat">;
 
