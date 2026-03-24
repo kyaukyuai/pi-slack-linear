@@ -773,7 +773,7 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
             : "",
       );
       if (issueStateName === "done" || issueStateName === "completed" || issueStateName === "canceled") {
-        const reply = buildRunTaskNoopReply(issue.identifier);
+        const reply = buildRunTaskNoopReply(issue.identifier, "対象 issue はすでに完了状態です");
         return {
           reply,
           toolCalls: [
@@ -802,7 +802,7 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
         };
       }
 
-      const reply = `${issue.identifier} を確認し、まずは実行の起点として進め方コメントを追加します。`;
+      const reply = `${issue.identifier} はまだ実行の起点が無かったため、まず進め方コメントを追加しました。必要ならこの thread で続きの進捗を共有してください。`;
       return {
         reply,
         toolCalls: [
@@ -816,7 +816,7 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
             "execute",
             issue.id,
             issue.identifier,
-            "既存 issue に対する即時実行価値があるため、進め方コメントを追加します。",
+            "進め方コメントを既存 proposal surface で追加できます。",
           ),
         ],
         proposals: [{
@@ -838,7 +838,7 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
           decision: "execute",
           targetIssueId: issue.id,
           targetIssueIdentifier: issue.identifier,
-          summary: "既存 issue に対する即時実行価値があるため、進め方コメントを追加します。",
+          summary: "進め方コメントを既存 proposal surface で追加できます。",
         },
       };
     }

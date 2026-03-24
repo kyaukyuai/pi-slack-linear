@@ -73,6 +73,11 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.");
     expect(prompt).toContain("For run_task turns, call report_task_execution_decision once with decision=execute or noop");
     expect(prompt).toContain("Do not downgrade an explicit imperative issue execution request such as AIC-123 を実行して or AIC-123 を進めて into intent=query");
+    expect(prompt).toContain("If a run_task request has no clear executable manager action, keep the reply short, explain why no executable manager action exists now, and use report_task_execution_decision with decision=noop.");
+    expect(prompt).toContain("If a run_task request does have a clear executable manager action, use existing proposal tools only. Do not invent a new side-effect path.");
+    expect(prompt).toContain("For run_task replies, say in one or two short sentences why you executed or no-oped, what concrete action you took or skipped, and where the user should look next.");
+    expect(prompt).toContain("For run_task execute replies, name the concrete action such as a status update, comment, Notion update, or scheduler change instead of saying only 実行しました.");
+    expect(prompt).toContain("For run_task noop replies, avoid vague value-based wording like 実行価値. State the practical reason and, when helpful, one short next step.");
     expect(prompt).toContain("If the target issue for a run_task request is ambiguous, ask for the issue ID instead of guessing.");
     expect(prompt).toContain("If a run_task request is ambiguous and you ask for the issue ID, also use report_pending_clarification_decision with decision=new_request and persistence=replace");
     expect(prompt).toContain("When the user asks about schedules, scheduler jobs, cron-style tasks, morning/evening/weekly review settings, or heartbeat settings, use the dedicated scheduler tools.");

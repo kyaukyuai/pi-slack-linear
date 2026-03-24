@@ -25,8 +25,13 @@ export function buildRunTaskActionClarifyReply(issueIdentifier?: string): string
     : "実行内容を安全に確定できないため、状態変更・コメント追加・Notion更新など、やりたい操作をもう一度短く教えてください。";
 }
 
-export function buildRunTaskNoopReply(issueIdentifier?: string): string {
-  return issueIdentifier
-    ? `${issueIdentifier} を確認しましたが、現時点で追加の自動実行価値はありませんでした。`
-    : "対象の issue を確認しましたが、現時点で追加の自動実行価値はありませんでした。";
+export function buildRunTaskNoopReply(issueIdentifier?: string, reason?: string): string {
+  const target = issueIdentifier
+    ? `${issueIdentifier} を確認しましたが`
+    : "対象の issue を確認しましたが";
+  const normalizedReason = reason?.trim().replace(/[。]+$/u, "");
+  if (normalizedReason) {
+    return `${target}、いま実行できる manager action はありません。${normalizedReason}。必要なら、状態変更・コメント追加・Notion更新などの次の操作を短く指定してください。`;
+  }
+  return `${target}、いま実行できる manager action はありません。必要なら、状態変更・コメント追加・Notion更新などの次の操作を短く指定してください。`;
 }

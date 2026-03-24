@@ -142,7 +142,7 @@ Slack から既存 issue の実行依頼もできます。主な例:
 - `この issue を実行して`
 - `AIC-123 の次の一手をやって`
 
-この workflow は既存 issue を読んで、AI が今すぐ進める価値がある action だけを既存 manager commit surface で実行します。曖昧な target は code で補完せず、issue ID の補足を求めます。
+この workflow は既存 issue を読んで、AI が今すぐ安全に実行できる action だけを既存 manager commit surface で実行します。曖昧な target は code で補完せず、issue ID の補足を求めます。
 
 `jobs.json` の最小例:
 

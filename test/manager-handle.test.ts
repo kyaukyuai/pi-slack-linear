@@ -4481,7 +4481,8 @@ describe("handleManagerMessage clarification flow", () => {
     );
 
     expect(result.handled).toBe(true);
-    expect(result.reply).toContain("AIC-110 を確認し");
+    expect(result.reply).toContain("AIC-110 はまだ実行の起点が無かったため、まず進め方コメントを追加しました。");
+    expect(result.reply).toContain("必要ならこの thread で続きの進捗を共有してください。");
     expect(linearMocks.addLinearComment).toHaveBeenCalledWith(
       "AIC-110",
       expect.stringContaining("## AI execution"),
@@ -4492,6 +4493,45 @@ describe("handleManagerMessage clarification flow", () => {
       intent: "run_task",
       taskExecutionDecision: "execute",
       taskExecutionTargetIssueIdentifier: "AIC-110",
+    });
+  });
+
+  it("returns a concrete noop reason for completed run_task targets", async () => {
+    linearMocks.getLinearIssue.mockResolvedValueOnce({
+      id: "issue-111",
+      identifier: "AIC-111",
+      title: "ログイン画面の不具合修正",
+      url: "https://linear.app/kyaukyuai/issue/AIC-111",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-done", name: "Done", type: "completed" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-run-task-completed",
+        messageTs: "msg-run-task-completed-1",
+        userId: "U1",
+        text: "AIC-111 を進めて",
+      },
+      new Date("2026-03-24T02:11:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("AIC-111 を確認しましたが、いま実行できる manager action はありません。");
+    expect(result.reply).toContain("対象 issue はすでに完了状態です。");
+    expect(result.reply).toContain("状態変更・コメント追加・Notion更新などの次の操作を短く指定してください。");
+    expect(linearMocks.addLinearComment).not.toHaveBeenCalled();
+    expect(result.diagnostics?.agent).toMatchObject({
+      source: "agent",
+      intent: "run_task",
+      taskExecutionDecision: "noop",
+      taskExecutionTargetIssueIdentifier: "AIC-111",
+      taskExecutionSummary: "対象 issue はすでに完了状態です。",
     });
   });
 
