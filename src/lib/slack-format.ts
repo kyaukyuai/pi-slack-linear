@@ -259,40 +259,51 @@ function buildSlackBlocks(mrkdwn: string): Array<SlackMrkdwnBlock | SlackRichTex
   const blocks: Array<SlackMrkdwnBlock | SlackRichTextBlock> = [];
 
   for (const section of splitSlackMrkdwnSections(mrkdwn)) {
-    const lines = section.split("\n").map((line) => line.trim()).filter(Boolean);
-    let paragraphBuffer: string[] = [];
-    let bulletBuffer: string[] = [];
+    const paragraphs = section
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
 
-    const flushParagraph = () => {
-      if (paragraphBuffer.length === 0) return;
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: paragraphBuffer.join("\n"),
-        },
-      });
-      paragraphBuffer = [];
-    };
+    for (const paragraph of paragraphs) {
+      const lines = paragraph
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length === 0) continue;
+      let paragraphBuffer: string[] = [];
+      let bulletBuffer: string[] = [];
 
-    const flushBullets = () => {
-      if (bulletBuffer.length === 0) return;
-      blocks.push(buildRichTextListBlock(bulletBuffer));
-      bulletBuffer = [];
-    };
+      const flushParagraph = () => {
+        if (paragraphBuffer.length === 0) return;
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: paragraphBuffer.join("\n"),
+          },
+        });
+        paragraphBuffer = [];
+      };
 
-    for (const line of lines) {
-      if (line.startsWith("- ")) {
-        flushParagraph();
-        bulletBuffer.push(line);
-      } else {
-        flushBullets();
-        paragraphBuffer.push(line);
+      const flushBullets = () => {
+        if (bulletBuffer.length === 0) return;
+        blocks.push(buildRichTextListBlock(bulletBuffer));
+        bulletBuffer = [];
+      };
+
+      for (const line of lines) {
+        if (line.startsWith("- ")) {
+          flushParagraph();
+          bulletBuffer.push(line);
+        } else {
+          flushBullets();
+          paragraphBuffer.push(line);
+        }
       }
-    }
 
-    flushParagraph();
-    flushBullets();
+      flushParagraph();
+      flushBullets();
+    }
   }
 
   return blocks;

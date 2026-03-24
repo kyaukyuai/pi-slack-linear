@@ -75,12 +75,48 @@ describe("formatSlackMessageText", () => {
 
     expect(payload.text).toContain("system log: Notion agenda created: 2026.03.26 | AIクローンプラットフォーム Vol.1");
     expect(payload.text).not.toContain("> system log");
-    expect(payload.blocks.find((block) => block.type === "section" && block.text.text.includes("> system log"))).toMatchObject({
+    expect(payload.blocks[0]).toMatchObject({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "アジェンダを作成しました。\n> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+        text: "アジェンダを作成しました。",
       },
+    });
+    expect(payload.blocks[1]).toMatchObject({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+      },
+    });
+  });
+
+  it("preserves paragraph breaks between mutation summary, system log, and follow-up guidance", () => {
+    const payload = buildSlackMessagePayload([
+      "「webhook の動作確認」タスクを作成します。担当者は未設定にしています。",
+      "",
+      "> system log: この依頼は Linear に登録しておきました。 対象は <https://linear.app/kyaukyuai/issue/AIC-52|AIC-52> webhook の動作確認 です。",
+      "",
+      "この thread で進捗・完了・blocked を続けてください。",
+      "",
+      "担当が未定義だった task は、いったん kyaukyuai に寄せています。",
+    ].join("\n"));
+
+    expect(payload.blocks[0]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: "「webhook の動作確認」タスクを作成します。担当者は未設定にしています。" },
+    });
+    expect(payload.blocks[1]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: "> system log: この依頼は Linear に登録しておきました。 対象は <https://linear.app/kyaukyuai/issue/AIC-52|AIC-52> webhook の動作確認 です。" },
+    });
+    expect(payload.blocks[2]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: "この thread で進捗・完了・blocked を続けてください。" },
+    });
+    expect(payload.blocks[3]).toMatchObject({
+      type: "section",
+      text: { type: "mrkdwn", text: "担当が未定義だった task は、いったん kyaukyuai に寄せています。" },
     });
   });
 
