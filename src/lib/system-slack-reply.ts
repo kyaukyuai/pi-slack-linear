@@ -9,6 +9,12 @@ function normalizeForCompare(text: string): string {
     .toLowerCase();
 }
 
+function extractSentences(text: string): string[] {
+  return (text.match(/[^。！？]+[。！？]?/g) ?? [])
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
 function extractSlackUrls(text: string): string[] {
   return Array.from(text.matchAll(/<([^|>\s]+)(?:\|[^>]+)?>/g))
     .map((match) => match[1] ?? "")
@@ -124,8 +130,49 @@ function convertPipeTablesToBullets(text: string): string {
   return next.join("\n");
 }
 
+function classifyIntroSentence(sentence: string): string | undefined {
+  if (/(?:状況が改善|改善あり|前進しています|状況改善|進展しています)/.test(sentence)) {
+    return "improvement";
+  }
+  return undefined;
+}
+
+function dedupeReviewIntroSentences(text: string): string {
+  const lines = text.split("\n");
+  const introEnd = lines.findIndex((line) => /^\s*(?:- |> system log:)/.test(line));
+  const introLines = introEnd >= 0 ? lines.slice(0, introEnd) : lines;
+  const remainingLines = introEnd >= 0 ? lines.slice(introEnd) : [];
+  const introText = introLines.join(" ").trim();
+  if (!introText) {
+    return text;
+  }
+
+  const seenBuckets = new Set<string>();
+  const seenSentences = new Set<string>();
+  const keptIntro = extractSentences(introText).filter((sentence) => {
+    const normalized = normalizeForCompare(sentence);
+    if (!normalized) {
+      return false;
+    }
+    const bucket = classifyIntroSentence(sentence);
+    const key = bucket ?? normalized;
+    if (seenBuckets.has(key) || seenSentences.has(normalized)) {
+      return false;
+    }
+    seenBuckets.add(key);
+    seenSentences.add(normalized);
+    return true;
+  });
+
+  const rebuiltIntro = keptIntro.join("");
+  return [rebuiltIntro, ...remainingLines]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 export function normalizeSystemReplyForSlack(text: string): string {
-  return convertPipeTablesToBullets(text)
+  return dedupeReviewIntroSentences(convertPipeTablesToBullets(text))
     .replace(/^\s*---+\s*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

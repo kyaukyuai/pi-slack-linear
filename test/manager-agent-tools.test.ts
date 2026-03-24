@@ -37,6 +37,47 @@ const config: AppConfig = {
 };
 
 describe("manager agent tools", () => {
+  it("returns dueRelativeLabel and daysUntilDue in review facts", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-24T08:00:00Z"));
+      linearMocks.listOpenLinearIssues.mockResolvedValue([
+        {
+          id: "issue-parent",
+          identifier: "AIC-39",
+          title: "AIマネージャーを実用レベルへ引き上げる",
+          url: "https://linear.app/kyaukyuai/issue/AIC-39",
+          dueDate: "2026-03-26",
+          state: { id: "state-review", name: "In Review", type: "started" },
+          assignee: { id: "user-1", displayName: "y.kakui" },
+          relations: [],
+          inverseRelations: [],
+          children: [],
+        },
+      ]);
+
+      const tools = createManagerAgentTools(config, {
+        policy: { load: vi.fn() },
+        workgraph: {} as never,
+      });
+      const tool = tools.find((entry) => entry.name === "linear_list_review_facts");
+
+      expect(tool).toBeDefined();
+      const result = await tool!.execute("tool-call-relative-due", { limit: 10 });
+      const details = result.details as Array<Record<string, unknown>>;
+
+      expect(details).toHaveLength(1);
+      expect(details[0]).toMatchObject({
+        identifier: "AIC-39",
+        dueDate: "2026-03-26",
+        daysUntilDue: 2,
+        dueRelativeLabel: "2日後",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns review facts with explicit open and closed child issue state", async () => {
     linearMocks.listOpenLinearIssues.mockResolvedValue([
       {

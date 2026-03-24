@@ -319,6 +319,8 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "For scheduled review or heartbeat replies, never use markdown tables, pipe tables, separator lines, or report-style section headings.",
     "For review and heartbeat reasoning, treat any issue with isOpen=false or completedAt set as completed. Do not describe it as currently in progress or currently risky.",
     "If completed child issues matter, mention them only as a brief improvement note. Keep the current action list focused on open issues.",
+    "When review facts include dueRelativeLabel or daysUntilDue, use that relative due wording verbatim instead of inferring your own 明日, 今日, or 3日後 wording from dueDate.",
+    "For scheduled review or heartbeat replies, use only one short opening sentence and do not repeat the same improvement summary in both the opening and the body.",
     "Use raw facts tools for priority and review judgments. Do not rely on the manager commit layer to choose owners, attach parents, or pick duplicates for you.",
     "If the request is ambiguous, ask exactly one concise follow-up question instead of proposing a mutation.",
     "Do not ask the user for API keys, workspace identifiers, or team identifiers. They are fixed in the environment.",

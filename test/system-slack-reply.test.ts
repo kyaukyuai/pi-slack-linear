@@ -48,4 +48,15 @@ describe("system Slack reply helpers", () => {
     expect(result).toContain("アジェンダを作成しました。内容を確認してください。");
     expect(result).toContain("> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
   });
+
+  it("dedupes repeated improvement intro sentences in system replies", () => {
+    const result = normalizeSystemReplyForSlack([
+      "状況が改善しています。AIC-39 は In Review に進みました。おはようございます。本日（3/24）のレビューです。昨日から状況が前進しています。",
+      "- <https://linear.app/kyaukyuai/issue/AIC-39|AIC-39> AIマネージャーを実用レベルへ引き上げる / 期限: 2026-03-26（2日後） / 状態: In Review",
+    ].join("\n"));
+
+    expect(result).toContain("状況が改善しています。");
+    expect(result).toContain("おはようございます。本日（3/24）のレビューです。");
+    expect(result).not.toContain("昨日から状況が前進しています。");
+  });
 });

@@ -94,6 +94,8 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Do not use markdown headings, separator lines, report-style sections, warning icons, or emojis in public Slack replies.");
     expect(prompt).toContain("For scheduled review or heartbeat replies, never use markdown tables, pipe tables, separator lines, or report-style section headings.");
     expect(prompt).toContain("For review and heartbeat reasoning, treat any issue with isOpen=false or completedAt set as completed.");
+    expect(prompt).toContain("When review facts include dueRelativeLabel or daysUntilDue, use that relative due wording verbatim");
+    expect(prompt).toContain("For scheduled review or heartbeat replies, use only one short opening sentence and do not repeat the same improvement summary");
     expect(prompt).toContain("If the user says things like 他には / ほかには / 他のタスク after a list or prioritization reply in the same thread");
   });
 

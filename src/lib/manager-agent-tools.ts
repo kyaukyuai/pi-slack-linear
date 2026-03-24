@@ -250,6 +250,51 @@ function businessDaysSince(leftIso: string | null | undefined, right = new Date(
   return days;
 }
 
+function toJstDayKey(date: Date): string {
+  return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function parseDayKey(value: string | null | undefined): Date | undefined {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return undefined;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function dueRelativeInfo(
+  dueDate: string | null | undefined,
+  right = new Date(),
+): { daysUntilDue?: number; dueRelativeLabel?: string } {
+  const due = parseDayKey(dueDate);
+  const today = parseDayKey(toJstDayKey(right));
+  if (!due || !today) {
+    return {};
+  }
+  const diffDays = Math.round((due.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+  if (diffDays < 0) {
+    return {
+      daysUntilDue: diffDays,
+      dueRelativeLabel: `${Math.abs(diffDays)}日超過`,
+    };
+  }
+  if (diffDays === 0) {
+    return {
+      daysUntilDue: 0,
+      dueRelativeLabel: "今日",
+    };
+  }
+  if (diffDays === 1) {
+    return {
+      daysUntilDue: 1,
+      dueRelativeLabel: "明日",
+    };
+  }
+  return {
+    daysUntilDue: diffDays,
+    dueRelativeLabel: `${diffDays}日後`,
+  };
+}
+
 function overdueDays(dueDate: string | null | undefined, right = new Date()): number | undefined {
   if (!dueDate) return undefined;
   const due = new Date(`${dueDate}T00:00:00Z`);
@@ -271,6 +316,7 @@ function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
   const blockedState = issue.state?.name?.toLowerCase() === "blocked";
   const blockedByDependency = (issue.inverseRelations ?? []).some((relation) => relation.type === "blocked-by");
   const recentBlockedUpdate = issue.latestActionKind === "blocked";
+  const relativeDue = dueRelativeInfo(issue.dueDate);
   return {
     identifier: issue.identifier,
     title: issue.title,
@@ -294,6 +340,8 @@ function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
     latestActionKind: issue.latestActionKind ?? undefined,
     latestActionAt: issue.latestActionAt ?? undefined,
     overdueDays: overdueDays(issue.dueDate),
+    daysUntilDue: relativeDue.daysUntilDue,
+    dueRelativeLabel: relativeDue.dueRelativeLabel,
     staleBusinessDays: businessDaysSince(issue.updatedAt),
     ownerMissing: !issue.assignee,
     dueMissing: !issue.dueDate,
