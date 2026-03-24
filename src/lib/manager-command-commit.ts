@@ -17,12 +17,13 @@ import {
 } from "./linear.js";
 import { createNotionAgendaPage, type NotionCommandEnv } from "./notion.js";
 import { getSlackThreadContext } from "./slack-context.js";
-import { normalizeSchedulerJobs } from "./scheduler.js";
+import { normalizeSchedulerJobs, recordManualJobRun } from "./scheduler.js";
 import {
   buildSystemPaths,
   loadSchedulerJobs,
   saveSchedulerJobs,
   schedulerJobSchema,
+  type SchedulerJob,
 } from "./system-workspace.js";
 import type {
   FollowupLedgerEntry,
@@ -63,6 +64,7 @@ import {
 import { ensureManagerStateFiles, loadManagerPolicy, saveManagerPolicy } from "./manager-state.js";
 import {
   getUnifiedSchedule,
+  isBuiltInScheduleId,
   isReservedSchedulerId,
   isBuiltInReviewJobId,
   reviewJobIdForBuiltInScheduleId,
@@ -283,6 +285,11 @@ const updateBuiltinScheduleProposalSchema = proposalBaseSchema.extend({
   activeLookbackHours: z.number().int().positive().optional(),
 });
 
+const runSchedulerJobNowProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("run_scheduler_job_now"),
+  jobId: z.string().trim().min(1),
+});
+
 export const managerCommandProposalSchema = z.discriminatedUnion("commandType", [
   createIssueProposalSchema,
   createIssueBatchProposalSchema,
@@ -295,6 +302,7 @@ export const managerCommandProposalSchema = z.discriminatedUnion("commandType", 
   updateSchedulerJobProposalSchema,
   deleteSchedulerJobProposalSchema,
   updateBuiltinScheduleProposalSchema,
+  runSchedulerJobNowProposalSchema,
   createNotionAgendaProposalSchema,
   resolveFollowupProposalSchema,
   reviewFollowupProposalSchema,
@@ -309,6 +317,7 @@ export interface ManagerIntentReport {
     | "query_schedule"
     | "create_work"
     | "create_schedule"
+    | "run_schedule"
     | "update_progress"
     | "update_completed"
     | "update_blocked"
@@ -384,6 +393,12 @@ export interface CommitManagerCommandArgs {
   now: Date;
   policy: ManagerPolicy;
   env: LinearCommandEnv;
+  runSchedulerJobNow?: (job: SchedulerJob) => Promise<{
+    status: "ok" | "error";
+    persistedSummary: string;
+    commitSummary?: string;
+    executedAt?: string;
+  }>;
 }
 
 function normalizeTitle(title: string | undefined): string {
@@ -1585,6 +1600,57 @@ async function commitUpdateBuiltinScheduleProposal(
   };
 }
 
+async function commitRunSchedulerJobNowProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof runSchedulerJobNowProposalSchema>,
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  if (!args.runSchedulerJobNow) {
+    return {
+      proposal,
+      reason: "scheduler の即時実行は現在利用できません。",
+    };
+  }
+  if (
+    proposal.jobId === "heartbeat"
+    || isBuiltInReviewJobId(proposal.jobId)
+    || isBuiltInScheduleId(proposal.jobId)
+  ) {
+    return {
+      proposal,
+      reason: `${proposal.jobId} は built-in schedule なので、今回の scope では即時実行に対応していません。`,
+    };
+  }
+
+  const systemPaths = buildSystemPaths(args.config.workspaceDir);
+  const jobs = normalizeSchedulerJobs(await loadSchedulerJobs(systemPaths));
+  const current = jobs.find((job) => job.id === proposal.jobId);
+  if (!current) {
+    return {
+      proposal,
+      reason: `${proposal.jobId} は見つかりませんでした。`,
+    };
+  }
+
+  const result = await args.runSchedulerJobNow(current);
+  const executedAt = result.executedAt ? new Date(result.executedAt) : args.now;
+  const nextJobs = normalizeSchedulerJobs(
+    jobs.map((job) => (
+      job.id === proposal.jobId
+        ? recordManualJobRun(job, result.status, result.persistedSummary, executedAt)
+        : job
+    )),
+  );
+  await saveSchedulerJobs(systemPaths, nextJobs);
+
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: result.status === "error"
+      ? `${proposal.jobId} の即時実行に失敗しました。${result.commitSummary ? ` ${result.commitSummary}` : ""}`.trim()
+      : (result.commitSummary?.trim() || `${proposal.jobId} を今すぐ実行しました。`),
+  };
+}
+
 async function commitCreateNotionAgendaProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof createNotionAgendaProposalSchema>,
@@ -1788,9 +1854,11 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
                   ? await commitDeleteSchedulerJobProposal(args, validatedProposal)
                 : validatedProposal.commandType === "update_builtin_schedule"
                   ? await commitUpdateBuiltinScheduleProposal(args, validatedProposal)
-                  : validatedProposal.commandType === "create_notion_agenda"
-                    ? await commitCreateNotionAgendaProposal(args, validatedProposal)
-                  : validatedProposal.commandType === "resolve_followup"
+                : validatedProposal.commandType === "run_scheduler_job_now"
+                  ? await commitRunSchedulerJobNowProposal(args, validatedProposal)
+                : validatedProposal.commandType === "create_notion_agenda"
+                  ? await commitCreateNotionAgendaProposal(args, validatedProposal)
+                : validatedProposal.commandType === "resolve_followup"
                     ? await commitResolveFollowupProposal(args, validatedProposal)
                     : await commitReviewFollowupProposal(args, validatedProposal);
 

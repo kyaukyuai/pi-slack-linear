@@ -107,11 +107,13 @@ Slack からも scheduler を管理できます。主な例:
 - `毎日 09:00 に AIC の期限近い task を確認する job を追加して`
 - `daily-task-check を 17:00 に変更して`
 - `daily-task-check を削除して`
+- `weekly-notion-agenda-ai-clone を今すぐ実行して`
 - `朝レビューを 08:30 に変更して`
 - `夕方レビューを止めて`
 - `heartbeat を 60分ごとにして`
 
 built-in schedules は `morning-review`, `evening-review`, `weekly-review`, `heartbeat` です。これらは `policy.json` が正で、Slack からの変更も内部的には policy update として反映されます。custom jobs だけが `jobs.json` に直接保存されます。
+即時実行 / テスト実行は custom job のみ対応です。built-in review / heartbeat は今回の scope では対象外です。
 
 `jobs.json` の最小例:
 

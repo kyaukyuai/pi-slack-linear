@@ -4278,4 +4278,69 @@ describe("handleManagerMessage clarification flow", () => {
       expect.any(Object),
     );
   });
+
+  it("keeps a quoted system log with a link when a custom scheduler job is run immediately", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "weekly-notion-agenda-ai-clone を今すぐ実行しました。結果を確認してください。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "run_scheduler_job_now",
+          jobId: "weekly-notion-agenda-ai-clone",
+          reasonSummary: "動作確認のため 1 回だけ実行します。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "run_schedule",
+        confidence: 0.96,
+        summary: "custom scheduler job の即時実行です。",
+      },
+    });
+
+    const systemPaths = buildSystemPaths(workspaceDir);
+    await writeFile(systemPaths.jobsFile, `${JSON.stringify([
+      {
+        id: "weekly-notion-agenda-ai-clone",
+        enabled: true,
+        channelId: "C0ALAMDRB9V",
+        prompt: "Notion に AIクローンプラットフォームのアジェンダを作成する",
+        kind: "weekly",
+        weekday: "thu",
+        time: "09:00",
+        nextRunAt: "2026-03-26T00:00:00.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+
+    const runSchedulerJobNow = vi.fn().mockResolvedValue({
+      status: "ok",
+      persistedSummary: "Notion にアジェンダを作成しました。",
+      commitSummary: "Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+      executedAt: "2026-03-24T01:05:00.000Z",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-scheduler-run-now",
+        messageTs: "msg-scheduler-run-now-1",
+        userId: "U1",
+        text: "weekly-notion-agenda-ai-clone を今すぐ実行して",
+      },
+      new Date("2026-03-24T01:05:00.000Z"),
+      undefined,
+      { runSchedulerJobNow },
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("weekly-notion-agenda-ai-clone を今すぐ実行しました。");
+    expect(result.reply).toContain("> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
+    expect(runSchedulerJobNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "weekly-notion-agenda-ai-clone",
+      }),
+    );
+  });
 });

@@ -171,6 +171,23 @@ export function advanceJobAfterRun(
   };
 }
 
+export function recordManualJobRun(
+  job: SchedulerJob,
+  status: "ok" | "error",
+  summary: string,
+  now = new Date(),
+): SchedulerJob {
+  const nowIsoValue = now.toISOString();
+  return {
+    ...job,
+    updatedAt: nowIsoValue,
+    lastRunAt: nowIsoValue,
+    lastStatus: status,
+    lastError: status === "error" ? summary : undefined,
+    lastResult: status === "ok" ? summary : undefined,
+  };
+}
+
 export class SchedulerService {
   private timer: NodeJS.Timeout | undefined;
   private running = false;

@@ -767,6 +767,114 @@ describe("manager command commit", () => {
     expect(result.committed.map((entry) => entry.summary).join("\n")).toContain("夕方レビューを停止しました。");
   });
 
+  it("runs a custom scheduler job immediately without changing its next run", async () => {
+    const systemPaths = buildSystemPaths(workspaceDir);
+    await writeFile(systemPaths.jobsFile, `${JSON.stringify([
+      {
+        id: "weekly-notion-agenda-ai-clone",
+        enabled: true,
+        channelId: "C0ALAMDRB9V",
+        prompt: "Notion に AIクローンプラットフォームのアジェンダを作成する",
+        kind: "weekly",
+        weekday: "thu",
+        time: "09:00",
+        nextRunAt: "2026-03-26T00:00:00.000Z",
+      },
+    ], null, 2)}\n`, "utf8");
+
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "run_scheduler_job_now",
+          jobId: "weekly-notion-agenda-ai-clone",
+          reasonSummary: "動作確認のため 1 回だけ即時実行します。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-scheduler-run-now",
+        messageTs: "msg-scheduler-run-now-1",
+        userId: "U1",
+        text: "weekly-notion-agenda-ai-clone を今すぐ実行して",
+      },
+      now: new Date("2026-03-24T01:00:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+      runSchedulerJobNow: vi.fn().mockResolvedValue({
+        status: "ok",
+        persistedSummary: "Notion にアジェンダを作成しました。",
+        commitSummary: "Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+        executedAt: "2026-03-24T01:00:05.000Z",
+      }),
+    });
+
+    const jobs = JSON.parse(await readFile(systemPaths.jobsFile, "utf8")) as Array<Record<string, unknown>>;
+    const updatedJob = jobs.find((job) => job.id === "weekly-notion-agenda-ai-clone");
+
+    expect(result.committed).toHaveLength(1);
+    expect(result.committed[0]?.summary).toContain("Notion agenda created:");
+    expect(updatedJob).toMatchObject({
+      id: "weekly-notion-agenda-ai-clone",
+      nextRunAt: "2026-03-26T00:00:00.000Z",
+      lastRunAt: "2026-03-24T01:00:05.000Z",
+      lastStatus: "ok",
+      lastResult: "Notion にアジェンダを作成しました。",
+    });
+  });
+
+  it("rejects immediate runs for built-in schedules and unknown custom jobs", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "run_scheduler_job_now",
+          jobId: "morning-review",
+          reasonSummary: "built-in を即時実行したいです。",
+        },
+        {
+          commandType: "run_scheduler_job_now",
+          jobId: "heartbeat",
+          reasonSummary: "heartbeat を即時実行したいです。",
+        },
+        {
+          commandType: "run_scheduler_job_now",
+          jobId: "missing-custom-job",
+          reasonSummary: "存在しない custom job を即時実行したいです。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-scheduler-run-now-reject",
+        messageTs: "msg-scheduler-run-now-reject-1",
+        userId: "U1",
+        text: "朝レビューと heartbeat を今すぐ実行して",
+      },
+      now: new Date("2026-03-24T01:10:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+      runSchedulerJobNow: vi.fn(),
+    });
+
+    expect(result.committed).toEqual([]);
+    expect(result.rejected).toHaveLength(3);
+    expect(result.rejected[0]?.reason).toContain("built-in schedule");
+    expect(result.rejected[1]?.reason).toContain("built-in schedule");
+    expect(result.rejected[2]?.reason).toContain("見つかりませんでした");
+  });
+
   it("creates a Notion agenda under the configured parent page", async () => {
     notionMocks.createNotionAgendaPage.mockResolvedValueOnce({
       id: "notion-page-1",

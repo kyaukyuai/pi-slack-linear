@@ -47,6 +47,7 @@ import type { ManagerRepositories } from "../state/repositories/file-backed-mana
 import { composeSlackReply, formatSlackBullets, joinSlackSentences } from "../orchestrators/shared/slack-conversation.js";
 import {
   commitManagerCommandProposals,
+  type CommitManagerCommandArgs,
   type ManagerIntentReport,
   type PendingClarificationDecisionReport,
 } from "./manager-command-commit.js";
@@ -289,11 +290,16 @@ function buildCommitRejectionReply(rejections: string[]): string | undefined {
   ]);
 }
 
+function isSchedulerRunRequestText(text: string): boolean {
+  return /(今すぐ実行|テスト実行|試しに一度動かして|実行して)/.test(text);
+}
+
 function isMutableIntent(
   intent: ManagerIntentReport["intent"] | undefined,
-): intent is "create_work" | "create_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution" {
+): intent is "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution" {
   return intent === "create_work"
     || intent === "create_schedule"
+    || intent === "run_schedule"
     || intent === "update_progress"
     || intent === "update_completed"
     || intent === "update_blocked"
@@ -315,7 +321,7 @@ function originalMessageForPendingClarification(
 
 async function persistPendingManagerClarification(args: {
   paths: ThreadPaths;
-  intent: "create_work" | "create_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution";
+  intent: "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution";
   originalUserMessage: string;
   lastUserMessage: string;
   clarificationReply: string;
@@ -643,7 +649,7 @@ function buildSafetyOnlyManagerFallbackReply(
             ? "completed"
             : pendingClarification.intent === "update_blocked"
               ? "blocked"
-              : pendingClarification.intent === "update_schedule" || pendingClarification.intent === "delete_schedule"
+              : pendingClarification.intent === "run_schedule" || pendingClarification.intent === "update_schedule" || pendingClarification.intent === "delete_schedule"
                 ? "scheduler"
               : "request",
       reply: joinSlackSentences([
@@ -656,7 +662,7 @@ function buildSafetyOnlyManagerFallbackReply(
   if (SCHEDULER_PATTERN.test(message.text)) {
     return {
       action: "scheduler",
-      reply: "いまは scheduler の内容を安全に確定できないため、見たい schedule 名か、追加・変更したい時刻と実行内容をもう少し具体的に教えてください。",
+      reply: "いまは scheduler の内容を安全に確定できないため、見たい schedule 名か、追加・変更したい時刻、または今すぐ実行したい job 名をもう少し具体的に教えてください。",
     };
   }
 
@@ -1100,6 +1106,9 @@ export async function handleManagerMessage(
   message: ManagerSlackMessage,
   repositoriesOrNow?: ManagerRepositories | Date,
   maybeNow?: Date,
+  runtimeActions?: {
+    runSchedulerJobNow?: CommitManagerCommandArgs["runSchedulerJobNow"];
+  },
 ): Promise<ManagerHandleResult> {
   const repositories = isManagerRepositories(repositoriesOrNow)
     ? repositoriesOrNow
@@ -1147,6 +1156,7 @@ export async function handleManagerMessage(
       now,
       policy,
       env,
+      runSchedulerJobNow: runtimeActions?.runSchedulerJobNow,
     });
     const agentIntent = agentTurn.intentReport?.intent;
     const extractedQuerySnapshot = agentIntent === "query"
@@ -1184,6 +1194,7 @@ export async function handleManagerMessage(
     } else if (
       agentIntent === "create_work"
       || agentIntent === "create_schedule"
+      || agentIntent === "run_schedule"
       || agentIntent === "update_progress"
       || agentIntent === "update_completed"
       || agentIntent === "update_blocked"
@@ -1289,7 +1300,7 @@ export async function handleManagerMessage(
       const fallbackIntent = safetyFallback.action === "request"
         ? "create_work"
         : safetyFallback.action === "scheduler"
-          ? "create_schedule"
+          ? (isSchedulerRunRequestText(message.text) ? "run_schedule" : "create_schedule")
         : safetyFallback.action === "progress"
           ? "update_progress"
           : safetyFallback.action === "completed"

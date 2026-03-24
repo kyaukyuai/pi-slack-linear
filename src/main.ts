@@ -16,7 +16,7 @@ import { SchedulerService } from "./lib/scheduler.js";
 import { buildSlackMessagePayload } from "./lib/slack-format.js";
 import { mergeSystemReply } from "./lib/system-slack-reply.js";
 import { isProcessableSlackMessage, normalizeSlackMessage, type RawSlackMessageEvent } from "./lib/slack.js";
-import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace } from "./lib/system-workspace.js";
+import { buildHeartbeatPaths, buildSchedulerPaths, buildSystemPaths, ensureSystemWorkspace, type SchedulerJob } from "./lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "./state/repositories/file-backed-manager-repositories.js";
 import { runWorkgraphMaintenance } from "./state/workgraph/maintenance.js";
 import {
@@ -61,6 +61,26 @@ async function postSlackReply(
     blocks: payload.blocks,
   });
   return payload.text;
+}
+
+function extractSchedulerRunCommitSummary(rawReply: string, postedReply: string): string | undefined {
+  const systemLogLine = rawReply
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => /^>\s*system log:\s*/i.test(line));
+  if (systemLogLine) {
+    return systemLogLine.replace(/^>\s*system log:\s*/i, "").trim();
+  }
+
+  const firstParagraph = rawReply
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .find(Boolean);
+  const collapsed = (firstParagraph ?? postedReply)
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return collapsed || undefined;
 }
 
 async function downloadAttachments(
@@ -253,6 +273,23 @@ async function main(): Promise<void> {
         now: new Date(),
         policy: managerPolicy,
         env: linearEnv,
+        runSchedulerJobNow: async (job) => {
+          try {
+            const result = await executeCustomSchedulerJob(job, "manual");
+            return {
+              status: "ok" as const,
+              persistedSummary: result.postedReply,
+              commitSummary: result.commitSummary,
+            };
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return {
+              status: "error" as const,
+              persistedSummary: errorMessage,
+              commitSummary: errorMessage,
+            };
+          }
+        },
       });
       logger.info("Manager system agent result", {
         intent: agentResult.intentReport?.intent,
@@ -279,6 +316,62 @@ async function main(): Promise<void> {
       });
       return args.fallback();
     }
+  };
+
+  const executeCustomSchedulerJob = async (
+    job: SchedulerJob,
+    trigger: "scheduled" | "manual",
+  ): Promise<{
+    postedReply: string;
+    rawReply: string;
+    commitSummary?: string;
+  }> => {
+    const paths = buildSchedulerPaths(config.workspaceDir, job.id);
+    await ensureThreadWorkspace(paths);
+    await appendThreadLog(paths, {
+      type: "system",
+      ts: `${Date.now() / 1000}`,
+      threadTs: job.id,
+      text: job.prompt,
+    });
+
+    const rawReply = await executeManagerSystemTask({
+      paths,
+      input: {
+        kind: "scheduler",
+        channelId: job.channelId,
+        rootThreadTs: job.id,
+        messageTs: job.id,
+        currentDate: currentDateInJst(),
+        runAtJst: currentDateTimeInJst(),
+        text: job.prompt,
+        metadata: {
+          jobId: job.id,
+          scheduleKind: job.kind,
+          trigger,
+        },
+      },
+      fallback: async () => "処理に失敗しました。設定や連携を確認してください。",
+    });
+
+    const postedReply = await postSlackReply(webClient, {
+      channel: job.channelId,
+      reply: rawReply,
+      linearWorkspace: config.linearWorkspace,
+    });
+
+    await appendThreadLog(paths, {
+      type: "assistant",
+      ts: `${Date.now() / 1000}`,
+      threadTs: job.id,
+      text: postedReply,
+    });
+
+    return {
+      postedReply,
+      rawReply,
+      commitSummary: extractSchedulerRunCommitSummary(rawReply, postedReply),
+    };
   };
 
   logger.info("Slack assistant starting", {
@@ -347,6 +440,26 @@ async function main(): Promise<void> {
             text: message.text,
           },
           managerRepositories,
+          undefined,
+          {
+            runSchedulerJobNow: async (job) => {
+              try {
+                const result = await executeCustomSchedulerJob(job, "manual");
+                return {
+                  status: "ok" as const,
+                  persistedSummary: result.postedReply,
+                  commitSummary: result.commitSummary,
+                };
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                return {
+                  status: "error" as const,
+                  persistedSummary: errorMessage,
+                  commitSummary: errorMessage,
+                };
+              }
+            },
+          },
         );
         if (managerResult.diagnostics?.agent) {
           const agent = managerResult.diagnostics.agent;
@@ -564,49 +677,10 @@ async function main(): Promise<void> {
         };
       }
 
-      const paths = buildSchedulerPaths(config.workspaceDir, job.id);
-      await ensureThreadWorkspace(paths);
-      await appendThreadLog(paths, {
-        type: "system",
-        ts: `${Date.now() / 1000}`,
-        threadTs: job.id,
-        text: job.prompt,
-      });
-
-      const reply = await executeManagerSystemTask({
-        paths,
-        input: {
-          kind: "scheduler",
-          channelId: job.channelId,
-          rootThreadTs: job.id,
-          messageTs: job.id,
-          currentDate: currentDateInJst(),
-          runAtJst: currentDateTimeInJst(),
-          text: job.prompt,
-          metadata: {
-            jobId: job.id,
-            scheduleKind: job.kind,
-          },
-        },
-        fallback: async () => "処理に失敗しました。設定や連携を確認してください。",
-      });
-
-      const postedReply = await postSlackReply(webClient, {
-        channel: job.channelId,
-        reply,
-        linearWorkspace: config.linearWorkspace,
-      });
-
-      await appendThreadLog(paths, {
-        type: "assistant",
-        ts: `${Date.now() / 1000}`,
-        threadTs: job.id,
-        text: postedReply,
-      });
-
+      const result = await executeCustomSchedulerJob(job, "scheduled");
       return {
         delivered: true,
-        summary: postedReply,
+        summary: result.postedReply,
       };
     },
   });

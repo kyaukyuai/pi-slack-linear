@@ -445,7 +445,7 @@ function createIntentReportTool(): ToolDefinition {
     description: "Record the current high-level intent before or during tool usage. Use this once per turn.",
     promptSnippet: "Call this early to tell the manager what kind of turn this is.",
     parameters: Type.Object({
-      intent: Type.String({ description: "conversation | query | query_schedule | create_work | create_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | review | heartbeat | scheduler" }),
+      intent: Type.String({ description: "conversation | query | query_schedule | create_work | create_schedule | run_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | review | heartbeat | scheduler" }),
       queryKind: Type.Optional(Type.String({ description: "Optional query subtype: list-active | list-today | what-should-i-do | inspect-work | search-existing | recommend-next-step | reference-material." })),
       queryScope: Type.Optional(Type.String({ description: "Optional query scope self | team | thread-context." })),
       confidence: Type.Optional(Type.Number({ description: "Confidence between 0 and 1." })),
@@ -1098,6 +1098,19 @@ function createProposalTools(): ToolDefinition[] {
         weekday: Type.Optional(Type.String({ description: "Optional weekday patch for weekly-review." })),
         intervalMin: Type.Optional(Type.Number({ description: "Optional heartbeat interval in minutes." })),
         activeLookbackHours: Type.Optional(Type.Number({ description: "Optional heartbeat active lookback window in hours." })),
+        reasonSummary: Type.String({ description: "Short reason for this proposal." }),
+        evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
+        dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
+      }),
+    }),
+    createProposalTool({
+      name: "propose_run_scheduler_job_now",
+      label: "Propose Run Scheduler Job Now",
+      description: "Propose running one custom scheduler job immediately. This does not execute the mutation.",
+      promptSnippet: "Use this when the user asks to run a custom scheduler job immediately for testing or a one-off check.",
+      commandType: "run_scheduler_job_now",
+      parameters: Type.Object({
+        jobId: Type.String({ description: "Existing custom scheduler job id." }),
         reasonSummary: Type.String({ description: "Short reason for this proposal." }),
         evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
         dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
