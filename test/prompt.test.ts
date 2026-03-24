@@ -67,6 +67,10 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether immediate AI action has clear value.");
     expect(prompt).toContain("For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.");
     expect(prompt).toContain("Webhook issue-created processing has no Slack thread context.");
+    expect(prompt).toContain("Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.");
+    expect(prompt).toContain("For run_task turns, call report_task_execution_decision once with decision=execute or noop");
+    expect(prompt).toContain("If the target issue for a run_task request is ambiguous, ask for the issue ID instead of guessing.");
+    expect(prompt).toContain("If a run_task request is ambiguous and you ask for the issue ID, also use report_pending_clarification_decision with decision=new_request and persistence=replace");
     expect(prompt).toContain("When the user asks about schedules, scheduler jobs, cron-style tasks, morning/evening/weekly review settings, or heartbeat settings, use the dedicated scheduler tools.");
     expect(prompt).toContain("Use intent=query_schedule for schedule inspection, create_schedule for custom job creation, run_schedule for immediate custom job execution, update_schedule for custom job updates or built-in disable/retime changes, and delete_schedule only for custom job deletion.");
     expect(prompt).toContain("Built-in schedules are morning-review, evening-review, weekly-review, and heartbeat.");

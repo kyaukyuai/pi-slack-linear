@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ThreadPaths } from "./thread-workspace.js";
 
 export type PendingManagerClarificationIntent =
+  | "run_task"
   | "create_work"
   | "create_schedule"
   | "run_schedule"
@@ -31,7 +32,8 @@ function buildPendingManagerClarificationPath(paths: ThreadPaths): string {
 }
 
 function isPendingManagerClarificationIntent(value: unknown): value is PendingManagerClarificationIntent {
-  return value === "create_work"
+  return value === "run_task"
+    || value === "create_work"
     || value === "create_schedule"
     || value === "run_schedule"
     || value === "update_progress"

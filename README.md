@@ -136,6 +136,14 @@ Slack からも scheduler を管理できます。主な例:
 built-in schedules は `morning-review`, `evening-review`, `weekly-review`, `heartbeat` です。これらは `policy.json` が正で、Slack からの変更も内部的には policy update として反映されます。custom jobs だけが `jobs.json` に直接保存されます。
 即時実行 / テスト実行は custom job のみ対応です。built-in review / heartbeat は今回の scope では対象外です。
 
+Slack から既存 issue の実行依頼もできます。主な例:
+
+- `AIC-123 を進めて`
+- `この issue を実行して`
+- `AIC-123 の次の一手をやって`
+
+この workflow は既存 issue を読んで、AI が今すぐ進める価値がある action だけを既存 manager commit surface で実行します。曖昧な target は code で補完せず、issue ID の補足を求めます。
+
 `jobs.json` の最小例:
 
 ```json

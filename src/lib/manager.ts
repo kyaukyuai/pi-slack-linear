@@ -17,6 +17,10 @@ import {
   type MessageRouterInput,
   type MessageRouterResult,
 } from "./pi-session.js";
+import {
+  buildRunTaskClarifyReply,
+  isRunTaskRequestText,
+} from "../orchestrators/execution/handle-run-task.js";
 import type {
   HeartbeatReviewDecision,
   ManagerReviewKind,
@@ -135,6 +139,10 @@ export interface ManagerHandleResult {
       pendingClarificationDecision?: PendingClarificationDecisionReport["decision"];
       pendingClarificationPersistence?: PendingClarificationDecisionReport["persistence"];
       pendingClarificationDecisionSummary?: string;
+      taskExecutionDecision?: "execute" | "noop";
+      taskExecutionTargetIssueId?: string;
+      taskExecutionTargetIssueIdentifier?: string;
+      taskExecutionSummary?: string;
       missingQuerySnapshot?: boolean;
       technicalFailure?: string;
     };
@@ -296,8 +304,9 @@ function isSchedulerRunRequestText(text: string): boolean {
 
 function isMutableIntent(
   intent: ManagerIntentReport["intent"] | undefined,
-): intent is "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution" {
-  return intent === "create_work"
+): intent is "run_task" | "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution" {
+  return intent === "run_task"
+    || intent === "create_work"
     || intent === "create_schedule"
     || intent === "run_schedule"
     || intent === "update_progress"
@@ -321,7 +330,7 @@ function originalMessageForPendingClarification(
 
 async function persistPendingManagerClarification(args: {
   paths: ThreadPaths;
-  intent: "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution";
+  intent: "run_task" | "create_work" | "create_schedule" | "run_schedule" | "update_progress" | "update_completed" | "update_blocked" | "update_schedule" | "delete_schedule" | "followup_resolution";
   originalUserMessage: string;
   lastUserMessage: string;
   clarificationReply: string;
@@ -639,7 +648,7 @@ function buildSafetyOnlyManagerFallbackReply(
   }
   if (pendingClarification && isPendingManagerClarificationContinuation(message.text)) {
     return {
-      action: pendingClarification.intent === "create_work"
+      action: pendingClarification.intent === "run_task" || pendingClarification.intent === "create_work"
         ? "request"
         : pendingClarification.intent === "create_schedule"
           ? "scheduler"
@@ -656,6 +665,13 @@ function buildSafetyOnlyManagerFallbackReply(
         "補足として受け取りました。",
         "この thread の続きとして扱うので、直したい点や更新したい issue を 1 文で言い換えてもらえれば再試行できます。",
       ]) ?? "補足として受け取りました。",
+    };
+  }
+
+  if (isRunTaskRequestText(message.text)) {
+    return {
+      action: "request",
+      reply: buildRunTaskClarifyReply(),
     };
   }
 
@@ -1147,6 +1163,9 @@ export async function handleManagerMessage(
     if (pendingManagerClarification && !agentTurn.pendingClarificationDecision) {
       throw new Error("manager agent missing pending clarification decision");
     }
+    if (agentTurn.intentReport?.intent === "run_task" && !agentTurn.taskExecutionDecision) {
+      throw new Error("manager agent run_task missing task execution decision");
+    }
 
     const commitResult = await commitManagerCommandProposals({
       config,
@@ -1195,6 +1214,7 @@ export async function handleManagerMessage(
       agentIntent === "create_work"
       || agentIntent === "create_schedule"
       || agentIntent === "run_schedule"
+      || agentIntent === "run_task"
       || agentIntent === "update_progress"
       || agentIntent === "update_completed"
       || agentIntent === "update_blocked"
@@ -1252,6 +1272,10 @@ export async function handleManagerMessage(
       pendingClarificationDecision: agentTurn.pendingClarificationDecision?.decision,
       pendingClarificationPersistence: agentTurn.pendingClarificationDecision?.persistence,
       pendingClarificationDecisionSummary: agentTurn.pendingClarificationDecision?.summary,
+      taskExecutionDecision: agentTurn.taskExecutionDecision?.decision,
+      taskExecutionTargetIssueId: agentTurn.taskExecutionDecision?.targetIssueId,
+      taskExecutionTargetIssueIdentifier: agentTurn.taskExecutionDecision?.targetIssueIdentifier,
+      taskExecutionSummary: agentTurn.taskExecutionDecision?.summary,
       missingQuerySnapshot,
     });
 
@@ -1274,6 +1298,10 @@ export async function handleManagerMessage(
           pendingClarificationDecision: agentTurn.pendingClarificationDecision?.decision,
           pendingClarificationPersistence: agentTurn.pendingClarificationDecision?.persistence,
           pendingClarificationDecisionSummary: agentTurn.pendingClarificationDecision?.summary,
+          taskExecutionDecision: agentTurn.taskExecutionDecision?.decision,
+          taskExecutionTargetIssueId: agentTurn.taskExecutionDecision?.targetIssueId,
+          taskExecutionTargetIssueIdentifier: agentTurn.taskExecutionDecision?.targetIssueIdentifier,
+          taskExecutionSummary: agentTurn.taskExecutionDecision?.summary,
           missingQuerySnapshot,
         },
       },
@@ -1298,7 +1326,7 @@ export async function handleManagerMessage(
     });
     if (safetyFallback.action !== "conversation") {
       const fallbackIntent = safetyFallback.action === "request"
-        ? "create_work"
+        ? (isRunTaskRequestText(message.text) ? "run_task" : "create_work")
         : safetyFallback.action === "scheduler"
           ? (isSchedulerRunRequestText(message.text) ? "run_schedule" : "create_schedule")
         : safetyFallback.action === "progress"

@@ -441,6 +441,11 @@ describe("handleManagerMessage clarification flow", () => {
     notionAgendaParentPageId: "parent-page-1",
     botModel: "claude-sonnet-4-5",
     workspaceDir: "",
+    linearWebhookEnabled: false,
+    linearWebhookPublicUrl: undefined,
+    linearWebhookSecret: undefined,
+    linearWebhookPort: 8787,
+    linearWebhookPath: "/hooks/linear",
     heartbeatIntervalMin: 30,
     heartbeatActiveLookbackHours: 24,
     schedulerPollSec: 30,
@@ -4448,5 +4453,76 @@ describe("handleManagerMessage clarification flow", () => {
         id: "weekly-notion-agenda-ai-clone",
       }),
     );
+  });
+
+  it("executes run_task requests against an explicit existing issue", async () => {
+    linearMocks.getLinearIssue.mockResolvedValueOnce({
+      id: "issue-110",
+      identifier: "AIC-110",
+      title: "ログイン画面の不具合修正",
+      url: "https://linear.app/kyaukyuai/issue/AIC-110",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      state: { id: "state-started", name: "Started", type: "started" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-run-task-explicit",
+        messageTs: "msg-run-task-explicit-1",
+        userId: "U1",
+        text: "AIC-110 を進めて",
+      },
+      new Date("2026-03-24T02:10:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("AIC-110 を確認し");
+    expect(linearMocks.addLinearComment).toHaveBeenCalledWith(
+      "AIC-110",
+      expect.stringContaining("## AI execution"),
+      expect.any(Object),
+    );
+    expect(result.diagnostics?.agent).toMatchObject({
+      source: "agent",
+      intent: "run_task",
+      taskExecutionDecision: "execute",
+      taskExecutionTargetIssueIdentifier: "AIC-110",
+    });
+  });
+
+  it("stores a run_task clarification when the target issue is ambiguous", async () => {
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-run-task-clarify",
+        messageTs: "msg-run-task-clarify-1",
+        userId: "U1",
+        text: "この issue を進めて",
+      },
+      new Date("2026-03-24T02:12:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("`AIC-123` のように issue ID を添えてもう一度送ってください。");
+    expect(linearMocks.addLinearComment).not.toHaveBeenCalled();
+    expect(result.diagnostics?.agent).toMatchObject({
+      source: "agent",
+      intent: "run_task",
+      taskExecutionDecision: "noop",
+    });
+
+    await expect(
+      loadPendingManagerClarification(buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-run-task-clarify")),
+    ).resolves.toMatchObject({
+      intent: "run_task",
+      missingDecisionSummary: "run_task の対象 issue を確認するため、issue ID の補足待ちです。",
+    });
   });
 });

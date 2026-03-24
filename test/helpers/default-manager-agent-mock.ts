@@ -13,6 +13,11 @@ import {
   isPendingManagerClarificationContinuation,
   isPendingManagerClarificationStatusQuestion,
 } from "../../src/lib/pending-manager-clarification.js";
+import {
+  buildRunTaskClarifyReply,
+  buildRunTaskNoopReply,
+  isRunTaskRequestText,
+} from "../../src/orchestrators/execution/handle-run-task.js";
 import type { SystemPaths } from "../../src/lib/system-workspace.js";
 import { handleIntakeRequest } from "../../src/orchestrators/intake/handle-intake.js";
 import {
@@ -31,7 +36,7 @@ import { assessRisk } from "../../src/orchestrators/review/risk.js";
 import { formatReviewFollowupPrompt } from "../../src/orchestrators/review/review-helpers.js";
 
 type RouterResult = {
-  action: "conversation" | "query" | "create_work" | "update_progress" | "update_completed" | "update_blocked";
+  action: "conversation" | "query" | "run_task" | "create_work" | "update_progress" | "update_completed" | "update_blocked";
   conversationKind?: "greeting" | "smalltalk" | "other";
   queryKind?: ManagerQueryKind;
   queryScope?: "self" | "team" | "thread-context";
@@ -227,6 +232,25 @@ function buildPendingClarificationDecisionToolCall(
       pendingClarificationDecision: {
         decision,
         persistence,
+        summary,
+      },
+    },
+  };
+}
+
+function buildTaskExecutionDecisionToolCall(
+  decision: "execute" | "noop",
+  targetIssueId: string | undefined,
+  targetIssueIdentifier: string | undefined,
+  summary: string,
+) {
+  return {
+    toolName: "report_task_execution_decision",
+    details: {
+      taskExecutionDecision: {
+        decision,
+        targetIssueId,
+        targetIssueIdentifier,
         summary,
       },
     },
@@ -635,6 +659,13 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
         reasoningSummary: "直前の reference-material query の続きです。",
       };
     }
+    if ((router.action === "conversation" || router.action === "create_work") && isRunTaskRequestText(input.text)) {
+      router = {
+        action: "run_task",
+        confidence: 0.9,
+        reasoningSummary: "既存 issue の実行依頼です。",
+      };
+    }
     if (router.action === "query" && !router.queryScope) {
       router = {
         ...router,
@@ -680,6 +711,135 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
           ...result.toolCalls,
         ],
         pendingClarificationDecision: pendingDecision,
+      };
+    }
+
+    if (router.action === "run_task") {
+      const planningContext = await getThreadPlanningContext(
+        repositories.workgraph,
+        buildWorkgraphThreadKey(input.channelId, input.rootThreadTs),
+      ).catch(() => undefined);
+      const explicitIssueId = (effectiveText.match(/\b[A-Z][A-Z0-9]+-\d+\b/) ?? [])[0];
+      const targetIssueId = explicitIssueId
+        ?? planningContext?.thread.latestFocusIssueId
+        ?? planningContext?.thread.lastResolvedIssueId
+        ?? planningContext?.thread.parentIssueId
+        ?? planningContext?.thread.childIssueIds[0]
+        ?? planningContext?.thread.linkedIssueIds[0];
+
+      if (!targetIssueId) {
+        const runTaskPendingDecision = pendingDecision ?? {
+          decision: "new_request" as const,
+          persistence: "replace" as const,
+          summary: "run_task の対象 issue を確認するため、issue ID の補足待ちです。",
+        };
+        const reply = buildRunTaskClarifyReply();
+        return {
+          reply,
+          toolCalls: [
+            buildPendingClarificationDecisionToolCall(
+              runTaskPendingDecision.decision,
+              runTaskPendingDecision.persistence,
+              runTaskPendingDecision.summary,
+            ),
+            buildIntentToolCall({
+              intent: "run_task",
+              confidence: router.confidence,
+              summary: router.reasoningSummary,
+            }),
+            buildTaskExecutionDecisionToolCall("noop", undefined, undefined, "実行対象の issue を特定できませんでした。"),
+          ],
+          proposals: [],
+          invalidProposalCount: 0,
+          intentReport: {
+            intent: "run_task",
+            confidence: router.confidence,
+            summary: router.reasoningSummary,
+          },
+          pendingClarificationDecision: runTaskPendingDecision,
+          taskExecutionDecision: {
+            decision: "noop",
+            summary: "実行対象の issue を特定できませんでした。",
+          },
+        };
+      }
+
+      const issue = await args.linearMocks.getLinearIssue(targetIssueId, undefined, undefined, { includeComments: true });
+      const issueStateName = normalize(
+        typeof issue.state === "string"
+          ? issue.state
+          : issue.state && typeof issue.state === "object" && "name" in issue.state
+            ? String(issue.state.name ?? "")
+            : "",
+      );
+      if (issueStateName === "done" || issueStateName === "completed" || issueStateName === "canceled") {
+        const reply = buildRunTaskNoopReply(issue.identifier);
+        return {
+          reply,
+          toolCalls: [
+            ...(pendingDecision ? [buildPendingClarificationDecisionToolCall(pendingDecision.decision, pendingDecision.persistence, pendingDecision.summary)] : []),
+            buildIntentToolCall({
+              intent: "run_task",
+              confidence: router.confidence,
+              summary: router.reasoningSummary,
+            }),
+            buildTaskExecutionDecisionToolCall("noop", issue.id, issue.identifier, "対象 issue はすでに完了状態です。"),
+          ],
+          proposals: [],
+          invalidProposalCount: 0,
+          intentReport: {
+            intent: "run_task",
+            confidence: router.confidence,
+            summary: router.reasoningSummary,
+          },
+          pendingClarificationDecision: pendingDecision,
+          taskExecutionDecision: {
+            decision: "noop",
+            targetIssueId: issue.id,
+            targetIssueIdentifier: issue.identifier,
+            summary: "対象 issue はすでに完了状態です。",
+          },
+        };
+      }
+
+      const reply = `${issue.identifier} を確認し、まずは実行の起点として進め方コメントを追加します。`;
+      return {
+        reply,
+        toolCalls: [
+          ...(pendingDecision ? [buildPendingClarificationDecisionToolCall(pendingDecision.decision, pendingDecision.persistence, pendingDecision.summary)] : []),
+          buildIntentToolCall({
+            intent: "run_task",
+            confidence: router.confidence,
+            summary: router.reasoningSummary,
+          }),
+          buildTaskExecutionDecisionToolCall(
+            "execute",
+            issue.id,
+            issue.identifier,
+            "既存 issue に対する即時実行価値があるため、進め方コメントを追加します。",
+          ),
+        ],
+        proposals: [{
+          commandType: "add_comment",
+          issueId: issue.identifier,
+          body: "## AI execution\nSlack からの実行依頼を受けて確認を開始しました。",
+          reasonSummary: `${issue.identifier} の実行起点を残します。`,
+          evidenceSummary: "Slack から task execution の依頼がありました。",
+          dedupeKeyCandidate: `run-task:${issue.identifier}:${normalize(input.text)}`,
+        }],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "run_task",
+          confidence: router.confidence,
+          summary: router.reasoningSummary,
+        },
+        pendingClarificationDecision: pendingDecision,
+        taskExecutionDecision: {
+          decision: "execute",
+          targetIssueId: issue.id,
+          targetIssueIdentifier: issue.identifier,
+          summary: "既存 issue に対する即時実行価値があるため、進め方コメントを追加します。",
+        },
       };
     }
 

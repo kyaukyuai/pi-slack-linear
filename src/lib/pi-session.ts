@@ -50,10 +50,12 @@ import {
   extractIntentReport,
   extractManagerCommandProposals,
   extractPendingClarificationDecision,
+  extractTaskExecutionDecision,
   type ManagerAgentToolCall,
   type ManagerCommandProposal,
   type ManagerIntentReport,
   type PendingClarificationDecisionReport,
+  type TaskExecutionDecisionReport,
 } from "./manager-command-commit.js";
 import type { TaskIntent } from "./slack.js";
 import { buildSystemPaths } from "./system-workspace.js";
@@ -106,6 +108,7 @@ export interface ManagerAgentTurnResult {
   invalidProposalCount: number;
   intentReport?: ManagerIntentReport;
   pendingClarificationDecision?: PendingClarificationDecisionReport;
+  taskExecutionDecision?: TaskExecutionDecisionReport;
 }
 
 export {
@@ -276,6 +279,13 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "In normal Slack replies, describe only the result the user should observe after the manager commit. Do not mention an extra manual confirmation or approval step unless the manager explicitly rejected the action.",
     "Report your current intent with report_manager_intent once per turn before or during tool usage.",
     "When the turn is a read-only reference lookup using Notion, Slack context, docs, memos, or lightweight web material, report intent=query with queryKind=reference-material.",
+    "Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.",
+    "For run_task turns, inspect the target issue first with raw facts tools before proposing any mutation.",
+    "For run_task turns, call report_task_execution_decision once with decision=execute or noop and identify the target issue whenever you can.",
+    "If a run_task request has no clear immediate AI execution value, keep the reply short and use report_task_execution_decision with decision=noop.",
+    "If a run_task request does have clear immediate execution value, use existing proposal tools only. Do not invent a new side-effect path.",
+    "If the target issue for a run_task request is ambiguous, ask for the issue ID instead of guessing.",
+    "If a run_task request is ambiguous and you ask for the issue ID, also use report_pending_clarification_decision with decision=new_request and persistence=replace so the follow-up can continue in the same thread.",
     "When the user asks about schedules, scheduler jobs, cron-style tasks, morning/evening/weekly review settings, or heartbeat settings, use the dedicated scheduler tools.",
     "Use intent=query_schedule for schedule inspection, create_schedule for custom job creation, run_schedule for immediate custom job execution, update_schedule for custom job updates or built-in disable/retime changes, and delete_schedule only for custom job deletion.",
     "Built-in schedules are morning-review, evening-review, weekly-review, and heartbeat. Manage them with propose_update_builtin_schedule instead of custom job CRUD.",
@@ -946,6 +956,7 @@ async function runStructuredPromptTurn(
       invalidProposalCount,
       intentReport: extractIntentReport(toolCalls),
       pendingClarificationDecision: extractPendingClarificationDecision(toolCalls),
+      taskExecutionDecision: extractTaskExecutionDecision(toolCalls),
     };
   } catch (error) {
     await disposeThreadRuntime(runtimeKey);

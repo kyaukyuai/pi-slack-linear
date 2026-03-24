@@ -35,6 +35,7 @@ import {
   type ManagerCommandProposal,
   type ManagerIntentReport,
   type PendingClarificationDecisionReport,
+  type TaskExecutionDecisionReport,
 } from "./manager-command-commit.js";
 
 function buildLinearEnv(config: AppConfig): LinearCommandEnv {
@@ -445,7 +446,7 @@ function createIntentReportTool(): ToolDefinition {
     description: "Record the current high-level intent before or during tool usage. Use this once per turn.",
     promptSnippet: "Call this early to tell the manager what kind of turn this is.",
     parameters: Type.Object({
-      intent: Type.String({ description: "conversation | query | query_schedule | create_work | create_schedule | run_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | review | heartbeat | scheduler" }),
+      intent: Type.String({ description: "conversation | query | query_schedule | run_task | create_work | create_schedule | run_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | review | heartbeat | scheduler" }),
       queryKind: Type.Optional(Type.String({ description: "Optional query subtype: list-active | list-today | what-should-i-do | inspect-work | search-existing | recommend-next-step | reference-material." })),
       queryScope: Type.Optional(Type.String({ description: "Optional query scope self | team | thread-context." })),
       confidence: Type.Optional(Type.Number({ description: "Confidence between 0 and 1." })),
@@ -456,6 +457,28 @@ function createIntentReportTool(): ToolDefinition {
       return {
         content: [{ type: "text", text: "Intent recorded." }],
         details: { intentReport: typed },
+      };
+    },
+  };
+}
+
+function createTaskExecutionDecisionTool(): ToolDefinition {
+  return {
+    name: "report_task_execution_decision",
+    label: "Report Task Execution Decision",
+    description: "Record whether an imperative issue-execution request should execute now or no-op.",
+    promptSnippet: "Use this for run_task turns after you inspect the target issue.",
+    parameters: Type.Object({
+      decision: Type.String({ description: "execute | noop" }),
+      targetIssueId: Type.Optional(Type.String({ description: "Resolved target issue id when known." })),
+      targetIssueIdentifier: Type.Optional(Type.String({ description: "Resolved target issue identifier like AIC-123 when known." })),
+      summary: Type.Optional(Type.String({ description: "One short sentence explaining the decision." })),
+    }),
+    async execute(_toolCallId, params) {
+      const typed = params as TaskExecutionDecisionReport;
+      return {
+        content: [{ type: "text", text: "Task execution decision recorded." }],
+        details: { taskExecutionDecision: typed },
       };
     },
   };
@@ -1225,6 +1248,7 @@ export function createManagerAgentTools(
   return [
     createIntentReportTool(),
     createPendingClarificationDecisionTool(),
+    createTaskExecutionDecisionTool(),
     createQuerySnapshotTool(),
     ...createLinearReadTools(config),
     ...createSchedulerReadTools(config),

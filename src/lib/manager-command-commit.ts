@@ -337,6 +337,7 @@ export interface ManagerIntentReport {
     | "conversation"
     | "query"
     | "query_schedule"
+    | "run_task"
     | "create_work"
     | "create_schedule"
     | "run_schedule"
@@ -358,6 +359,13 @@ export interface ManagerIntentReport {
 export interface PendingClarificationDecisionReport {
   decision: "continue_pending" | "status_question" | "new_request" | "clear_pending";
   persistence: "keep" | "replace" | "clear";
+  summary?: string;
+}
+
+export interface TaskExecutionDecisionReport {
+  decision: "execute" | "noop";
+  targetIssueId?: string;
+  targetIssueIdentifier?: string;
   summary?: string;
 }
 
@@ -842,6 +850,7 @@ export function extractIntentReport(toolCalls: ManagerAgentToolCall[]): ManagerI
         "conversation",
         "query",
         "query_schedule",
+        "run_task",
         "create_work",
         "create_schedule",
         "update_progress",
@@ -878,6 +887,13 @@ const pendingClarificationDecisionSchema = z.object({
   summary: optionalStringSchema,
 });
 
+const taskExecutionDecisionSchema = z.object({
+  decision: z.enum(["execute", "noop"]),
+  targetIssueId: optionalStringSchema,
+  targetIssueIdentifier: optionalStringSchema,
+  summary: optionalStringSchema,
+});
+
 export function extractPendingClarificationDecision(
   toolCalls: ManagerAgentToolCall[],
 ): PendingClarificationDecisionReport | undefined {
@@ -888,6 +904,23 @@ export function extractPendingClarificationDecision(
     }
     const details = toolCall.details as { pendingClarificationDecision?: unknown } | undefined;
     const parsed = pendingClarificationDecisionSchema.safeParse(details?.pendingClarificationDecision);
+    if (parsed.success) {
+      return parsed.data;
+    }
+  }
+  return undefined;
+}
+
+export function extractTaskExecutionDecision(
+  toolCalls: ManagerAgentToolCall[],
+): TaskExecutionDecisionReport | undefined {
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const toolCall = toolCalls[index];
+    if (toolCall?.toolName !== "report_task_execution_decision") {
+      continue;
+    }
+    const details = toolCall.details as { taskExecutionDecision?: unknown } | undefined;
+    const parsed = taskExecutionDecisionSchema.safeParse(details?.taskExecutionDecision);
     if (parsed.success) {
       return parsed.data;
     }

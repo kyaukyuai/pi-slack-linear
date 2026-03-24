@@ -1,7 +1,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ThreadPaths } from "./thread-workspace.js";
-import type { ManagerIntentReport, PendingClarificationDecisionReport } from "./manager-command-commit.js";
+import type { ManagerIntentReport, PendingClarificationDecisionReport, TaskExecutionDecisionReport } from "./manager-command-commit.js";
 
 export interface LastManagerAgentTurn {
   recordedAt: string;
@@ -13,6 +13,10 @@ export interface LastManagerAgentTurn {
   pendingClarificationDecision?: PendingClarificationDecisionReport["decision"];
   pendingClarificationPersistence?: PendingClarificationDecisionReport["persistence"];
   pendingClarificationDecisionSummary?: string;
+  taskExecutionDecision?: TaskExecutionDecisionReport["decision"];
+  taskExecutionTargetIssueId?: string;
+  taskExecutionTargetIssueIdentifier?: string;
+  taskExecutionSummary?: string;
   missingQuerySnapshot?: boolean;
 }
 
@@ -44,6 +48,18 @@ export async function loadLastManagerAgentTurn(
         : undefined,
       pendingClarificationDecisionSummary: typeof parsed.pendingClarificationDecisionSummary === "string"
         ? parsed.pendingClarificationDecisionSummary
+        : undefined,
+      taskExecutionDecision: typeof parsed.taskExecutionDecision === "string"
+        ? parsed.taskExecutionDecision as TaskExecutionDecisionReport["decision"]
+        : undefined,
+      taskExecutionTargetIssueId: typeof parsed.taskExecutionTargetIssueId === "string"
+        ? parsed.taskExecutionTargetIssueId
+        : undefined,
+      taskExecutionTargetIssueIdentifier: typeof parsed.taskExecutionTargetIssueIdentifier === "string"
+        ? parsed.taskExecutionTargetIssueIdentifier
+        : undefined,
+      taskExecutionSummary: typeof parsed.taskExecutionSummary === "string"
+        ? parsed.taskExecutionSummary
         : undefined,
       missingQuerySnapshot: parsed.missingQuerySnapshot === true,
     };
