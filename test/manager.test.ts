@@ -86,6 +86,7 @@ describe("manager helpers", () => {
     expect(classifyManagerQuery("今日のタスク一覧を確認して")).toBe("list-today");
     expect(classifyManagerQuery("タスク一覧を確認して")).toBe("list-active");
     expect(classifyManagerQuery("他にはどのようなタスクがある？")).toBe("list-active");
+    expect(classifyManagerQuery("今はどのようなタスクが残ってる？")).toBe("list-active");
     expect(classifyManagerQuery("AIC-38 次どう進める？")).toBe("recommend-next-step");
     expect(classifyManagerQuery("この件次どう進める？")).toBe("recommend-next-step");
     expect(classifyManagerQuery("この件どうなってる？")).toBe("inspect-work");
