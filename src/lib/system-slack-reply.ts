@@ -171,8 +171,17 @@ function dedupeReviewIntroSentences(text: string): string {
     .trim();
 }
 
+function normalizeSystemSectionBreaks(text: string): string {
+  return text
+    .replace(/([。！？])\s*(\*[^*\n]{1,80}\*)\s*/g, "$1\n\n$2\n")
+    .replace(/(\*[^*\n]{1,80}\*)\s*([^\n>*-])/g, "$1\n$2")
+    .replace(/([。！？])\s*((?:その他の状況|アクション提案|引き続き進行中|完了|継続確認|新規タスク):?)/g, "$1\n\n$2")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function normalizeSystemReplyForSlack(text: string): string {
-  return dedupeReviewIntroSentences(convertPipeTablesToBullets(text))
+  return normalizeSystemSectionBreaks(dedupeReviewIntroSentences(convertPipeTablesToBullets(text)))
     .replace(/^\s*---+\s*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

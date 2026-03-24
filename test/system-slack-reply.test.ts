@@ -59,4 +59,16 @@ describe("system Slack reply helpers", () => {
     expect(result).toContain("おはようございます。本日（3/24）のレビューです。");
     expect(result).not.toContain("昨日から状況が前進しています。");
   });
+
+  it("inserts paragraph breaks around inline section headings", () => {
+    const result = normalizeSystemReplyForSlack([
+      "AIC-39 は Done になっています。お疲れ様でした。*本日追加の新タスク群 (AIC-44〜51)* 今日の議事録から8タスクが作成され、全て Backlog・期限未設定。",
+      "アクション提案: AIC-44 に着手予定・期限設定の確認を送信。",
+      "引き続き進行中 AIC-38（OPT社招待）: 期限 3日後(3/27)、昨日 progress 更新あり、特に問題なし。",
+    ].join("\n"));
+
+    expect(result).toContain("お疲れ様でした。\n\n*本日追加の新タスク群 (AIC-44〜51)*\n今日の議事録から8タスクが作成され");
+    expect(result).toContain("期限未設定。\n\nアクション提案:");
+    expect(result).toContain("確認を送信。\n\n引き続き進行中");
+  });
 });
