@@ -282,6 +282,7 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.",
     "For run_task turns, inspect the target issue first with raw facts tools before proposing any mutation.",
     "For run_task turns, call report_task_execution_decision once with decision=execute or noop and identify the target issue whenever you can.",
+    "Do not downgrade an explicit imperative issue execution request such as AIC-123 を実行して or AIC-123 を進めて into intent=query just because you want to inspect the issue first; keep it as run_task and then decide execute or noop.",
     "If a run_task request has no clear immediate AI execution value, keep the reply short and use report_task_execution_decision with decision=noop.",
     "If a run_task request does have clear immediate execution value, use existing proposal tools only. Do not invent a new side-effect path.",
     "If the target issue for a run_task request is ambiguous, ask for the issue ID instead of guessing.",

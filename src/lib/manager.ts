@@ -18,7 +18,9 @@ import {
   type MessageRouterResult,
 } from "./pi-session.js";
 import {
+  buildRunTaskActionClarifyReply,
   buildRunTaskClarifyReply,
+  extractExplicitRunTaskIssueIdentifier,
   isRunTaskRequestText,
 } from "../orchestrators/execution/handle-run-task.js";
 import type {
@@ -669,9 +671,12 @@ function buildSafetyOnlyManagerFallbackReply(
   }
 
   if (isRunTaskRequestText(message.text)) {
+    const explicitIssueIdentifier = extractExplicitRunTaskIssueIdentifier(message.text);
     return {
       action: "request",
-      reply: buildRunTaskClarifyReply(),
+      reply: explicitIssueIdentifier
+        ? buildRunTaskActionClarifyReply(explicitIssueIdentifier)
+        : buildRunTaskClarifyReply(),
     };
   }
 
@@ -1142,6 +1147,9 @@ export async function handleManagerMessage(
   };
 
   try {
+    const explicitRunTaskIssueIdentifier = isRunTaskRequestText(message.text)
+      ? extractExplicitRunTaskIssueIdentifier(message.text)
+      : undefined;
     const lastQueryContext = await loadThreadQueryContinuation(paths).catch(() => undefined);
     const pendingManagerClarification = await loadPendingManagerClarification(paths, now).catch(() => undefined);
     const threadPlanningContext = await getThreadPlanningContext(repositories.workgraph, threadKey).catch(() => undefined);
@@ -1162,6 +1170,9 @@ export async function handleManagerMessage(
     }
     if (pendingManagerClarification && !agentTurn.pendingClarificationDecision) {
       throw new Error("manager agent missing pending clarification decision");
+    }
+    if (explicitRunTaskIssueIdentifier && agentTurn.intentReport?.intent === "query") {
+      throw new Error("manager agent explicit run_task misclassified as query");
     }
     if (agentTurn.intentReport?.intent === "run_task" && !agentTurn.taskExecutionDecision) {
       throw new Error("manager agent run_task missing task execution decision");

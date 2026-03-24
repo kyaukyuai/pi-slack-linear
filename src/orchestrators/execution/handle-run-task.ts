@@ -11,8 +11,18 @@ export function isRunTaskRequestText(text: string): boolean {
   return ISSUE_IDENTIFIER_PATTERN.test(normalized) || THREAD_BOUND_TARGET_PATTERN.test(normalized);
 }
 
+export function extractExplicitRunTaskIssueIdentifier(text: string): string | undefined {
+  return text.match(ISSUE_IDENTIFIER_PATTERN)?.[0];
+}
+
 export function buildRunTaskClarifyReply(): string {
   return "いまは実行対象を安全に確定できないため、`AIC-123` のように issue ID を添えてもう一度送ってください。";
+}
+
+export function buildRunTaskActionClarifyReply(issueIdentifier?: string): string {
+  return issueIdentifier
+    ? `${issueIdentifier} に対して何を実行したいかを安全に確定できないため、状態変更・コメント追加・Notion更新など、やりたい操作をもう一度短く教えてください。`
+    : "実行内容を安全に確定できないため、状態変更・コメント追加・Notion更新など、やりたい操作をもう一度短く教えてください。";
 }
 
 export function buildRunTaskNoopReply(issueIdentifier?: string): string {

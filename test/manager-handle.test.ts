@@ -4525,4 +4525,48 @@ describe("handleManagerMessage clarification flow", () => {
       missingDecisionSummary: "run_task の対象 issue を確認するため、issue ID の補足待ちです。",
     });
   });
+
+  it("falls back to run_task action clarification when an explicit issue execution request is misclassified as query", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "AIC-52 は先ほど作成したタスクです。In Progress に移すことでしょうか？",
+      toolCalls: [],
+      proposals: [],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "query",
+        queryKind: "inspect-work",
+        summary: "Inspect AIC-52 to understand what run means in this context.",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-run-task-misclassified",
+        messageTs: "msg-run-task-misclassified-1",
+        userId: "U1",
+        text: "AIC-52 を実行して",
+      },
+      new Date("2026-03-24T08:39:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("AIC-52 に対して何を実行したいかを安全に確定できないため");
+    expect(result.reply).toContain("状態変更・コメント追加・Notion更新");
+    expect(result.reply).not.toContain("一覧や優先順位を安全に判断できない");
+    expect(result.diagnostics?.agent).toMatchObject({
+      source: "fallback",
+      technicalFailure: "manager agent explicit run_task misclassified as query",
+    });
+
+    await expect(
+      loadPendingManagerClarification(buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-run-task-misclassified")),
+    ).resolves.toMatchObject({
+      intent: "run_task",
+      lastUserMessage: "AIC-52 を実行して",
+      missingDecisionSummary: "manager agent explicit run_task misclassified as query",
+    });
+  });
 });

@@ -69,6 +69,7 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Webhook issue-created processing has no Slack thread context.");
     expect(prompt).toContain("Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.");
     expect(prompt).toContain("For run_task turns, call report_task_execution_decision once with decision=execute or noop");
+    expect(prompt).toContain("Do not downgrade an explicit imperative issue execution request such as AIC-123 を実行して or AIC-123 を進めて into intent=query");
     expect(prompt).toContain("If the target issue for a run_task request is ambiguous, ask for the issue ID instead of guessing.");
     expect(prompt).toContain("If a run_task request is ambiguous and you ask for the issue ID, also use report_pending_clarification_decision with decision=new_request and persistence=replace");
     expect(prompt).toContain("When the user asks about schedules, scheduler jobs, cron-style tasks, morning/evening/weekly review settings, or heartbeat settings, use the dedicated scheduler tools.");
