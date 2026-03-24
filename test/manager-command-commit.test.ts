@@ -654,7 +654,7 @@ describe("manager command commit", () => {
         NOTION_API_TOKEN: "secret_test",
       }),
     );
-    expect(result.committed[0]?.summary).toContain("Notion にアジェンダを作成しました。");
+    expect(result.committed[0]?.summary).toContain("Notion agenda created:");
     expect(result.committed[0]?.summary).toContain("<https://www.notion.so/notion-page-1|AIクローン会議アジェンダ>");
   });
 

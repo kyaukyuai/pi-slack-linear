@@ -46,6 +46,10 @@ const webResearchMocks = vi.hoisted(() => ({
   webFetchUrl: vi.fn(),
 }));
 
+const notionMocks = vi.hoisted(() => ({
+  createNotionAgendaPage: vi.fn(),
+}));
+
 const piSessionMocks = vi.hoisted(() => ({
   runManagerAgentTurn: vi.fn(),
   runManagerSystemTurn: vi.fn(),
@@ -82,6 +86,14 @@ vi.mock("../src/lib/web-research.js", () => ({
   webSearchFetch: webResearchMocks.webSearchFetch,
   webFetchUrl: webResearchMocks.webFetchUrl,
 }));
+
+vi.mock("../src/lib/notion.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/notion.js")>("../src/lib/notion.js");
+  return {
+    ...actual,
+    createNotionAgendaPage: notionMocks.createNotionAgendaPage,
+  };
+});
 
 vi.mock("../src/lib/pi-session.js", () => ({
   runManagerAgentTurn: piSessionMocks.runManagerAgentTurn,
@@ -421,6 +433,8 @@ describe("handleManagerMessage clarification flow", () => {
     linearApiKey: "lin_api_test",
     linearWorkspace: "kyaukyuai",
     linearTeamKey: "AIC",
+    notionApiToken: "secret_test",
+    notionAgendaParentPageId: "parent-page-1",
     botModel: "claude-sonnet-4-5",
     workspaceDir: "",
     heartbeatIntervalMin: 30,
@@ -503,6 +517,13 @@ describe("handleManagerMessage clarification flow", () => {
       url: "https://example.com",
       title: "Example",
       snippet: "Example snippet",
+    });
+    notionMocks.createNotionAgendaPage.mockReset().mockResolvedValue({
+      id: "notion-page-1",
+      object: "page",
+      title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
+      url: "https://www.notion.so/page-1",
+      createdTime: "2026-03-24T00:00:00.000Z",
     });
     piSessionMocks.runManagerAgentTurn.mockReset().mockImplementation(createDefaultTestManagerAgentTurn({
       config: { ...config, workspaceDir },
@@ -4211,5 +4232,50 @@ describe("handleManagerMessage clarification flow", () => {
       childIssueIds: expect.arrayContaining(["AIC-40"]),
       lastResolvedIssueId: "AIC-40",
     });
+  });
+
+  it("keeps a quoted linked system log for Notion agenda creation when the agent reply has no link", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "「2026.03.26 | AIクローンプラットフォーム Vol.1」のアジェンダを Notion に作成します。目的・議題・確認事項・次のアクションの構成にしました。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "create_notion_agenda",
+          title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
+          summary: "進捗共有と進め方のすりあわせです。",
+          reasonSummary: "Notion に会議用アジェンダを作る依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "create_work",
+        confidence: 0.95,
+        summary: "Notion に会議用アジェンダを作る依頼です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-agenda",
+        messageTs: "msg-notion-agenda-1",
+        userId: "U1",
+        text: "Notion にアジェンダを作って",
+      },
+      new Date("2026-03-24T00:22:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("アジェンダを Notion に作成します。");
+    expect(result.reply).toContain("> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
+    expect(notionMocks.createNotionAgendaPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
+        parentPageId: "parent-page-1",
+      }),
+      expect.any(Object),
+    );
   });
 });

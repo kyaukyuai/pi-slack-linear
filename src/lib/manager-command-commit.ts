@@ -1199,7 +1199,7 @@ async function commitCreateNotionAgendaProposal(
   return {
     commandType: proposal.commandType,
     issueIds: [],
-    summary: `Notion にアジェンダを作成しました。${linkedTitle} を確認してください。`,
+    summary: `Notion agenda created: ${linkedTitle}`,
   };
 }
 

@@ -338,6 +338,56 @@ function formatCommitLogs(commitSummaries: string[]): string {
     .join("\n");
 }
 
+function normalizeCommitSummaryForCompare(text: string): string {
+  return text
+    .replace(/<[^|>]+\|([^>]+)>/g, "$1")
+    .replace(/[*_~`>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function extractSlackUrls(text: string): string[] {
+  return Array.from(text.matchAll(/<([^|>\s]+)(?:\|[^>]+)?>/g))
+    .map((match) => match[1] ?? "")
+    .filter((value) => /^https?:\/\//.test(value));
+}
+
+function looksLikeFollowupSummary(summary: string): boolean {
+  return /follow-up を作成しました/.test(summary);
+}
+
+function agentAlreadyCoversFollowup(agentReply: string, summary: string): boolean {
+  const issueIds = Array.from(summary.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g))
+    .map((match) => match[1] ?? "")
+    .filter(Boolean);
+  if (issueIds.length === 0 || !issueIds.every((issueId) => agentReply.includes(issueId))) {
+    return false;
+  }
+  return /(確認|follow-up|フォローアップ|送[り付信]|連絡)/.test(agentReply);
+}
+
+function shouldSuppressCommitSummary(agentReply: string, summary: string): boolean {
+  const summaryUrls = extractSlackUrls(summary);
+  if (summaryUrls.length > 0) {
+    const agentUrls = extractSlackUrls(agentReply);
+    const agentCoversUrls = summaryUrls.every((url) => agentUrls.includes(url));
+    if (!agentCoversUrls) {
+      return false;
+    }
+  }
+
+  const normalizedAgentReply = normalizeCommitSummaryForCompare(agentReply);
+  const normalizedSummary = normalizeCommitSummaryForCompare(summary);
+  if (!normalizedAgentReply || !normalizedSummary) {
+    return false;
+  }
+  if (normalizedAgentReply.includes(normalizedSummary)) {
+    return true;
+  }
+  return looksLikeFollowupSummary(summary) && agentAlreadyCoversFollowup(agentReply, summary);
+}
+
 interface ThreadQueryContinuationSnapshotInput {
   issueIds?: string[];
   shownIssueIds?: string[];
@@ -514,14 +564,17 @@ function mergeAgentReplyWithCommit(args: {
 }): string {
   const paragraphs: string[] = [];
   const normalizedAgentReply = args.agentReply.trim();
+  const visibleCommitSummaries = normalizedAgentReply
+    ? args.commitSummaries.filter((summary) => !shouldSuppressCommitSummary(normalizedAgentReply, summary))
+    : args.commitSummaries;
   if (normalizedAgentReply) {
     paragraphs.push(normalizedAgentReply);
   }
-  if (args.commitSummaries.length > 0) {
+  if (visibleCommitSummaries.length > 0) {
     if (normalizedAgentReply) {
-      paragraphs.push(formatCommitLogs(args.commitSummaries));
+      paragraphs.push(formatCommitLogs(visibleCommitSummaries));
     } else {
-      paragraphs.push(...args.commitSummaries);
+      paragraphs.push(...visibleCommitSummaries);
     }
   }
   const rejectionReply = buildCommitRejectionReply(args.commitRejections);

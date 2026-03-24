@@ -9,6 +9,12 @@ function normalizeForCompare(text: string): string {
     .toLowerCase();
 }
 
+function extractSlackUrls(text: string): string[] {
+  return Array.from(text.matchAll(/<([^|>\s]+)(?:\|[^>]+)?>/g))
+    .map((match) => match[1] ?? "")
+    .filter((value) => /^https?:\/\//.test(value));
+}
+
 function extractIssueIds(text: string): string[] {
   return Array.from(text.matchAll(/\b([A-Z][A-Z0-9]+-\d+)\b/g))
     .map((match) => match[1] ?? "")
@@ -28,6 +34,14 @@ function agentAlreadyCoversFollowup(agentReply: string, summary: string): boolea
 }
 
 function shouldSuppressCommitSummary(agentReply: string, summary: string): boolean {
+  const summaryUrls = extractSlackUrls(summary);
+  if (summaryUrls.length > 0) {
+    const agentUrls = extractSlackUrls(agentReply);
+    const agentCoversUrls = summaryUrls.every((url) => agentUrls.includes(url));
+    if (!agentCoversUrls) {
+      return false;
+    }
+  }
   const normalizedAgentReply = normalizeForCompare(agentReply);
   const normalizedSummary = normalizeForCompare(summary);
   if (!normalizedAgentReply || !normalizedSummary) {

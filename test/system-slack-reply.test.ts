@@ -37,4 +37,15 @@ describe("system Slack reply helpers", () => {
     expect(result).toContain("夕方時点で確認してほしい点があります。");
     expect(result).toContain("> system log: AIC-39 の follow-up を作成しました。");
   });
+
+  it("keeps a quoted system log when the summary carries a link the agent reply does not include", () => {
+    const result = mergeSystemReply({
+      agentReply: "アジェンダを作成しました。内容を確認してください。",
+      commitSummaries: ["Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>"],
+      commitRejections: [],
+    });
+
+    expect(result).toContain("アジェンダを作成しました。内容を確認してください。");
+    expect(result).toContain("> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
+  });
 });

@@ -65,4 +65,22 @@ describe("formatSlackMessageText", () => {
       ]),
     );
   });
+
+  it("keeps quoted system logs as mrkdwn lines and strips the marker from plain-text fallback", () => {
+    const payload = buildSlackMessagePayload([
+      "アジェンダを作成しました。",
+      "",
+      "> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+    ].join("\n"));
+
+    expect(payload.text).toContain("system log: Notion agenda created: 2026.03.26 | AIクローンプラットフォーム Vol.1");
+    expect(payload.text).not.toContain("> system log");
+    expect(payload.blocks.find((block) => block.type === "section" && block.text.text.includes("> system log"))).toMatchObject({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "アジェンダを作成しました。\n> system log: Notion agenda created: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>",
+      },
+    });
+  });
 });
