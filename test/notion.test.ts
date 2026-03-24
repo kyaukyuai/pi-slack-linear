@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAppendNotionPageBlocksArgs,
+  buildArchiveNotionPageArgs,
   buildCreateNotionAgendaArgs,
   buildGetNotionDatabaseArgs,
   buildGetNotionPageArgs,
@@ -9,6 +11,7 @@ import {
   buildQueryNotionDatabaseArgs,
   buildSearchNotionDatabasesArgs,
   buildSearchNotionArgs,
+  buildUpdateNotionPageArgs,
 } from "../src/lib/notion.js";
 
 describe("notion command builders", () => {
@@ -260,6 +263,127 @@ describe("notion command builders", () => {
     });
   });
 
+  it("builds page update args for a Notion title update", () => {
+    const args = buildUpdateNotionPageArgs({
+      pageId: "page-1234",
+      title: "更新後タイトル",
+    });
+
+    expect(args).toEqual([
+      "api",
+      "/v1/pages/page-1234",
+      "--method",
+      "PATCH",
+      "--data",
+      JSON.stringify({
+        properties: {
+          title: {
+            title: [
+              {
+                type: "text",
+                text: {
+                  content: "更新後タイトル",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+  });
+
+  it("builds append args for a Notion page update", () => {
+    const args = buildAppendNotionPageBlocksArgs({
+      pageId: "page-1234",
+      summary: "今回の追記です。",
+      sections: [
+        {
+          heading: "決定事項",
+          bullets: ["A案で進める", "来週確認する"],
+        },
+      ],
+    });
+
+    expect(args).toEqual([
+      "api",
+      "/v1/blocks/page-1234/children",
+      "--method",
+      "PATCH",
+      "--data",
+      JSON.stringify({
+        children: [
+          {
+            object: "block",
+            type: "paragraph",
+            paragraph: {
+              rich_text: [
+                {
+                  type: "text",
+                  text: {
+                    content: "今回の追記です。",
+                  },
+                },
+              ],
+            },
+          },
+          {
+            object: "block",
+            type: "heading_2",
+            heading_2: {
+              rich_text: [
+                {
+                  type: "text",
+                  text: {
+                    content: "決定事項",
+                  },
+                },
+              ],
+            },
+          },
+          {
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: {
+              rich_text: [
+                {
+                  type: "text",
+                  text: {
+                    content: "A案で進める",
+                  },
+                },
+              ],
+            },
+          },
+          {
+            object: "block",
+            type: "bulleted_list_item",
+            bulleted_list_item: {
+              rich_text: [
+                {
+                  type: "text",
+                  text: {
+                    content: "来週確認する",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("builds archive args for a Notion page", () => {
+    expect(buildArchiveNotionPageArgs("page-1234")).toEqual([
+      "api",
+      "/v1/pages/page-1234",
+      "--method",
+      "PATCH",
+      "--data",
+      JSON.stringify({ in_trash: true }),
+    ]);
+  });
+
   it("builds a shell-safe ntn command", () => {
     const command = buildNotionShellCommand(buildSearchNotionArgs({
       query: "AIC 仕様",
@@ -279,5 +403,8 @@ describe("notion command builders", () => {
     expect(() => buildQueryNotionDatabaseArgs({ databaseId: "   " })).toThrow("Notion database ID is required");
     expect(() => buildCreateNotionAgendaArgs({ title: "   ", parentPageId: "page-1" })).toThrow("Notion agenda title is required");
     expect(() => buildCreateNotionAgendaArgs({ title: "アジェンダ", parentPageId: "   " })).toThrow("Notion agenda parent page ID is required");
+    expect(() => buildUpdateNotionPageArgs({ pageId: "   ", title: "更新" })).toThrow("Notion page ID is required");
+    expect(() => buildAppendNotionPageBlocksArgs({ pageId: "page-1" })).toThrow("Notion page append content is required");
+    expect(() => buildArchiveNotionPageArgs("   ")).toThrow("Notion page ID is required");
   });
 });

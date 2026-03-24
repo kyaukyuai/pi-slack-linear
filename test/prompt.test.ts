@@ -88,8 +88,14 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("When research is required, save detailed findings to Linear and return only a short summary and next action to Slack.");
     expect(prompt).toContain("If Notion tools are available, use Notion as reference material for specs, notes, and operating context.");
     expect(prompt).toContain("When the user explicitly asks to create an agenda in Notion, use propose_create_notion_agenda instead of creating a Linear issue.");
+    expect(prompt).toContain("When the user explicitly asks to update, append to, retitle, archive, or delete a Notion page, use the dedicated Notion page proposal tools instead of creating or updating a Linear issue.");
     expect(prompt).toContain("For Notion agenda creation, use the configured default parent page unless the user clearly specifies a different Notion parent page.");
     expect(prompt).toContain("A minimal Notion agenda should have a short title and practical sections like 目的, 議題, 確認事項, and 次のアクション.");
+    expect(prompt).toContain("For Notion page updates in this scope, use propose_update_notion_page with an explicit pageId");
+    expect(prompt).toContain("Notion page updates in this scope are append-only plus optional title updates.");
+    expect(prompt).toContain("For Notion page delete requests, use propose_archive_notion_page.");
+    expect(prompt).toContain("When the last query context contains Notion page referenceItems and the user says そのページを更新して");
+    expect(prompt).toContain("Do not apply Notion page update or archive proposals to notion-database reference items.");
     expect(prompt).toContain("For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.");
     expect(prompt).toContain("When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.");
     expect(prompt).toContain("If the user explicitly says database or データベース, treat it as a database-only request unless they also ask for pages.");
@@ -272,6 +278,40 @@ describe("prompt helpers", () => {
     });
 
     expect(prompt).toContain("Treat this as a follow-up on the previous reference-material reply unless the user clearly changes the topic.");
+    expect(prompt).toContain("Use the stored referenceItems from the last query context before starting a broader new search.");
+    expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
+  });
+
+  it("keeps Notion page update follow-ups anchored to stored page reference items", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.680",
+      userId: "U123",
+      text: "そのページに追記して",
+      currentDate: "2026-03-24",
+      lastQueryContext: {
+        kind: "reference-material",
+        scope: "team",
+        userMessage: "Notion を確認して",
+        replySummary: "Notion ページを 1 件確認しました。",
+        issueIds: [],
+        shownIssueIds: [],
+        remainingIssueIds: [],
+        totalItemCount: 1,
+        referenceItems: [
+          {
+            id: "notion-page-1",
+            title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+            url: "https://www.notion.so/notion-page-1",
+            source: "notion",
+          },
+        ],
+        recordedAt: "2026-03-24T00:19:00.000Z",
+      },
+    });
+
     expect(prompt).toContain("Use the stored referenceItems from the last query context before starting a broader new search.");
     expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
   });

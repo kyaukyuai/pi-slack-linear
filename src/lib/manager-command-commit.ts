@@ -15,7 +15,12 @@ import {
   type LinearCommandEnv,
   type LinearIssue,
 } from "./linear.js";
-import { createNotionAgendaPage, type NotionCommandEnv } from "./notion.js";
+import {
+  archiveNotionPage,
+  createNotionAgendaPage,
+  updateNotionPage,
+  type NotionCommandEnv,
+} from "./notion.js";
 import { getSlackThreadContext } from "./slack-context.js";
 import { normalizeSchedulerJobs, recordManualJobRun } from "./scheduler.js";
 import {
@@ -209,6 +214,20 @@ const createNotionAgendaProposalSchema = proposalBaseSchema.extend({
   sections: z.array(notionAgendaSectionSchema).max(8).optional(),
 });
 
+const updateNotionPageProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("update_notion_page"),
+  pageId: z.string().trim().min(1),
+  title: optionalStringSchema,
+  summary: optionalStringSchema,
+  sections: z.array(notionAgendaSectionSchema).max(8).optional(),
+  appendMode: z.literal("append"),
+});
+
+const archiveNotionPageProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("archive_notion_page"),
+  pageId: z.string().trim().min(1),
+});
+
 const followupExtractedFieldsSchema = z.record(z.string(), z.string()).default({});
 
 const resolveFollowupProposalSchema = proposalBaseSchema.extend({
@@ -305,6 +324,8 @@ export const managerCommandProposalSchema = z.discriminatedUnion("commandType", 
   updateBuiltinScheduleProposalSchema,
   runSchedulerJobNowProposalSchema,
   createNotionAgendaProposalSchema,
+  updateNotionPageProposalSchema,
+  archiveNotionPageProposalSchema,
   resolveFollowupProposalSchema,
   reviewFollowupProposalSchema,
 ]);
@@ -1769,6 +1790,71 @@ async function commitCreateNotionAgendaProposal(
   };
 }
 
+async function commitUpdateNotionPageProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof updateNotionPageProposalSchema>,
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  if (!args.config.notionApiToken?.trim()) {
+    return {
+      proposal,
+      reason: "Notion page の更新には NOTION_API_TOKEN の設定が必要です。",
+    };
+  }
+  if (!proposal.title && !proposal.summary && (!proposal.sections || proposal.sections.length === 0)) {
+    return {
+      proposal,
+      reason: "Notion page の更新内容が不足しています。title か追記内容を明示してください。",
+    };
+  }
+
+  const page = await updateNotionPage(
+    {
+      pageId: proposal.pageId,
+      title: proposal.title,
+      summary: proposal.summary,
+      sections: proposal.sections,
+    },
+    buildNotionEnv(args.config),
+  );
+
+  const linkedTitle = page.url
+    ? `<${page.url}|${page.title ?? proposal.title ?? proposal.pageId}>`
+    : (page.title ?? proposal.title ?? proposal.pageId);
+
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: `Notion page updated: ${linkedTitle}`,
+  };
+}
+
+async function commitArchiveNotionPageProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof archiveNotionPageProposalSchema>,
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  if (!args.config.notionApiToken?.trim()) {
+    return {
+      proposal,
+      reason: "Notion page のアーカイブには NOTION_API_TOKEN の設定が必要です。",
+    };
+  }
+
+  const page = await archiveNotionPage(
+    proposal.pageId,
+    buildNotionEnv(args.config),
+  );
+
+  const linkedTitle = page.url
+    ? `<${page.url}|${page.title ?? proposal.pageId}>`
+    : (page.title ?? proposal.pageId);
+
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: `Notion page archived: ${linkedTitle}`,
+  };
+}
+
 async function commitResolveFollowupProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof resolveFollowupProposalSchema>,
@@ -1950,6 +2036,10 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
                   ? await commitRunSchedulerJobNowProposal(commitArgs, validatedProposal)
                 : validatedProposal.commandType === "create_notion_agenda"
                   ? await commitCreateNotionAgendaProposal(commitArgs, validatedProposal)
+                : validatedProposal.commandType === "update_notion_page"
+                  ? await commitUpdateNotionPageProposal(commitArgs, validatedProposal)
+                : validatedProposal.commandType === "archive_notion_page"
+                  ? await commitArchiveNotionPageProposal(commitArgs, validatedProposal)
                 : validatedProposal.commandType === "resolve_followup"
                   ? await commitResolveFollowupProposal(commitArgs, validatedProposal)
                   : await commitReviewFollowupProposal(commitArgs, validatedProposal);

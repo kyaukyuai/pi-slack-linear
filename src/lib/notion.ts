@@ -104,6 +104,13 @@ export interface CreateNotionAgendaInput {
   sections?: CreateNotionAgendaSectionInput[];
 }
 
+export interface UpdateNotionPageInput {
+  pageId: string;
+  title?: string;
+  summary?: string;
+  sections?: CreateNotionAgendaSectionInput[];
+}
+
 export interface NotionCreatedPage extends NotionPageSummary {
   createdTime?: string | null;
 }
@@ -397,6 +404,30 @@ function normalizeAgendaSections(input: CreateNotionAgendaInput): CreateNotionAg
   return sections;
 }
 
+function buildPageAppendChildren(
+  input: Pick<UpdateNotionPageInput, "summary" | "sections">,
+): Record<string, unknown>[] {
+  const children: Record<string, unknown>[] = [];
+
+  if (input.summary?.trim()) {
+    children.push(buildParagraphBlock(input.summary.trim()));
+  }
+
+  for (const section of input.sections ?? []) {
+    if (!section.heading.trim()) continue;
+    children.push(buildHeadingBlock(section.heading.trim()));
+    if (section.paragraph?.trim()) {
+      children.push(buildParagraphBlock(section.paragraph.trim()));
+    }
+    for (const bullet of section.bullets ?? []) {
+      if (!bullet.trim()) continue;
+      children.push(buildBulletedListBlock(bullet.trim()));
+    }
+  }
+
+  return children;
+}
+
 function buildCreateNotionAgendaPayload(input: CreateNotionAgendaInput): Record<string, unknown> {
   const title = input.title.trim();
   if (!title) throw new Error("Notion agenda title is required");
@@ -431,6 +462,34 @@ function buildCreateNotionAgendaPayload(input: CreateNotionAgendaInput): Record<
         title: buildRichText(title),
       },
     },
+    children,
+  };
+}
+
+function buildUpdateNotionPagePayload(input: Pick<UpdateNotionPageInput, "title">): Record<string, unknown> {
+  const title = input.title?.trim();
+  if (!title) {
+    throw new Error("Notion page title is required for page property updates");
+  }
+
+  return {
+    properties: {
+      title: {
+        title: buildRichText(title),
+      },
+    },
+  };
+}
+
+function buildAppendNotionPageBlocksPayload(
+  input: Pick<UpdateNotionPageInput, "summary" | "sections">,
+): Record<string, unknown> {
+  const children = buildPageAppendChildren(input);
+  if (children.length === 0) {
+    throw new Error("Notion page append content is required");
+  }
+
+  return {
     children,
   };
 }
@@ -503,6 +562,24 @@ export function buildGetNotionDatabaseArgs(databaseId: string): string[] {
 
 export function buildCreateNotionAgendaArgs(input: CreateNotionAgendaInput): string[] {
   return ["api", "/v1/pages", "--data", JSON.stringify(buildCreateNotionAgendaPayload(input))];
+}
+
+export function buildUpdateNotionPageArgs(input: UpdateNotionPageInput): string[] {
+  const pageId = input.pageId.trim();
+  if (!pageId) throw new Error("Notion page ID is required");
+  return ["api", `/v1/pages/${pageId}`, "--method", "PATCH", "--data", JSON.stringify(buildUpdateNotionPagePayload(input))];
+}
+
+export function buildAppendNotionPageBlocksArgs(input: UpdateNotionPageInput): string[] {
+  const pageId = input.pageId.trim();
+  if (!pageId) throw new Error("Notion page ID is required");
+  return ["api", `/v1/blocks/${pageId}/children`, "--method", "PATCH", "--data", JSON.stringify(buildAppendNotionPageBlocksPayload(input))];
+}
+
+export function buildArchiveNotionPageArgs(pageId: string): string[] {
+  const trimmed = pageId.trim();
+  if (!trimmed) throw new Error("Notion page ID is required");
+  return ["api", `/v1/pages/${trimmed}`, "--method", "PATCH", "--data", JSON.stringify({ in_trash: true })];
 }
 
 function coerceNotionFilterValue(
@@ -901,4 +978,52 @@ export async function createNotionAgendaPage(
     ...normalizePageSummary(payload),
     createdTime: typeof payload.created_time === "string" ? payload.created_time : null,
   };
+}
+
+export async function updateNotionPage(
+  input: UpdateNotionPageInput,
+  env: NotionCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<NotionPageFacts> {
+  const pageId = input.pageId.trim();
+  if (!pageId) {
+    throw new Error("Notion page ID is required");
+  }
+
+  if (input.title?.trim()) {
+    await execNotionJson<Record<string, unknown>>(
+      buildUpdateNotionPageArgs(input),
+      env,
+      signal,
+    );
+  }
+
+  if (buildPageAppendChildren(input).length > 0) {
+    await execNotionJson<Record<string, unknown>>(
+      buildAppendNotionPageBlocksArgs(input),
+      env,
+      signal,
+    );
+  }
+
+  return getNotionPageFacts(pageId, env, signal);
+}
+
+export async function archiveNotionPage(
+  pageId: string,
+  env: NotionCommandEnv = process.env,
+  signal?: AbortSignal,
+): Promise<NotionPageFacts> {
+  const trimmed = pageId.trim();
+  if (!trimmed) {
+    throw new Error("Notion page ID is required");
+  }
+
+  await execNotionJson<Record<string, unknown>>(
+    buildArchiveNotionPageArgs(trimmed),
+    env,
+    signal,
+  );
+
+  return getNotionPageFacts(trimmed, env, signal);
 }

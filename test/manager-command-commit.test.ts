@@ -28,7 +28,9 @@ const slackContextMocks = vi.hoisted(() => ({
 }));
 
 const notionMocks = vi.hoisted(() => ({
+  archiveNotionPage: vi.fn(),
   createNotionAgendaPage: vi.fn(),
+  updateNotionPage: vi.fn(),
 }));
 
 vi.mock("../src/lib/linear.js", () => ({
@@ -54,7 +56,9 @@ vi.mock("../src/lib/notion.js", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/notion.js")>("../src/lib/notion.js");
   return {
     ...actual,
+    archiveNotionPage: notionMocks.archiveNotionPage,
     createNotionAgendaPage: notionMocks.createNotionAgendaPage,
+    updateNotionPage: notionMocks.updateNotionPage,
   };
 });
 
@@ -98,7 +102,9 @@ describe("manager command commit", () => {
     linearMocks.updateManagedLinearIssue.mockReset();
     linearMocks.updateLinearIssueState.mockReset();
     linearMocks.updateLinearIssueStateWithComment.mockReset();
+    notionMocks.archiveNotionPage.mockReset();
     notionMocks.createNotionAgendaPage.mockReset();
+    notionMocks.updateNotionPage.mockReset();
     slackContextMocks.getSlackThreadContext.mockReset().mockResolvedValue({
       channelId: "C0ALAMDRB9V",
       rootThreadTs: "thread-default",
@@ -1167,5 +1173,128 @@ describe("manager command commit", () => {
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.reason).toContain("NOTION_AGENDA_PARENT_PAGE_ID");
     expect(notionMocks.createNotionAgendaPage).not.toHaveBeenCalled();
+  });
+
+  it("updates a Notion page title and appends content", async () => {
+    notionMocks.updateNotionPage.mockResolvedValueOnce({
+      id: "notion-page-2",
+      object: "page",
+      title: "更新後の議事録",
+      url: "https://www.notion.so/notion-page-2",
+      lastEditedTime: "2026-03-24T01:00:00.000Z",
+      raw: {},
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: {
+        ...config,
+        workspaceDir,
+        notionApiToken: "secret_test",
+      },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_notion_page",
+          pageId: "notion-page-2",
+          title: "更新後の議事録",
+          summary: "会議後の補足です。",
+          sections: [
+            {
+              heading: "次のアクション",
+              bullets: ["担当を確認する"],
+            },
+          ],
+          appendMode: "append",
+          reasonSummary: "直前の Notion ページに追記する依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-update",
+        messageTs: "msg-notion-update-1",
+        userId: "U1",
+        text: "そのページに追記して",
+      },
+      now: new Date("2026-03-24T01:02:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(notionMocks.updateNotionPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageId: "notion-page-2",
+        title: "更新後の議事録",
+        summary: "会議後の補足です。",
+        sections: [
+          {
+            heading: "次のアクション",
+            bullets: ["担当を確認する"],
+          },
+        ],
+      }),
+      expect.objectContaining({
+        NOTION_API_TOKEN: "secret_test",
+      }),
+    );
+    expect(result.committed[0]?.summary).toContain("Notion page updated:");
+    expect(result.committed[0]?.summary).toContain("<https://www.notion.so/notion-page-2|更新後の議事録>");
+  });
+
+  it("archives a Notion page for a delete request", async () => {
+    notionMocks.archiveNotionPage.mockResolvedValueOnce({
+      id: "notion-page-3",
+      object: "page",
+      title: "削除対象ページ",
+      url: "https://www.notion.so/notion-page-3",
+      inTrash: true,
+      raw: {},
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: {
+        ...config,
+        workspaceDir,
+        notionApiToken: "secret_test",
+      },
+      repositories,
+      proposals: [
+        {
+          commandType: "archive_notion_page",
+          pageId: "notion-page-3",
+          reasonSummary: "不要になった Notion ページを削除したい依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-archive",
+        messageTs: "msg-notion-archive-1",
+        userId: "U1",
+        text: "そのページを削除して",
+      },
+      now: new Date("2026-03-24T01:03:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(notionMocks.archiveNotionPage).toHaveBeenCalledWith(
+      "notion-page-3",
+      expect.objectContaining({
+        NOTION_API_TOKEN: "secret_test",
+      }),
+    );
+    expect(result.committed[0]?.summary).toContain("Notion page archived:");
+    expect(result.committed[0]?.summary).toContain("<https://www.notion.so/notion-page-3|削除対象ページ>");
   });
 });

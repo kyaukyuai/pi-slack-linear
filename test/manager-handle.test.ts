@@ -47,7 +47,9 @@ const webResearchMocks = vi.hoisted(() => ({
 }));
 
 const notionMocks = vi.hoisted(() => ({
+  archiveNotionPage: vi.fn(),
   createNotionAgendaPage: vi.fn(),
+  updateNotionPage: vi.fn(),
 }));
 
 const piSessionMocks = vi.hoisted(() => ({
@@ -91,7 +93,9 @@ vi.mock("../src/lib/notion.js", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/notion.js")>("../src/lib/notion.js");
   return {
     ...actual,
+    archiveNotionPage: notionMocks.archiveNotionPage,
     createNotionAgendaPage: notionMocks.createNotionAgendaPage,
+    updateNotionPage: notionMocks.updateNotionPage,
   };
 });
 
@@ -518,12 +522,27 @@ describe("handleManagerMessage clarification flow", () => {
       title: "Example",
       snippet: "Example snippet",
     });
+    notionMocks.archiveNotionPage.mockReset().mockResolvedValue({
+      id: "notion-page-1",
+      object: "page",
+      title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
+      url: "https://www.notion.so/page-1",
+      inTrash: true,
+      raw: {},
+    });
     notionMocks.createNotionAgendaPage.mockReset().mockResolvedValue({
       id: "notion-page-1",
       object: "page",
       title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
       url: "https://www.notion.so/page-1",
       createdTime: "2026-03-24T00:00:00.000Z",
+    });
+    notionMocks.updateNotionPage.mockReset().mockResolvedValue({
+      id: "notion-page-1",
+      object: "page",
+      title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
+      url: "https://www.notion.so/page-1",
+      raw: {},
     });
     piSessionMocks.runManagerAgentTurn.mockReset().mockImplementation(createDefaultTestManagerAgentTurn({
       config: { ...config, workspaceDir },
@@ -4275,6 +4294,93 @@ describe("handleManagerMessage clarification flow", () => {
         title: "2026.03.26 | AIクローンプラットフォーム Vol.1",
         parentPageId: "parent-page-1",
       }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps a quoted linked system log for Notion page updates when the agent reply has no link", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "その Notion ページに補足を追記しました。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "update_notion_page",
+          pageId: "notion-page-1",
+          summary: "プロジェクトの進め方を追記しました。",
+          appendMode: "append",
+          reasonSummary: "直前の Notion ページを更新する依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "create_work",
+        confidence: 0.9,
+        summary: "Notion ページ更新の依頼です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-update",
+        messageTs: "msg-notion-update-1",
+        userId: "U1",
+        text: "そのページに追記して",
+      },
+      new Date("2026-03-24T00:24:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("Notion ページに補足を追記しました。");
+    expect(result.reply).toContain("> system log: Notion page updated: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
+    expect(notionMocks.updateNotionPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageId: "notion-page-1",
+        summary: "プロジェクトの進め方を追記しました。",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps a quoted linked system log for Notion page archive when the agent reply has no link", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "その Notion ページをアーカイブしました。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "archive_notion_page",
+          pageId: "notion-page-1",
+          reasonSummary: "不要になった Notion ページを削除する依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "create_work",
+        confidence: 0.9,
+        summary: "Notion ページ archive の依頼です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-archive",
+        messageTs: "msg-notion-archive-1",
+        userId: "U1",
+        text: "そのページを削除して",
+      },
+      new Date("2026-03-24T00:25:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("Notion ページをアーカイブしました。");
+    expect(result.reply).toContain("> system log: Notion page archived: <https://www.notion.so/page-1|2026.03.26 | AIクローンプラットフォーム Vol.1>");
+    expect(notionMocks.archiveNotionPage).toHaveBeenCalledWith(
+      "notion-page-1",
       expect.any(Object),
     );
   });
