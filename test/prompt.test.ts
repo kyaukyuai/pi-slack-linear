@@ -137,6 +137,8 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Do not propose full content replacement or arbitrary block edits for Notion pages in this scope.");
     expect(prompt).toContain("For Notion page delete requests, use propose_archive_notion_page.");
     expect(prompt).toContain("When the last query context contains Notion page referenceItems and the user says そのページを更新して");
+    expect(prompt).toContain("When the thread has a current active Notion page target and the user asks for a generic Notion follow-up");
+    expect(prompt).toContain("If the thread has a current active Notion page target, prefer it over stale historical page IDs");
     expect(prompt).toContain("Do not apply Notion page update or archive proposals to notion-database reference items.");
     expect(prompt).toContain("For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.");
     expect(prompt).toContain("When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.");
@@ -472,6 +474,29 @@ describe("prompt helpers", () => {
 
     expect(prompt).toContain("Use the stored referenceItems from the last query context before starting a broader new search.");
     expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
+  });
+
+  it("includes the current thread Notion page target when available", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.680",
+      userId: "U123",
+      text: "Notion に決定事項を追記しておいて",
+      currentDate: "2026-03-25",
+      currentThreadNotionPageTarget: {
+        pageId: "notion-page-current",
+        title: "2026.03.25 | AIクローンプラットフォーム",
+        url: "https://www.notion.so/notion-page-current",
+        recordedAt: "2026-03-25T03:01:00.000Z",
+      },
+    });
+
+    expect(prompt).toContain("Current thread Notion page target:");
+    expect(prompt).toContain("- pageId: notion-page-current");
+    expect(prompt).toContain("- title: 2026.03.25 | AIクローンプラットフォーム");
+    expect(prompt).toContain("- url: https://www.notion.so/notion-page-current");
   });
 
   it("adds database-only guidance for Notion database requests", () => {

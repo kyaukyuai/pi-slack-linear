@@ -52,6 +52,7 @@ import { getLinearIssue } from "./linear.js";
 import { createLinearCustomTools } from "./linear-tools.js";
 import type { PendingManagerClarification } from "./pending-manager-clarification.js";
 import type { ThreadQueryContinuation } from "./query-continuation.js";
+import type { ThreadNotionPageTarget } from "./thread-notion-page-target.js";
 import {
   extractIntentReport,
   extractManagerCommandProposals,
@@ -92,6 +93,7 @@ export interface ManagerAgentInput {
   text: string;
   currentDate: string;
   lastQueryContext?: ThreadQueryContinuation;
+  currentThreadNotionPageTarget?: ThreadNotionPageTarget;
   combinedRequestText?: string;
   pendingClarification?: PendingManagerClarification;
   workspaceAgents?: string;
@@ -394,6 +396,8 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "If the requested Notion section heading may not exist, prefer a rejectable replace_section proposal with the explicit heading instead of silently appending or creating a new heading.",
     "For Notion page delete requests, use propose_archive_notion_page. In this scope, delete means archive or move to trash, not permanent deletion.",
     "When the last query context contains Notion page referenceItems and the user says そのページを更新して, このページに追記して, そのページを削除して, or そのページをアーカイブして, use that stored page as the target and make the pageId explicit in the proposal.",
+    "When the thread has a current active Notion page target and the user asks for a generic Notion follow-up like Notion に追記して, 決定事項を反映して, そのページを更新して, or そのページを削除して without a different explicit page reference, use that current thread page as the default target.",
+    "If the thread has a current active Notion page target, prefer it over stale historical page IDs from the same thread unless the user explicitly points to another page.",
     "Do not apply Notion page update or archive proposals to notion-database reference items. Database row mutation is out of scope.",
     "For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.",
     "When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.",
@@ -861,6 +865,14 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
         `- recordedAt: ${input.pendingClarification.recordedAt}`,
       ]
     : ["- (none)"];
+  const currentThreadNotionPageLines = input.currentThreadNotionPageTarget
+    ? [
+        `- pageId: ${input.currentThreadNotionPageTarget.pageId}`,
+        `- title: ${input.currentThreadNotionPageTarget.title ?? "(none)"}`,
+        `- url: ${input.currentThreadNotionPageTarget.url ?? "(none)"}`,
+        `- recordedAt: ${input.currentThreadNotionPageTarget.recordedAt}`,
+      ]
+    : ["- (none)"];
   const workspaceAgentsSection = input.workspaceAgents
     ? [
         "",
@@ -898,6 +910,9 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
     "",
     "Pending manager clarification context:",
     ...pendingClarificationLines,
+    "",
+    "Current thread Notion page target:",
+    ...currentThreadNotionPageLines,
     ...workspaceAgentsSection,
     ...workspaceMemorySection,
     ...agendaTemplateSection,

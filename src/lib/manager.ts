@@ -82,6 +82,12 @@ import {
   type ThreadQueryScope,
 } from "./query-continuation.js";
 import {
+  clearThreadNotionPageTarget,
+  extractSingleNotionPageTargetFromReferenceItems,
+  loadThreadNotionPageTarget,
+  saveThreadNotionPageTarget,
+} from "./thread-notion-page-target.js";
+import {
   clearPendingManagerClarification,
   isPendingManagerClarificationContinuation,
   isPendingManagerClarificationStatusQuestion,
@@ -577,6 +583,62 @@ async function persistQueryContinuationForAction(args: {
 
   if (args.action === "mutation") {
     await clearThreadQueryContinuation(args.paths);
+  }
+}
+
+async function persistThreadNotionPageTargetForQuery(args: {
+  paths: ReturnType<typeof buildThreadPaths>;
+  snapshot?: CompleteThreadQueryContinuationSnapshotInput;
+  now: Date;
+}): Promise<void> {
+  const target = extractSingleNotionPageTargetFromReferenceItems(
+    args.snapshot?.referenceItems,
+    args.now.toISOString(),
+  );
+  if (target) {
+    await saveThreadNotionPageTarget(args.paths, target);
+  }
+}
+
+async function applyCommittedThreadNotionPageTarget(args: {
+  paths: ReturnType<typeof buildThreadPaths>;
+  committed: Array<{
+    notionPageTargetEffect?: {
+      action: "set-active" | "clear";
+      pageId: string;
+      title?: string;
+      url?: string | null;
+    };
+  }>;
+  now: Date;
+}): Promise<void> {
+  let currentTarget = await loadThreadNotionPageTarget(args.paths).catch(() => undefined);
+
+  for (const entry of args.committed) {
+    const effect = entry.notionPageTargetEffect;
+    if (!effect) {
+      continue;
+    }
+
+    if (effect.action === "clear") {
+      if (currentTarget?.pageId === effect.pageId) {
+        currentTarget = undefined;
+      }
+      continue;
+    }
+
+    currentTarget = {
+      pageId: effect.pageId,
+      title: effect.title,
+      url: effect.url,
+      recordedAt: args.now.toISOString(),
+    };
+  }
+
+  if (currentTarget) {
+    await saveThreadNotionPageTarget(args.paths, currentTarget);
+  } else {
+    await clearThreadNotionPageTarget(args.paths);
   }
 }
 
@@ -1153,6 +1215,7 @@ export async function handleManagerMessage(
       ? extractExplicitRunTaskIssueIdentifier(message.text)
       : undefined;
     const lastQueryContext = await loadThreadQueryContinuation(paths).catch(() => undefined);
+    const currentThreadNotionPageTarget = await loadThreadNotionPageTarget(paths).catch(() => undefined);
     const pendingManagerClarification = await loadPendingManagerClarification(paths, now).catch(() => undefined);
     const threadPlanningContext = await getThreadPlanningContext(repositories.workgraph, threadKey).catch(() => undefined);
     const agentTurn = await runManagerAgentTurn(config, paths, {
@@ -1164,6 +1227,7 @@ export async function handleManagerMessage(
       text: message.text,
       currentDate: currentDateInJst(now),
       lastQueryContext,
+      currentThreadNotionPageTarget,
       pendingClarification: pendingManagerClarification,
     });
 
@@ -1220,6 +1284,11 @@ export async function handleManagerMessage(
           now,
           snapshot: completeQuerySnapshot,
         });
+        await persistThreadNotionPageTargetForQuery({
+          paths,
+          snapshot: completeQuerySnapshot,
+          now,
+        });
       } else {
         await clearThreadQueryContinuation(paths);
       }
@@ -1242,6 +1311,11 @@ export async function handleManagerMessage(
         paths,
         action: "mutation",
         messageText: message.text,
+        now,
+      });
+      await applyCommittedThreadNotionPageTarget({
+        paths,
+        committed: commitResult.committed,
         now,
       });
     }

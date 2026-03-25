@@ -34,6 +34,11 @@ import {
   schedulerJobSchema,
   type SchedulerJob,
 } from "./system-workspace.js";
+import {
+  hasExplicitNotionPageReference,
+  loadThreadNotionPageTarget,
+} from "./thread-notion-page-target.js";
+import { buildThreadPaths } from "./thread-workspace.js";
 import type {
   FollowupLedgerEntry,
   ManagerPolicy,
@@ -434,6 +439,12 @@ export interface ManagerCommittedCommand {
   commandType: ManagerCommandProposal["commandType"];
   issueIds: string[];
   summary: string;
+  notionPageTargetEffect?: {
+    action: "set-active" | "clear";
+    pageId: string;
+    title?: string;
+    url?: string | null;
+  };
 }
 
 export interface ManagerCommitResult {
@@ -496,6 +507,23 @@ function upsertManagedNotionPage(
   nextPages.push(entry);
   nextPages.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   return nextPages;
+}
+
+async function resolveThreadScopedNotionPageId(
+  args: CommitManagerCommandArgs,
+  proposedPageId: string,
+): Promise<string> {
+  if (hasExplicitNotionPageReference(args.message.text)) {
+    return proposedPageId;
+  }
+
+  const paths = buildThreadPaths(args.config.workspaceDir, args.message.channelId, args.message.rootThreadTs);
+  const currentTarget = await loadThreadNotionPageTarget(paths).catch(() => undefined);
+  if (!currentTarget?.pageId || currentTarget.pageId === proposedPageId) {
+    return proposedPageId;
+  }
+
+  return currentTarget.pageId;
 }
 
 function normalizeTitle(title: string | undefined): string {
@@ -1924,6 +1952,12 @@ async function commitCreateNotionAgendaProposal(
     commandType: proposal.commandType,
     issueIds: [],
     summary: `Notion agenda created: ${linkedTitle}`,
+    notionPageTargetEffect: {
+      action: "set-active",
+      pageId: page.id,
+      title: page.title ?? proposal.title,
+      url: page.url ?? undefined,
+    },
   };
 }
 
@@ -1947,7 +1981,8 @@ async function commitUpdateNotionPageProposal(
   }
 
   const managedPages = await args.repositories.notionPages.load();
-  if (mode === "replace_section" && !managedPages.some((page) => page.pageId === proposal.pageId)) {
+  const resolvedPageId = await resolveThreadScopedNotionPageId(args, proposal.pageId);
+  if (mode === "replace_section" && !managedPages.some((page) => page.pageId === resolvedPageId)) {
     return {
       proposal,
       reason: "replace_section で更新できるのはコギト管理ページのみです。対象 page は notion-pages.json に登録されていません。",
@@ -1958,7 +1993,7 @@ async function commitUpdateNotionPageProposal(
   try {
     page = await updateNotionPage(
       {
-        pageId: proposal.pageId,
+        pageId: resolvedPageId,
         mode,
         title: proposal.title,
         summary: proposal.summary,
@@ -1971,6 +2006,12 @@ async function commitUpdateNotionPageProposal(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.toLowerCase().includes("archived")) {
+      return {
+        proposal,
+        reason: "対象の Notion page は archive 済みです。この thread で最新の Notion page を使う場合は、そのページを明示するか同じ依頼をもう一度送ってください。",
+      };
+    }
     if (mode === "replace_section" && message.toLowerCase().includes("notion section")) {
       return {
         proposal,
@@ -1999,6 +2040,12 @@ async function commitUpdateNotionPageProposal(
     summary: mode === "replace_section"
       ? `Notion section updated: ${linkedTitle}`
       : `Notion page updated: ${linkedTitle}`,
+    notionPageTargetEffect: {
+      action: "set-active",
+      pageId: page.id,
+      title: page.title ?? proposal.title ?? proposal.pageId,
+      url: page.url ?? undefined,
+    },
   };
 }
 
@@ -2013,8 +2060,9 @@ async function commitArchiveNotionPageProposal(
     };
   }
 
+  const resolvedPageId = await resolveThreadScopedNotionPageId(args, proposal.pageId);
   const page = await archiveNotionPage(
-    proposal.pageId,
+    resolvedPageId,
     buildNotionEnv(args.config),
   );
 
@@ -2026,6 +2074,12 @@ async function commitArchiveNotionPageProposal(
     commandType: proposal.commandType,
     issueIds: [],
     summary: `Notion page archived: ${linkedTitle}`,
+    notionPageTargetEffect: {
+      action: "clear",
+      pageId: page.id,
+      title: page.title ?? proposal.pageId,
+      url: page.url ?? undefined,
+    },
   };
 }
 

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { commitManagerCommandProposals } from "../src/lib/manager-command-commit.js";
 import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
+import { saveThreadNotionPageTarget } from "../src/lib/thread-notion-page-target.js";
+import { buildThreadPaths } from "../src/lib/thread-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 import { recordPlanningOutcome } from "../src/state/workgraph/recorder.js";
 
@@ -1370,6 +1372,76 @@ describe("manager command commit", () => {
     );
     expect(result.committed[0]?.summary).toContain("Notion page updated:");
     expect(result.committed[0]?.summary).toContain("<https://www.notion.so/notion-page-2|更新後の議事録>");
+  });
+
+  it("prefers the current active thread Notion page target over a stale page id for generic follow-ups", async () => {
+    const threadPaths = buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-notion-current-target");
+    await saveThreadNotionPageTarget(threadPaths, {
+      pageId: "notion-page-current",
+      title: "2026.03.25 | AIクローンプラットフォーム",
+      url: "https://www.notion.so/notion-page-current",
+      recordedAt: "2026-03-25T03:00:00.000Z",
+    });
+
+    notionMocks.updateNotionPage.mockResolvedValueOnce({
+      id: "notion-page-current",
+      object: "page",
+      title: "2026.03.25 | AIクローンプラットフォーム",
+      url: "https://www.notion.so/notion-page-current",
+      lastEditedTime: "2026-03-25T03:01:00.000Z",
+      raw: {},
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: {
+        ...config,
+        workspaceDir,
+        notionApiToken: "secret_test",
+      },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_notion_page",
+          pageId: "notion-page-archived-old",
+          mode: "append",
+          summary: "決定事項を追記しました。",
+          reasonSummary: "同じ thread の Notion ページに決定事項を追記する依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-notion-current-target",
+        messageTs: "msg-notion-current-target-1",
+        userId: "U1",
+        text: "Notion に決定事項を追記しておいて",
+      },
+      now: new Date("2026-03-25T03:01:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(notionMocks.updateNotionPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageId: "notion-page-current",
+        mode: "append",
+        summary: "決定事項を追記しました。",
+      }),
+      expect.objectContaining({
+        NOTION_API_TOKEN: "secret_test",
+      }),
+    );
+    expect(result.committed[0]?.notionPageTargetEffect).toEqual({
+      action: "set-active",
+      pageId: "notion-page-current",
+      title: "2026.03.25 | AIクローンプラットフォーム",
+      url: "https://www.notion.so/notion-page-current",
+    });
   });
 
   it("registers created Notion agenda pages as managed pages", async () => {

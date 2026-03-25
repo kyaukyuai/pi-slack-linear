@@ -13,6 +13,7 @@ import {
 } from "../src/lib/manager.js";
 import { loadPendingManagerClarification } from "../src/lib/pending-manager-clarification.js";
 import { loadThreadQueryContinuation } from "../src/lib/query-continuation.js";
+import { loadThreadNotionPageTarget } from "../src/lib/thread-notion-page-target.js";
 import { ensureManagerStateFiles, loadFollowupsLedger } from "../src/lib/manager-state.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { buildThreadPaths } from "../src/lib/thread-workspace.js";
@@ -4613,6 +4614,179 @@ describe("handleManagerMessage clarification flow", () => {
       "notion-page-1",
       expect.any(Object),
     );
+  });
+
+  it("keeps the latest active Notion page target for generic follow-ups in the same thread", async () => {
+    notionMocks.createNotionAgendaPage
+      .mockReset()
+      .mockResolvedValueOnce({
+        id: "notion-page-old",
+        object: "page",
+        title: "2026.03.25 | AIクローンプラットフォーム Vol.1",
+        url: "https://www.notion.so/page-old",
+        createdTime: "2026-03-25T02:55:00.000Z",
+      })
+      .mockResolvedValueOnce({
+        id: "notion-page-new",
+        object: "page",
+        title: "2026.03.25 | AIクローンプラットフォーム Vol.2",
+        url: "https://www.notion.so/page-new",
+        createdTime: "2026-03-25T03:00:00.000Z",
+      });
+    notionMocks.archiveNotionPage.mockReset().mockResolvedValueOnce({
+      id: "notion-page-old",
+      object: "page",
+      title: "2026.03.25 | AIクローンプラットフォーム Vol.1",
+      url: "https://www.notion.so/page-old",
+      inTrash: true,
+      raw: {},
+    });
+    notionMocks.updateNotionPage.mockReset().mockResolvedValueOnce({
+      id: "notion-page-new",
+      object: "page",
+      title: "2026.03.25 | AIクローンプラットフォーム Vol.2",
+      url: "https://www.notion.so/page-new",
+      raw: {},
+    });
+
+    piSessionMocks.runManagerAgentTurn
+      .mockResolvedValueOnce({
+        reply: "最初の Notion アジェンダを作成します。",
+        toolCalls: [],
+        proposals: [
+          {
+            commandType: "create_notion_agenda",
+            title: "2026.03.25 | AIクローンプラットフォーム Vol.1",
+            reasonSummary: "最初のアジェンダを作成します。",
+          },
+        ],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "create_work",
+          confidence: 0.9,
+          summary: "最初のアジェンダ作成です。",
+        },
+      })
+      .mockResolvedValueOnce({
+        reply: "古い Notion ページをアーカイブします。",
+        toolCalls: [],
+        proposals: [
+          {
+            commandType: "archive_notion_page",
+            pageId: "notion-page-old",
+            reasonSummary: "古い Notion ページを整理します。",
+          },
+        ],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "create_work",
+          confidence: 0.9,
+          summary: "古いページのアーカイブです。",
+        },
+      })
+      .mockResolvedValueOnce({
+        reply: "新しい Notion アジェンダを作成します。",
+        toolCalls: [],
+        proposals: [
+          {
+            commandType: "create_notion_agenda",
+            title: "2026.03.25 | AIクローンプラットフォーム Vol.2",
+            reasonSummary: "新しいアジェンダを作成します。",
+          },
+        ],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "create_work",
+          confidence: 0.9,
+          summary: "新しいアジェンダ作成です。",
+        },
+      })
+      .mockResolvedValueOnce({
+        reply: "決定事項を追記します。",
+        toolCalls: [],
+        proposals: [
+          {
+            commandType: "update_notion_page",
+            pageId: "notion-page-old",
+            mode: "append",
+            summary: "決定事項を追記しました。",
+            reasonSummary: "同じ thread の Notion ページに決定事項を追記します。",
+          },
+        ],
+        invalidProposalCount: 0,
+        intentReport: {
+          intent: "create_work",
+          confidence: 0.9,
+          summary: "Notion ページ更新の依頼です。",
+        },
+      });
+
+    const thread = {
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "thread-notion-active-target",
+      userId: "U1",
+    };
+
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        ...thread,
+        messageTs: "msg-notion-target-1",
+        text: "Notion にアジェンダを作って",
+      },
+      new Date("2026-03-25T02:55:00.000Z"),
+    );
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        ...thread,
+        messageTs: "msg-notion-target-2",
+        text: "そのページを削除して",
+      },
+      new Date("2026-03-25T02:58:00.000Z"),
+    );
+    await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        ...thread,
+        messageTs: "msg-notion-target-3",
+        text: "既存ページをアーカイブして新規作成して",
+      },
+      new Date("2026-03-25T03:00:00.000Z"),
+    );
+
+    const currentTarget = await loadThreadNotionPageTarget(
+      buildThreadPaths(workspaceDir, thread.channelId, thread.rootThreadTs),
+    );
+    expect(currentTarget).toMatchObject({
+      pageId: "notion-page-new",
+      title: "2026.03.25 | AIクローンプラットフォーム Vol.2",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        ...thread,
+        messageTs: "msg-notion-target-4",
+        text: "Notion に決定事項を追記しておいて",
+      },
+      new Date("2026-03-25T03:01:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(notionMocks.updateNotionPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pageId: "notion-page-new",
+        mode: "append",
+        summary: "決定事項を追記しました。",
+      }),
+      expect.any(Object),
+    );
+    expect(result.reply).toContain("> system log: Notion page updated: <https://www.notion.so/page-new|2026.03.25 | AIクローンプラットフォーム Vol.2>");
   });
 
   it("keeps a quoted system log with a link when a custom scheduler job is run immediately", async () => {
