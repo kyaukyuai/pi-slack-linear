@@ -123,6 +123,24 @@ export interface ManagerAgentTurnResult {
   taskExecutionDecision?: TaskExecutionDecisionReport;
 }
 
+function hasExplicitNotionUrl(text: string | undefined): boolean {
+  return /https?:\/\/www\.notion\.so\/\S+/i.test(text ?? "");
+}
+
+function hasStoredNotionPageReference(lastQueryContext?: ThreadQueryContinuation): boolean {
+  return lastQueryContext?.referenceItems?.some((item) => item.source === "notion") ?? false;
+}
+
+function shouldTreatAsNotionRecheck(messageText: string, lastQueryContext?: ThreadQueryContinuation): boolean {
+  if (hasExplicitNotionUrl(messageText)) {
+    return true;
+  }
+  if (lastQueryContext?.kind !== "reference-material" || !hasStoredNotionPageReference(lastQueryContext)) {
+    return false;
+  }
+  return /(?:詳しく|詳細|項目|内容|範囲|確認|見て|読んで|教えて|保存|メモリ|memory)/i.test(messageText);
+}
+
 export {
   buildManagerReplyPrompt,
   parseManagerReplyReply,
@@ -375,6 +393,8 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.",
     "When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.",
     "A notion_get_page_content page-lines preview may show only the first visible lines. Do not misstate that as a retrieval limit if headings and multiple sections are already visible.",
+    "Do not use web_fetch_url as the primary read path for notion.so links when Notion tools are available. Prefer Notion page or database tools first.",
+    "If the user re-checks a Notion page or sends the same notion.so URL again, ignore stale earlier summaries about truncated content and re-read it with Notion tools.",
     "If the user explicitly says database or データベース, treat it as a database-only request unless they also ask for pages.",
     "A request like Notion の database を検索して is still a query. Do not downgrade it to casual conversation just because the keyword is missing.",
     "If the user asks to browse or search Notion databases without a keyword, use notion_list_databases before asking a follow-up question.",
@@ -717,6 +737,7 @@ function buildManagerReplyStyleHints(
   pendingClarification?: PendingManagerClarification,
 ): string[] {
   const normalized = messageText.trim();
+  const notionRecheck = shouldTreatAsNotionRecheck(normalized, lastQueryContext);
   const hints = [
     "Keep the public Slack reply to 1-3 short sentences by default.",
     "Do not use markdown headings, separator lines, warning icons, or emojis.",
@@ -743,6 +764,11 @@ function buildManagerReplyStyleHints(
   if (lastQueryContext?.kind === "reference-material" && /(?:詳しく|詳細|項目|内容|範囲|確認|見て|読んで|教えて|更新|追記|アーカイブ|削除)/.test(normalized)) {
     hints.push("Treat this as a follow-up on the previous reference-material reply unless the user clearly changes the topic.");
     hints.push("Use the stored referenceItems from the last query context before starting a broader new search.");
+  }
+
+  if (notionRecheck) {
+    hints.push("For notion.so links or same-page Notion re-checks, prefer Notion page/database tools over web_fetch_url.");
+    hints.push("If an older reply summary says the Notion content was limited or only a few lines were visible, treat that summary as stale and re-read the current page with Notion tools.");
   }
 
   if (/(?:notion|ノーション).*(?:database|データベース)|(?:database|データベース).*(?:notion|ノーション)/i.test(normalized)) {
@@ -791,6 +817,7 @@ function shouldIncludeAgendaTemplateForManagerSystem(input: ManagerSystemInput):
 }
 
 export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
+  const notionRecheck = shouldTreatAsNotionRecheck(input.text, input.lastQueryContext);
   const styleHints = buildManagerReplyStyleHints(input.text, input.lastQueryContext, input.pendingClarification)
     .map((hint) => `- ${hint}`);
   const lastQueryContextLines = input.lastQueryContext
@@ -808,6 +835,9 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
           : "(none)"}`,
         `- previousUserMessage: ${input.lastQueryContext.userMessage || "(none)"}`,
         `- previousReplySummary: ${input.lastQueryContext.replySummary || "(none)"}`,
+        ...(notionRecheck
+          ? ["- previousReplySummaryHandling: ignore stale prior summary for this Notion re-check; use Notion tools as the source of truth."]
+          : []),
         `- recordedAt: ${input.lastQueryContext.recordedAt}`,
       ]
     : ["- (none)"];

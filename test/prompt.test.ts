@@ -136,6 +136,8 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.");
     expect(prompt).toContain("When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.");
     expect(prompt).toContain("A notion_get_page_content page-lines preview may show only the first visible lines. Do not misstate that as a retrieval limit if headings and multiple sections are already visible.");
+    expect(prompt).toContain("Do not use web_fetch_url as the primary read path for notion.so links when Notion tools are available.");
+    expect(prompt).toContain("If the user re-checks a Notion page or sends the same notion.so URL again, ignore stale earlier summaries about truncated content and re-read it with Notion tools.");
     expect(prompt).toContain("If the user explicitly says database or データベース, treat it as a database-only request unless they also ask for pages.");
     expect(prompt).toContain("A request like Notion の database を検索して is still a query. Do not downgrade it to casual conversation just because the keyword is missing.");
     expect(prompt).toContain("If the user asks to browse or search Notion databases without a keyword, use notion_list_databases before asking a follow-up question.");
@@ -363,6 +365,41 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Treat this as a follow-up on the previous reference-material reply unless the user clearly changes the topic.");
     expect(prompt).toContain("Use the stored referenceItems from the last query context before starting a broader new search.");
     expect(prompt).toContain("- referenceItems: notion / notion-page-1 / 2026.03.10 | AIクローンプラットフォーム 初回会議共有資料 / https://www.notion.so/notion-page-1");
+  });
+
+  it("ignores stale reply summaries when re-checking a Notion URL", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.679",
+      userId: "U123",
+      text: "https://www.notion.so/notion-page-1 を確認して",
+      currentDate: "2026-03-25",
+      lastQueryContext: {
+        kind: "reference-material",
+        scope: "team",
+        userMessage: "Notion を確認して",
+        replySummary: "ページ全文取得が制限されており取得できたのは5行のみと説明",
+        issueIds: [],
+        shownIssueIds: [],
+        remainingIssueIds: [],
+        totalItemCount: 1,
+        referenceItems: [
+          {
+            id: "notion-page-1",
+            title: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+            url: "https://www.notion.so/notion-page-1",
+            source: "notion",
+          },
+        ],
+        recordedAt: "2026-03-25T01:45:00.000Z",
+      },
+    });
+
+    expect(prompt).toContain("For notion.so links or same-page Notion re-checks, prefer Notion page/database tools over web_fetch_url.");
+    expect(prompt).toContain("If an older reply summary says the Notion content was limited or only a few lines were visible, treat that summary as stale and re-read the current page with Notion tools.");
+    expect(prompt).toContain("- previousReplySummaryHandling: ignore stale prior summary for this Notion re-check; use Notion tools as the source of truth.");
   });
 
   it("keeps Notion page update follow-ups anchored to stored page reference items", () => {
