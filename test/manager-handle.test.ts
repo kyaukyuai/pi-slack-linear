@@ -7,6 +7,7 @@ import {
   buildManagerReview,
   classifyManagerQuery,
   classifyManagerSignal,
+  fingerprintText,
   formatIssueSelectionReply,
   handleManagerMessage,
 } from "../src/lib/manager.js";
@@ -233,7 +234,7 @@ function defaultTaskPlan(input: { combinedRequest: string }): Record<string, unk
   };
 }
 
-function defaultMessageRouter(input: { messageText: string; threadContext?: { pendingClarification?: boolean } }) {
+function defaultMessageRouter(input: { messageText: string; threadContext?: { pendingClarification?: boolean; intakeStatus?: string; parentIssueId?: string; childIssueIds?: string[] } }) {
   const text = input.messageText.trim();
   if (/^(?:おはよう|こんにちは|こんばんは|お疲れさま|おつかれさま)(?:ございます)?[。！!？?]*$/.test(text)) {
     return {
@@ -282,6 +283,14 @@ function defaultMessageRouter(input: { messageText: string; threadContext?: { pe
   }
   if (signal === "request") {
     return { action: "create_work", confidence: 0.9, reasoningSummary: "新規依頼です。" };
+  }
+  if (
+    input.threadContext?.intakeStatus === "created"
+    && !input.threadContext.parentIssueId
+    && (input.threadContext.childIssueIds?.length ?? 0) === 1
+    && /(ではなく|そうではなく|意図としては|つまり|言い換えると|そういう意味です|という意図です)/.test(text)
+  ) {
+    return { action: "create_work", confidence: 0.9, reasoningSummary: "同じ thread の訂正です。" };
   }
   return {
     action: "conversation",
@@ -1492,6 +1501,158 @@ describe("handleManagerMessage clarification flow", () => {
       expect.any(Object),
     );
     expect(second.reply).toContain("task として起票します。");
+  });
+
+  it("corrects the latest single-issue intake in place instead of creating a new issue", async () => {
+    const repositories = createFileBackedManagerRepositories(systemPaths);
+    await recordPlanningOutcome(repositories.workgraph, {
+      occurredAt: "2026-03-25T00:04:00.000Z",
+      source: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-intake-correction",
+        messageTs: "msg-create-1",
+      },
+      messageFingerprint: "金澤さんの ChatGPT プロジェクトの招待依頼のタスクを作成して",
+      childIssues: [
+        {
+          issueId: "AIC-60",
+          title: "金澤さんをChatGPTプロジェクトに招待する",
+          kind: "execution",
+        },
+      ],
+      planningReason: "single-issue",
+      lastResolvedIssueId: "AIC-60",
+      originalText: "金澤さんの ChatGPT プロジェクトの招待依頼のタスクを作成して",
+    });
+
+    piSessionMocks.runMessageRouterTurn.mockResolvedValueOnce({
+      action: "create_work",
+      confidence: 0.95,
+      reasoningSummary: "同じ依頼 thread の訂正です。",
+    });
+    piSessionMocks.runTaskPlanningTurn.mockResolvedValueOnce({
+      action: "update_existing",
+      targetIssueId: "AIC-60",
+      title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+      description: "unused by code-side regeneration",
+    });
+    linearMocks.getLinearIssue.mockResolvedValueOnce({
+      id: "issue-60",
+      identifier: "AIC-60",
+      title: "金澤さんをChatGPTプロジェクトに招待する",
+      url: "https://linear.app/kyaukyuai/issue/AIC-60",
+      state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+      relations: [],
+      inverseRelations: [],
+    });
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-60",
+      identifier: "AIC-60",
+      title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+      url: "https://linear.app/kyaukyuai/issue/AIC-60",
+      state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-intake-correction",
+        messageTs: "msg-correction-1",
+        userId: "U1",
+        text: "金澤さんを招待するのではなく、金澤さんのプロジェクトに角井を招待してもらうタスクです。",
+      },
+      new Date("2026-03-25T01:05:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-60",
+        title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+        description: expect.stringContaining("訂正:"),
+      }),
+      expect.any(Object),
+    );
+    expect(result.reply).toContain("既存 issue を修正しました");
+
+    const projection = await repositories.workgraph.project();
+    expect(projection.threads["C0ALAMDRB9V:thread-intake-correction"]).toMatchObject({
+      lastResolvedIssueId: "AIC-60",
+      latestFocusIssueId: "AIC-60",
+      messageFingerprint: fingerprintText("金澤さんを招待するのではなく、金澤さんのプロジェクトに角井を招待してもらうタスクです。"),
+    });
+  });
+
+  it("clarifies instead of auto-correcting when the latest thread issue already has progress", async () => {
+    const repositories = createFileBackedManagerRepositories(systemPaths);
+    await recordPlanningOutcome(repositories.workgraph, {
+      occurredAt: "2026-03-25T00:04:00.000Z",
+      source: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-intake-correction-progressed",
+        messageTs: "msg-create-1",
+      },
+      messageFingerprint: "seed correction issue",
+      childIssues: [
+        {
+          issueId: "AIC-70",
+          title: "誤った task 名",
+          kind: "execution",
+        },
+      ],
+      planningReason: "single-issue",
+      lastResolvedIssueId: "AIC-70",
+      originalText: "seed correction issue",
+    });
+    await repositories.workgraph.append([
+      {
+        type: "issue.progressed",
+        occurredAt: "2026-03-25T00:05:00.000Z",
+        threadKey: "C0ALAMDRB9V:thread-intake-correction-progressed",
+        sourceChannelId: "C0ALAMDRB9V",
+        sourceThreadTs: "thread-intake-correction-progressed",
+        sourceMessageTs: "msg-progress-1",
+        issueId: "AIC-70",
+        textSnippet: "進捗です",
+      },
+    ]);
+
+    piSessionMocks.runMessageRouterTurn.mockImplementation(async () => ({
+      action: "create_work",
+      confidence: 0.95,
+      reasoningSummary: "同じ依頼 thread の訂正です。",
+    }));
+    piSessionMocks.runTaskPlanningTurn.mockImplementation(async () => ({
+      action: "update_existing",
+      targetIssueId: "AIC-70",
+      title: "正しい task 名",
+      description: "unused by code-side regeneration",
+    }));
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-intake-correction-progressed",
+        messageTs: "msg-correction-1",
+        userId: "U1",
+        text: "そうではなく、別の意図です。",
+      },
+      new Date("2026-03-25T01:06:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("対象 issue ID を明示してください");
+    expect(linearMocks.updateManagedLinearIssue).not.toHaveBeenCalledWith(
+      expect.objectContaining({ issueId: "AIC-70", title: "正しい task 名" }),
+      expect.anything(),
+    );
   });
 
   it("explains the pending clarification state when the user asks what is happening", async () => {

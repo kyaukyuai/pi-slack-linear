@@ -74,7 +74,14 @@ interface DefaultManagerAgentMockArgs {
   };
   route: (input: {
     messageText: string;
-    threadContext?: { pendingClarification?: boolean };
+    threadContext?: {
+      pendingClarification?: boolean;
+      intakeStatus?: string;
+      parentIssueId?: string;
+      childIssueIds?: string[];
+      latestFocusIssueId?: string;
+      lastResolvedIssueId?: string;
+    };
     lastQueryContext?: ThreadQueryContinuation;
   }) => RouterResult;
   buildReply: ReplyBuilder;
@@ -626,11 +633,20 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
     const effectiveText = pendingDecision?.decision === "continue_pending" && pendingClarification
       ? combinePendingManagerClarificationRequest(pendingClarification, input.text)
       : input.text;
+    const planningContext = await getThreadPlanningContext(
+      repositories.workgraph,
+      buildWorkgraphThreadKey(input.channelId, input.rootThreadTs),
+    ).catch(() => undefined);
 
     let router = args.route({
       messageText: effectiveText,
       threadContext: {
         pendingClarification: Boolean(pendingClarification),
+        intakeStatus: planningContext?.thread.intakeStatus,
+        parentIssueId: planningContext?.thread.parentIssueId,
+        childIssueIds: planningContext?.thread.childIssueIds ?? [],
+        latestFocusIssueId: planningContext?.thread.latestFocusIssueId,
+        lastResolvedIssueId: planningContext?.thread.lastResolvedIssueId,
       },
       lastQueryContext: input.lastQueryContext,
     });
@@ -715,10 +731,6 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
     }
 
     if (router.action === "run_task") {
-      const planningContext = await getThreadPlanningContext(
-        repositories.workgraph,
-        buildWorkgraphThreadKey(input.channelId, input.rootThreadTs),
-      ).catch(() => undefined);
       const explicitIssueId = (effectiveText.match(/\b[A-Z][A-Z0-9]+-\d+\b/) ?? [])[0];
       const targetIssueId = explicitIssueId
         ?? planningContext?.thread.latestFocusIssueId
@@ -968,10 +980,6 @@ export function createDefaultTestManagerAgentTurn(args: DefaultManagerAgentMockA
       };
     }
 
-    const planningContext = await getThreadPlanningContext(
-      repositories.workgraph,
-      buildWorkgraphThreadKey(input.channelId, input.rootThreadTs),
-    ).catch(() => undefined);
     const candidateIssues = unique([
       planningContext?.thread.latestFocusIssueId,
       planningContext?.thread.lastResolvedIssueId,

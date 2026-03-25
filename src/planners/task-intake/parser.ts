@@ -30,6 +30,17 @@ export function parseTaskPlanningReply(reply: string): TaskPlanningResult {
     };
   }
 
+  if (parsed.action === "update_existing") {
+    return {
+      action: "update_existing",
+      targetIssueId: parsed.targetIssueId,
+      title: parsed.title,
+      description: parsed.description,
+      dueDate: parsed.dueDate ?? undefined,
+      assigneeHint: parsed.assigneeHint ?? undefined,
+    };
+  }
+
   return {
     action: "create",
     planningReason: parsed.planningReason,

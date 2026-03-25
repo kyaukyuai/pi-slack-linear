@@ -41,6 +41,12 @@ export const workgraphEventSchema = z.discriminatedUnion("type", [
     originalText: z.string().optional(),
   }),
   workgraphBaseEventSchema.extend({
+    type: z.literal("intake.corrected_existing"),
+    messageFingerprint: z.string().min(1),
+    correctedIssueId: z.string().min(1),
+    originalText: z.string().optional(),
+  }),
+  workgraphBaseEventSchema.extend({
     type: z.literal("planning.parent_created"),
     issueId: z.string().min(1),
     title: z.string().min(1),

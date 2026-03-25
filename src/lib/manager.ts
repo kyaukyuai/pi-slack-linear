@@ -182,6 +182,7 @@ const LIST_HEADING_PATTERN = /^(?:タスク|todo|issue|イシュー)?\s*一覧$/
 const GREETING_PATTERN = /^(?:おはよう|こんにちは|こんばんは|お疲れさま|おつかれさま)(?:ございます)?[。！!？?]*$/i;
 const REFERENCE_QUERY_PATTERN = /((?:notion|ノーション|slack|スラック|ドキュメント|docs?|メモ).*(?:確認|見て|検索|探して|調べ|読んで)|(?:確認|見て|検索|探して|調べ|読んで).*(?:notion|ノーション|slack|スラック|ドキュメント|docs?|メモ))/i;
 const SCHEDULER_PATTERN = /(スケジュール|schedule|scheduler|cron|heartbeat|朝レビュー|夕方レビュー|週次レビュー|weekly review|morning review|evening review)/i;
+const INTAKE_CORRECTION_PATTERN = /(ではなく|そうではなく|意図としては|つまり|言い換えると|そういう意味です|という意図です)/;
 interface ParsedTaskSegment {
   raw: string;
   title: string;
@@ -1482,6 +1483,11 @@ async function handleManagerMessageLegacy(
         technicalFailure: error instanceof Error ? error.message : String(error),
       },
     };
+    const correctionLooksLikeCreateWork = !pendingClarification
+      && routerInput.threadContext?.intakeStatus === "created"
+      && !routerInput.threadContext?.parentIssueId
+      && (routerInput.threadContext?.childIssueIds.length ?? 0) === 1
+      && INTAKE_CORRECTION_PATTERN.test(message.text);
     if (signal === "query" && queryKind) {
       routerResult = {
         action: "query",
@@ -1490,6 +1496,8 @@ async function handleManagerMessageLegacy(
         confidence: 0,
         reasoningSummary: "LLM router fallback",
       };
+    } else if (correctionLooksLikeCreateWork) {
+      routerResult = { action: "create_work", confidence: 0, reasoningSummary: "LLM router correction fallback" };
     } else if (signal === "progress") {
       routerResult = { action: "update_progress", confidence: 0, reasoningSummary: "LLM router fallback" };
     } else if (signal === "completed") {

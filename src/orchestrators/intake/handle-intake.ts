@@ -3,6 +3,7 @@ import {
   addLinearRelation,
   createManagedLinearIssue,
   createManagedLinearIssueBatch,
+  getLinearIssue,
   searchLinearIssues,
   updateManagedLinearIssue,
   type LinearCommandEnv,
@@ -33,12 +34,16 @@ import {
 import {
   buildPlanningChildRecord,
   recordIntakeClarificationRequested,
+  recordIntakeCorrectedExisting,
   recordIntakeLinkedExisting,
   recordPlanningOutcome,
 } from "../../state/workgraph/recorder.js";
 import {
+  buildCorrectedSlackSourceText,
+  buildExecutionIssueDescription,
   compactLinearIssues,
   formatSourceComment,
+  formatCorrectedExistingIssueReply,
   formatExistingIssueReply,
   formatSlackContextSummary,
   formatRelatedIssuesSummary,
@@ -122,6 +127,15 @@ function pickReusableDuplicate(
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
+function isClosedLinearIssue(issue: LinearIssue): boolean {
+  const stateName = issue.state?.name?.trim().toLowerCase();
+  return issue.state?.type === "completed"
+    || issue.state?.type === "canceled"
+    || stateName === "done"
+    || stateName === "canceled"
+    || stateName === "cancelled";
+}
+
 export async function handleIntakeRequest({
   config,
   repositories,
@@ -166,6 +180,11 @@ export async function handleIntakeRequest({
     };
   }
 
+  const planningContext = await getThreadPlanningContext(
+    repositories.workgraph,
+    buildWorkgraphThreadKey(requestMessage.channelId, requestMessage.rootThreadTs),
+  ).catch(() => undefined);
+
   const planningPaths = buildThreadPaths(config.workspaceDir, requestMessage.channelId, requestMessage.rootThreadTs);
   const taskPlan = await runTaskPlanningTurn(
     config,
@@ -178,6 +197,14 @@ export async function handleIntakeRequest({
       combinedRequest: requestMessage.text,
       clarificationQuestion: pendingClarification?.clarificationQuestion,
       currentDate: helpers.toJstDate(now).toISOString().slice(0, 10),
+      threadContext: {
+        latestResolvedIssueId: planningContext?.latestResolvedIssue?.issueId ?? planningContext?.thread.lastResolvedIssueId,
+        latestResolvedIssueTitle: planningContext?.latestResolvedIssue?.title,
+        latestResolvedIssueLastStatus: planningContext?.latestResolvedIssue?.lastStatus,
+        threadIntakeStatus: planningContext?.thread.intakeStatus,
+        threadChildIssueIds: planningContext?.thread.childIssueIds,
+        threadParentIssueId: planningContext?.thread.parentIssueId,
+      },
       taskKey: `${requestMessage.channelId}-${requestMessage.rootThreadTs}-task-plan`,
     },
   );
@@ -197,6 +224,53 @@ export async function handleIntakeRequest({
     };
   }
 
+  if (taskPlan.action === "update_existing") {
+    const correctionTargetIsSafe = planningContext?.thread.intakeStatus === "created"
+      && !planningContext.thread.parentIssueId
+      && planningContext.thread.childIssueIds.length === 1
+      && planningContext.latestResolvedIssue?.issueId === taskPlan.targetIssueId
+      && !planningContext.latestResolvedIssue?.lastStatus;
+    if (!correctionTargetIsSafe) {
+      return {
+        handled: true,
+        reply: "訂正対象の既存 issue を 1 件に安全に確定できないため、対象 issue ID を明示してください。",
+      };
+    }
+    const targetIssue = await getLinearIssue(taskPlan.targetIssueId, env);
+    if (isClosedLinearIssue(targetIssue)) {
+      return {
+        handled: true,
+        reply: "訂正対象の issue はすでに完了または取消済みのため、自動では修正しません。必要なら新規 issue として作成するか、対象 issue ID を指定してください。",
+      };
+    }
+
+    const explicitOwner = taskPlan.assigneeHint
+      ? chooseOwner(taskPlan.assigneeHint, ownerMap)
+      : undefined;
+    const correctedIssue = await updateManagedLinearIssue(
+      {
+        issueId: taskPlan.targetIssueId,
+        title: taskPlan.title,
+        description: buildExecutionIssueDescription(buildCorrectedSlackSourceText(originalRequestText, message.text)),
+        dueDate: taskPlan.dueDate,
+        assignee: explicitOwner?.resolution === "mapped" ? explicitOwner.entry.linearAssignee : undefined,
+      },
+      env,
+    );
+    await addLinearComment(correctedIssue.identifier, formatSourceComment(requestMessage, "single-issue-correction"), env);
+    await recordIntakeCorrectedExisting(repositories.workgraph, {
+      occurredAt,
+      source: workgraphSource,
+      messageFingerprint: fingerprint,
+      correctedIssueId: correctedIssue.identifier,
+      originalText: requestMessage.text,
+    });
+    return {
+      handled: true,
+      reply: formatCorrectedExistingIssueReply(correctedIssue),
+    };
+  }
+
   const planningReason = taskPlan.planningReason;
   const planningTitle = taskPlan.parentTitle ?? taskPlan.children[0]?.title;
   if (!planningTitle) {
@@ -205,12 +279,7 @@ export async function handleIntakeRequest({
   const primaryTitle = planningTitle;
   const research = planningReason === "research-first" || taskPlan.children.some((child) => child.kind === "research");
   const globalDueDate = taskPlan.parentDueDate;
-  const threadPlanningContext = planningReason === "single-issue"
-    ? await getThreadPlanningContext(
-        repositories.workgraph,
-        buildWorkgraphThreadKey(requestMessage.channelId, requestMessage.rootThreadTs),
-      )
-    : undefined;
+  const threadPlanningContext = planningReason === "single-issue" ? planningContext : undefined;
   const threadParentIssue = !research && planningReason === "single-issue" && threadPlanningContext?.parentIssue
     ? toSlackIssueReference(threadPlanningContext.parentIssue)
     : undefined;
@@ -310,13 +379,7 @@ export async function handleIntakeRequest({
             "## 次アクション",
             "- ここに次アクションを書く",
           ].join("\n")
-        : [
-            "## Slack source",
-            requestMessage.text,
-            "",
-            "## 完了条件",
-            "- 実行単位で完了できる状態にする",
-          ].join("\n"),
+        : buildExecutionIssueDescription(requestMessage.text),
       dueDate: childDueDate,
       assignee: child.assigneeHint ?? owner.entry.linearAssignee,
       priority: childDueDate ? 2 : undefined,

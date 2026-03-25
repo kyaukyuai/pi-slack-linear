@@ -111,6 +111,8 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Express that duplicate decision in propose_create_issue with duplicateHandling=reuse-existing, reuse-and-attach-parent, clarify, or create-new.");
     expect(prompt).toContain("When the user explicitly asks to make one existing issue a child task of another existing issue, use propose_set_issue_parent instead of proposing a comment or deferring for confirmation.");
     expect(prompt).toContain("Express that owner decision with assigneeMode=assign or leave-unassigned.");
+    expect(prompt).toContain("For Linear issue delete or cancel requests, use propose_update_issue_status with signal=completed and state=Canceled.");
+    expect(prompt).toContain("Do not use Cancelled for Linear issue state updates; use the exact state name Canceled.");
     expect(prompt).toContain("For progress, completion, and blocked signals, prefer the most specific child issue over the parent issue.");
     expect(prompt).toContain("When a progress, completed, or blocked update includes a new target completion date, include dueDate in propose_update_issue_status.");
     expect(prompt).toContain("propose_create_issue_batch supports at most 8 child issues per proposal.");
@@ -632,6 +634,9 @@ describe("prompt helpers", () => {
 
     expect(prompt).toContain("Reply with a single JSON object only.");
     expect(prompt).toContain('"planningReason":"single-issue"|"complex-request"|"research-first"');
+    expect(prompt).toContain('"action":"update_existing"');
+    expect(prompt).toContain("Use update_existing only for an explicit intent correction");
+    expect(prompt).toContain("- thread.latestResolvedIssueId: (none)");
     expect(prompt).toContain('Example normalization: "契約書のドラフト版の作成依頼済み" -> "ドラフト作成".');
 
     const parsed = parseTaskPlanningReply(`\`\`\`json
@@ -647,6 +652,19 @@ describe("prompt helpers", () => {
         { title: "ドラフト作成", kind: "execution", dueDate: undefined, assigneeHint: undefined },
         { title: "OPT 田平さんへ契約書確認依頼", kind: "execution", dueDate: undefined, assigneeHint: "OPT 田平さん" },
       ],
+    });
+
+    const corrected = parseTaskPlanningReply(`\`\`\`json
+{"action":"update_existing","targetIssueId":"AIC-60","title":"金澤さんのChatGPTプロジェクトに角井さんを招待してもらう","description":"## Slack source\\n原文\\n\\n訂正:\\n新しい意図\\n\\n## 完了条件\\n- 実行単位で完了できる状態にする","dueDate":null,"assigneeHint":null}
+\`\`\``);
+
+    expect(corrected).toEqual({
+      action: "update_existing",
+      targetIssueId: "AIC-60",
+      title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+      description: "## Slack source\n原文\n\n訂正:\n新しい意図\n\n## 完了条件\n- 実行単位で完了できる状態にする",
+      dueDate: undefined,
+      assigneeHint: undefined,
     });
   });
 

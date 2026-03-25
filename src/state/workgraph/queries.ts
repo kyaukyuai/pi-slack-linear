@@ -242,6 +242,21 @@ export async function findExistingThreadIntakeByFingerprint(
         occurredAt: event.occurredAt,
       };
     }
+
+    if (event.type === "intake.corrected_existing") {
+      return {
+        threadKey,
+        intakeStatus: "created",
+        messageFingerprint: event.messageFingerprint,
+        sourceMessageTs: event.sourceMessageTs,
+        originalText: event.originalText,
+        parentIssueId: undefined,
+        childIssueIds: [event.correctedIssueId],
+        linkedIssueIds: [],
+        lastResolvedIssueId: event.correctedIssueId,
+        occurredAt: event.occurredAt,
+      };
+    }
   }
 
   return undefined;

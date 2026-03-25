@@ -11,18 +11,28 @@ import {
 
 type UpdateSignal = "progress" | "completed" | "blocked";
 
+function isCanceledIssueState(issue: LinearIssue): boolean {
+  const stateName = issue.state?.name?.trim().toLowerCase();
+  return stateName === "canceled" || stateName === "cancelled";
+}
+
 export function formatStatusReply(
   kind: UpdateSignal,
   issues: LinearIssue[],
   extras: string[] = [],
 ): string {
-  const intro = kind === "completed"
-    ? "完了として反映しました。"
+  const allCanceled = kind === "completed" && issues.length > 0 && issues.every(isCanceledIssueState);
+  const intro = allCanceled
+    ? "Canceled に変更しました。"
+    : kind === "completed"
+      ? "完了として反映しました。"
     : kind === "blocked"
       ? "blocked を反映しました。"
       : "進捗を反映しました。";
-  const nextAction = kind === "completed"
-    ? "残っている作業があれば、この thread で続けてください。"
+  const nextAction = allCanceled
+    ? "必要ならこの thread で訂正や続きの依頼を送ってください。"
+    : kind === "completed"
+      ? "残っている作業があれば、この thread で続けてください。"
     : kind === "blocked"
       ? "原因・待ち先・再開条件が分かったら、この thread で追記してください。"
       : "必要ならこの thread で続きの進捗を共有してください。";

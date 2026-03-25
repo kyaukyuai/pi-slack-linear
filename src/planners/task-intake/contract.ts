@@ -46,7 +46,29 @@ export const taskPlanningCreateSchema = z.object({
   }
 });
 
-export const taskPlanningSchema = z.union([taskPlanningClarifySchema, taskPlanningCreateSchema]);
+export const taskPlanningUpdateExistingSchema = z.object({
+  action: z.literal("update_existing"),
+  targetIssueId: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  dueDate: optionalDateSchema,
+  assigneeHint: z.union([z.string().trim().min(1), z.null()]).optional(),
+});
+
+export const taskPlanningSchema = z.union([
+  taskPlanningClarifySchema,
+  taskPlanningCreateSchema,
+  taskPlanningUpdateExistingSchema,
+]);
+
+export interface TaskPlanningThreadContext {
+  latestResolvedIssueId?: string;
+  latestResolvedIssueTitle?: string;
+  latestResolvedIssueLastStatus?: "progress" | "completed" | "blocked";
+  threadIntakeStatus?: "needs-clarification" | "linked-existing" | "created";
+  threadChildIssueIds?: string[];
+  threadParentIssueId?: string;
+}
 
 export interface TaskPlanningInput {
   channelId: string;
@@ -58,6 +80,7 @@ export interface TaskPlanningInput {
   currentDate: string;
   workspaceAgents?: string;
   workspaceMemory?: string;
+  threadContext?: TaskPlanningThreadContext;
   taskKey?: string;
 }
 
@@ -82,4 +105,16 @@ export interface TaskPlanningResultCreate {
   children: TaskPlanningChild[];
 }
 
-export type TaskPlanningResult = TaskPlanningResultClarify | TaskPlanningResultCreate;
+export interface TaskPlanningResultUpdateExisting {
+  action: "update_existing";
+  targetIssueId: string;
+  title: string;
+  description: string;
+  dueDate?: string;
+  assigneeHint?: string;
+}
+
+export type TaskPlanningResult =
+  | TaskPlanningResultClarify
+  | TaskPlanningResultCreate
+  | TaskPlanningResultUpdateExisting;

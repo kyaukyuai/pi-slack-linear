@@ -276,6 +276,58 @@ describe("manager command commit", () => {
     expect(linearMocks.addLinearComment).not.toHaveBeenCalled();
   });
 
+  it("normalizes cancel aliases to Canceled and avoids completed wording in the reply", async () => {
+    linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
+      id: "issue-60",
+      identifier: "AIC-60",
+      title: "金澤さんをChatGPTプロジェクトに招待する",
+      state: { id: "state-canceled", name: "Canceled", type: "canceled" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_issue_status",
+          issueId: "AIC-60",
+          signal: "completed",
+          state: "Cancelled",
+          reasonSummary: "削除依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-cancel-alias",
+        messageTs: "msg-cancel-alias-1",
+        userId: "U1",
+        text: "AIC-60 は削除しておいて",
+      },
+      now: new Date("2026-03-25T01:06:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueId: "AIC-60",
+        state: "Canceled",
+        comment: expect.stringContaining("## Completion source"),
+      }),
+      expect.any(Object),
+    );
+    expect(result.committed[0]?.summary).toContain("Canceled に変更しました。");
+    expect(result.committed[0]?.summary).not.toContain("完了として反映しました。");
+  });
+
   it("commits progress updates with a due date in one update call and records the new due date", async () => {
     linearMocks.updateManagedLinearIssue.mockResolvedValueOnce({
       id: "issue-38",

@@ -709,6 +709,23 @@ function buildManagerCommitOwnerResolution(): "mapped" {
   return "mapped";
 }
 
+function normalizeCompletedStateAlias(state: string | undefined): string | undefined {
+  const normalized = state?.trim();
+  if (!normalized) return normalized;
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === "cancel"
+    || lowered === "cancelled"
+    || lowered === "canceled"
+    || normalized === "キャンセル"
+    || normalized === "削除"
+    || normalized === "取り消し"
+  ) {
+    return "Canceled";
+  }
+  return normalized;
+}
+
 async function getExistingThreadIntakeAtTurnStart(
   args: CommitManagerCommandArgs,
   threadKey: string,
@@ -1302,6 +1319,9 @@ async function commitUpdateIssueStatusProposal(
   const followups = await args.repositories.followups.load();
   const occurredAt = buildOccurredAt(args.now);
   const message = args.message;
+  const normalizedCompletedState = proposal.signal === "completed"
+    ? normalizeCompletedStateAlias(proposal.state)
+    : proposal.state;
   const updatedIssues: LinearIssue[] = [];
   const blockedStateByIssueId = new Map<string, boolean>();
   const replyExtras: string[] = [];
@@ -1332,7 +1352,7 @@ async function commitUpdateIssueStatusProposal(
     updatedIssues.push(await updateManagedLinearIssue(
       {
         issueId: proposal.issueId,
-        state: proposal.state ?? "completed",
+        state: normalizedCompletedState ?? "completed",
         dueDate: proposal.dueDate,
         comment: proposal.commentBody ?? buildStatusSourceComment(message, "## Completion source"),
       },

@@ -112,6 +112,26 @@ export async function recordIntakeLinkedExisting(
   }]);
 }
 
+export async function recordIntakeCorrectedExisting(
+  repository: WorkgraphRepository,
+  input: {
+    occurredAt: string;
+    source: ThreadScopedWorkgraphSource;
+    messageFingerprint: string;
+    correctedIssueId: string;
+    originalText?: string;
+  },
+): Promise<WorkgraphEvent[]> {
+  return appendWorkgraphEvents(repository, [{
+    type: "intake.corrected_existing",
+    occurredAt: input.occurredAt,
+    messageFingerprint: input.messageFingerprint,
+    correctedIssueId: input.correctedIssueId,
+    originalText: input.originalText,
+    ...buildThreadScopedWorkgraphFields(input.source),
+  }]);
+}
+
 export async function recordPlanningOutcome(
   repository: WorkgraphRepository,
   input: WorkgraphPlanningOutcomeInput,

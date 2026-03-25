@@ -61,6 +61,25 @@ export function formatSourceComment(message: SourceMessageLike, reason: string):
   ].join("\n");
 }
 
+export function buildExecutionIssueDescription(sourceText: string): string {
+  return [
+    "## Slack source",
+    sourceText,
+    "",
+    "## 完了条件",
+    "- 実行単位で完了できる状態にする",
+  ].join("\n");
+}
+
+export function buildCorrectedSlackSourceText(originalRequest: string, correctionText: string): string {
+  return [
+    originalRequest.trim(),
+    "",
+    "訂正:",
+    correctionText.trim(),
+  ].join("\n");
+}
+
 export function formatSlackContextSummary(entries: SlackThreadEntries): string {
   if (entries.length === 0) {
     return "- thread 内の追加文脈は見つかりませんでした。";
@@ -278,6 +297,16 @@ export function formatExistingIssueReply(
       .slice(0, 3)
       .map((issue) => `- ${formatIssueReference(issue)}`)
       .join("\n"),
+  ]);
+}
+
+export function formatCorrectedExistingIssueReply(
+  issue: Pick<LinearIssue, "identifier" | "title"> & { url?: string | null },
+): string {
+  return composeSlackReply([
+    "失礼しました。既存 issue を修正しました。",
+    `対象は ${buildSlackTargetLabel(issue)} です。`,
+    "進捗・完了・blocked は、この thread にそのまま返してください。",
   ]);
 }
 

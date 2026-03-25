@@ -343,6 +343,8 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "When the user explicitly asks to make one existing issue a child task of another existing issue, use propose_set_issue_parent instead of proposing a comment or deferring for confirmation.",
     "For every create proposal, decide explicitly whether to assign an owner now or leave the issue unassigned.",
     "Express that owner decision with assigneeMode=assign or leave-unassigned. When assigneeMode=assign, always include assignee.",
+    "For Linear issue delete or cancel requests, use propose_update_issue_status with signal=completed and state=Canceled.",
+    "Do not use Cancelled for Linear issue state updates; use the exact state name Canceled.",
     "When a message describes a bug, UX issue, or rendering problem and ends by asking to create a task, classify it as create_work and propose a task instead of drifting into query mode.",
     "If the latest message is an intent correction like という意図です, そういう意味です, つまり, or そうではなく and a pending manager clarification context exists, report continue_pending and usually persistence=keep or replace depending on whether the pending clarification should stay unchanged or be overwritten.",
     "If the latest message asks what is happening with the pending clarification, report status_question and persistence=keep.",

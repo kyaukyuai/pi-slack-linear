@@ -169,6 +169,21 @@ export function projectWorkgraph(
           uniquePush(getOrCreateIssue(projection, issueId).threadKeys, event.threadKey);
         }
         break;
+      case "intake.corrected_existing":
+        if (thread) {
+          thread.intakeStatus = "created";
+          thread.pendingClarification = false;
+          thread.messageFingerprint = event.messageFingerprint;
+          thread.originalText = event.originalText ?? thread.originalText;
+          thread.clarificationQuestion = undefined;
+          thread.clarificationReasons = [];
+          thread.clarificationRequestedAt = undefined;
+          thread.lastResolvedIssueId = event.correctedIssueId;
+          thread.latestFocusIssueId = event.correctedIssueId;
+          uniquePush(thread.childIssueIds, event.correctedIssueId);
+        }
+        uniquePush(getOrCreateIssue(projection, event.correctedIssueId).threadKeys, event.threadKey);
+        break;
       case "planning.parent_created": {
         const issue = getOrCreateIssue(projection, event.issueId);
         issue.kind = "parent";
