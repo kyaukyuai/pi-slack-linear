@@ -137,9 +137,17 @@ function classifyIntroSentence(sentence: string): string | undefined {
   return undefined;
 }
 
+function isIntroBoundaryLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return true;
+  }
+  return /^(?:- |>|\||\*[^*\n]{1,120}\*$)/.test(trimmed);
+}
+
 function dedupeReviewIntroSentences(text: string): string {
   const lines = text.split("\n");
-  const introEnd = lines.findIndex((line) => /^\s*(?:- |> system log:)/.test(line));
+  const introEnd = lines.findIndex((line, index) => index > 0 && isIntroBoundaryLine(line));
   const introLines = introEnd >= 0 ? lines.slice(0, introEnd) : lines;
   const remainingLines = introEnd >= 0 ? lines.slice(introEnd) : [];
   const introText = introLines.join(" ").trim();
@@ -166,7 +174,6 @@ function dedupeReviewIntroSentences(text: string): string {
 
   const rebuiltIntro = keptIntro.join("");
   return [rebuiltIntro, ...remainingLines]
-    .filter(Boolean)
     .join("\n")
     .trim();
 }

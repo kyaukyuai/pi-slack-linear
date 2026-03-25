@@ -71,4 +71,20 @@ describe("system Slack reply helpers", () => {
     expect(result).toContain("期限未設定。\n\nアクション提案:");
     expect(result).toContain("確認を送信。\n\n引き続き進行中");
   });
+
+  it("preserves quoted heartbeat detail blocks after the title", () => {
+    const result = normalizeSystemReplyForSlack([
+      "**【AIC-38】期限2日後・未着手**",
+      "",
+      "> **OPT社の社内チャネルへの招待依頼**（担当: y.kakui）",
+      "> 優先度: High ／ 期限: **2日後 (2026-03-27)** ／ 状態: Backlog",
+      "",
+      "期限が迫っています。対応状況をこのスレッドに返信してください。",
+      "例：「対応済み」「対応中」「ブロック中（理由）」",
+    ].join("\n"));
+
+    expect(result).toContain("**【AIC-38】期限2日後・未着手**\n\n> **OPT社の社内チャネルへの招待依頼**（担当: y.kakui）");
+    expect(result).toContain("> 優先度: High ／ 期限: **2日後 (2026-03-27)** ／ 状態: Backlog");
+    expect(result).toContain("\n\n期限が迫っています。対応状況をこのスレッドに返信してください。");
+  });
 });
