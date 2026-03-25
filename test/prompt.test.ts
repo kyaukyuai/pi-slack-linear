@@ -80,7 +80,7 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Only use the control room for proactive reviews, urgent follow-ups, and fallback-owner notices.");
     expect(prompt).toContain("Use read tools to inspect Linear, workgraph, Slack context, optional Notion reference material, and lightweight web results.");
     expect(prompt).toContain("If runtime workspace AGENTS are provided in the prompt context, treat them as operator-specific operating rules and stable workflow preferences unless they conflict with hardcoded system rules.");
-    expect(prompt).toContain("If workspace memory is provided in the prompt context, treat it as operator-specific working conventions, terminology, and preferences unless it conflicts with the system rules.");
+    expect(prompt).toContain("If workspace memory is provided in the prompt context, treat it as operator-specific terminology, project knowledge, durable context, and preferences unless it conflicts with the system rules.");
     expect(prompt).toContain("If a Notion agenda template is provided in the prompt context, prefer it when creating or extending Notion agendas unless the user explicitly overrides it.");
     expect(prompt).toContain("When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether there is any clear, safe action you can execute now through the existing proposal tools.");
     expect(prompt).toContain("For webhook-issue-created system tasks, use actionability-first reasoning: execute only when a concrete manager-operable action is available now, and otherwise choose no-op.");
@@ -130,10 +130,13 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("If Notion tools are available, use Notion as reference material for specs, notes, and operating context.");
     expect(prompt).toContain("When the user explicitly asks to create an agenda in Notion, use propose_create_notion_agenda instead of creating a Linear issue.");
     expect(prompt).toContain("When the user explicitly asks to update, append to, retitle, archive, or delete a Notion page, use the dedicated Notion page proposal tools instead of creating or updating a Linear issue.");
-    expect(prompt).toContain("When the user explicitly asks to save durable knowledge into MEMORY or workspace memory, use propose_update_workspace_memory with a small set of stable facts instead of relying only on silent personalization.");
-    expect(prompt).toContain("For Notion-based MEMORY save requests, call notion_get_page_content first and extract durable project facts, terminology, preferences, or context from the page content.");
+    expect(prompt).toContain("When the user explicitly asks to save durable knowledge into MEMORY or workspace memory, use propose_update_workspace_memory as the primary path instead of relying only on silent personalization.");
+    expect(prompt).toContain("For explicit MEMORY saves, it is valid to save a structured project snapshot with several entries such as project-overview, members-and-roles, roadmap-and-milestones, terminology, and context.");
+    expect(prompt).toContain("For Notion-based MEMORY save requests, call notion_get_page_content first and extract durable project facts, members, roadmap milestones, terminology, preferences, or context from the page content.");
     expect(prompt).toContain("When the user asks to read an entire Notion page or save its overall content into MEMORY, continue calling notion_get_page_content with later startLine values if the current window says more lines are available.");
     expect(prompt).toContain("Do not copy an entire document into MEMORY. Save only stable facts that should persist across future turns.");
+    expect(prompt).toContain("For MEMORY, roadmap-and-milestones is only for project-level goals, phases, milestone windows, or durable schedule targets.");
+    expect(prompt).toContain("For project-overview, members-and-roles, and roadmap-and-milestones memory entries, always include the project name explicitly.");
     expect(prompt).toContain("For Notion agenda creation, use the configured default parent page unless the user clearly specifies a different Notion parent page.");
     expect(prompt).toContain("A minimal Notion agenda should have a short title and practical sections like 目的, 議題, 確認事項, and 次のアクション.");
     expect(prompt).toContain("For Notion page updates in this scope, use propose_update_notion_page with an explicit pageId");
@@ -964,5 +967,7 @@ describe("prompt helpers", () => {
 
     expect(prompt).toContain("If there is nothing worth learning, return observations with a single ignore item.");
     expect(prompt).toContain("Never emit operating_rule or preference_or_fact with blank canonicalText. If you cannot write a durable sentence, return ignore instead.");
+    expect(prompt).toContain("Use roadmap-and-milestones only for durable project-level goals, phases, milestone timing, or target windows such as 3ヶ月後 or 4月中旬.");
+    expect(prompt).toContain("When category is project-overview, members-and-roles, or roadmap-and-milestones, always include projectName.");
   });
 });

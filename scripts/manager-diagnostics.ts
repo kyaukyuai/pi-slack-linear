@@ -8,6 +8,16 @@ import { createFileBackedManagerRepositories } from "../src/state/repositories/f
 
 type Command = "thread" | "issue" | "webhook" | "personalization" | "llm";
 
+function extractMarkdownHeadings(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(##|###|####)\s+/.test(line));
+}
+
 function parseCommand(value: string | undefined): Command {
   if (value === "thread" || value === "issue" || value === "webhook" || value === "personalization" || value === "llm") return value;
   throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook|personalization|llm> <arg1> <arg2?> [workspaceDir]");
@@ -99,6 +109,10 @@ async function main(): Promise<void> {
     ]);
     process.stdout.write(`${JSON.stringify({
       recentEntries: ledger.slice(-20),
+      workspaceMemoryHeadings: extractMarkdownHeadings(workspaceMemory),
+      workspaceMemoryProjects: extractMarkdownHeadings(workspaceMemory)
+        .filter((line) => line.startsWith("### "))
+        .map((line) => line.replace(/^###\s+/, "")),
       workspaceAgents,
       workspaceMemory,
     }, null, 2)}\n`);

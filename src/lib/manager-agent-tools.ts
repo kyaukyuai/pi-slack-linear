@@ -1167,12 +1167,13 @@ function createProposalTools(): ToolDefinition[] {
       name: "propose_update_workspace_memory",
       label: "Propose Update Workspace Memory",
       description: "Propose saving durable operator-specific knowledge into workspace MEMORY. This does not execute the mutation.",
-      promptSnippet: "Use this only when the user explicitly asks to save durable facts, terminology, project context, or preferences into MEMORY.",
+      promptSnippet: "Use this only when the user explicitly asks to save durable facts, terminology, project context, members, roadmap milestones, or preferences into MEMORY.",
       commandType: "update_workspace_memory",
       parameters: Type.Object({
         sourceLabel: Type.Optional(Type.String({ description: "Optional short source label such as the Notion page title." })),
         entries: Type.Array(Type.Object({
-          category: Type.String({ description: "One of terminology | people-and-projects | preferences | context." }),
+          category: Type.String({ description: "One of project-overview | members-and-roles | roadmap-and-milestones | terminology | preferences | context. Legacy people-and-projects is accepted only for compatibility." }),
+          projectName: Type.Optional(Type.String({ description: "Required for project-overview, members-and-roles, and roadmap-and-milestones." })),
           summary: Type.String({ description: "Short stable summary used for dedupe." }),
           canonicalText: Type.String({ description: "Stable MEMORY sentence to save." }),
         })),

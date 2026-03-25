@@ -23,6 +23,13 @@ function trimNonEmptyString(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function looksLikeIssueLevelStatus(text: string): boolean {
+  return /AIC-\d+/i.test(text)
+    || /\b(?:Backlog|In Progress|In Review|Done|Blocked|Canceled|Cancelled)\b/i.test(text)
+    || /(?:現在|進捗)\s*\d+%/.test(text)
+    || /現在\s*(?:Backlog|In Progress|In Review|Done|Blocked|Canceled|Cancelled)/i.test(text);
+}
+
 function normalizeObservation(value: unknown): PersonalizationExtractionResult["observations"][number] | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -39,6 +46,7 @@ function normalizeObservation(value: unknown): PersonalizationExtractionResult["
 
   const source = record.source;
   const category = record.category;
+  const projectName = trimNonEmptyString(record.projectName);
   const summary = trimNonEmptyString(record.summary);
   const canonicalText = trimNonEmptyString(record.canonicalText);
   const confidence = typeof record.confidence === "number" && Number.isFinite(record.confidence)
@@ -51,6 +59,9 @@ function normalizeObservation(value: unknown): PersonalizationExtractionResult["
       && category !== "reply-style"
       && category !== "priority"
       && category !== "terminology"
+      && category !== "project-overview"
+      && category !== "members-and-roles"
+      && category !== "roadmap-and-milestones"
       && category !== "people-and-projects"
       && category !== "preferences"
       && category !== "context")
@@ -61,10 +72,22 @@ function normalizeObservation(value: unknown): PersonalizationExtractionResult["
     return { kind: "ignore" };
   }
 
+  if (
+    (category === "project-overview" || category === "members-and-roles" || category === "roadmap-and-milestones")
+    && !projectName
+  ) {
+    return { kind: "ignore" };
+  }
+
+  if (category === "roadmap-and-milestones" && looksLikeIssueLevelStatus(`${summary} ${canonicalText}`)) {
+    return { kind: "ignore" };
+  }
+
   return {
     kind,
     source,
     category,
+    projectName,
     summary,
     canonicalText,
     confidence,

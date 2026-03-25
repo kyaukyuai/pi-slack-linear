@@ -83,6 +83,124 @@ describe("personalization commit", () => {
     await expect(readWorkspaceMemory(paths)).resolves.toContain("Slack の考え中表示は「考え中...」を使う。");
   });
 
+  it("renders project-centric MEMORY sections for explicit project knowledge", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-personalization-"));
+    const paths = buildSystemPaths(workspaceDir);
+    await ensureSystemWorkspace(paths);
+
+    await applyPersonalizationObservations({
+      paths,
+      ledger: [],
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "project-overview",
+          projectName: "AIクローンプラットフォーム",
+          summary: "PoC の主題",
+          canonicalText: "AIクローンプラットフォームは金澤クローンを中心とした PoC プロジェクトである。",
+          confidence: 1,
+        },
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "members-and-roles",
+          projectName: "AIクローンプラットフォーム",
+          summary: "角井が推進担当",
+          canonicalText: "角井がプロジェクト推進を担当し、コギトが実行支援に入る。",
+          confidence: 1,
+        },
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "roadmap-and-milestones",
+          projectName: "AIクローンプラットフォーム",
+          summary: "三ヶ月後の到達目標",
+          canonicalText: "3ヶ月後に金澤クローンが Slack 上で日常相談に耐える状態を目標にする。",
+          confidence: 1,
+        },
+      ],
+      now: new Date("2026-03-25T02:00:00.000Z"),
+    });
+
+    const memory = await readWorkspaceMemory(paths);
+    expect(memory).toContain("## Projects");
+    expect(memory).toContain("### AIクローンプラットフォーム");
+    expect(memory).toContain("#### Overview");
+    expect(memory).toContain("#### Members And Roles");
+    expect(memory).toContain("#### Roadmap And Milestones");
+  });
+
+  it("renders legacy people-and-projects entries under general project context", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-personalization-"));
+    const paths = buildSystemPaths(workspaceDir);
+    await ensureSystemWorkspace(paths);
+
+    await applyPersonalizationObservations({
+      paths,
+      ledger: [],
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "people-and-projects",
+          summary: "General legacy project fact",
+          canonicalText: "AIクローンプラットフォームはコギトとの協働プロジェクトである。",
+          confidence: 1,
+        },
+      ],
+      now: new Date("2026-03-25T02:10:00.000Z"),
+    });
+
+    const memory = await readWorkspaceMemory(paths);
+    expect(memory).toContain("## General Project Context");
+    expect(memory).toContain("AIクローンプラットフォームはコギトとの協働プロジェクトである。");
+  });
+
+  it("dedupes project memory by projectName, category, and summary", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-personalization-"));
+    const paths = buildSystemPaths(workspaceDir);
+    await ensureSystemWorkspace(paths);
+
+    const first = await applyPersonalizationObservations({
+      paths,
+      ledger: [],
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "inferred",
+          category: "project-overview",
+          projectName: "AIクローンプラットフォーム",
+          summary: "PoC の主題",
+          canonicalText: "AIクローンプラットフォームは金澤クローンを中心とした PoC プロジェクトである。",
+          confidence: 0.84,
+        },
+      ],
+      now: new Date("2026-03-25T02:20:00.000Z"),
+    });
+
+    const second = await applyPersonalizationObservations({
+      paths,
+      ledger: first.ledger,
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "project-overview",
+          projectName: "AIクローンプラットフォーム",
+          summary: "PoC の主題",
+          canonicalText: "AIクローンプラットフォームは金澤クローンを中心とした PoC プロジェクトである。",
+          confidence: 1,
+        },
+      ],
+      now: new Date("2026-03-25T02:30:00.000Z"),
+    });
+
+    expect(second.ledger).toHaveLength(1);
+    expect(second.ledger[0]?.source).toBe("explicit");
+    expect(second.ledger[0]?.status).toBe("promoted");
+  });
+
   it("supersedes conflicting rules with the same summary", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-personalization-"));
     const paths = buildSystemPaths(workspaceDir);

@@ -61,6 +61,56 @@ describe("personalization extraction", () => {
     });
   });
 
+  it("accepts project-scoped observations when projectName is present", () => {
+    const result = parsePersonalizationExtractionReply(JSON.stringify({
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "project-overview",
+          projectName: "AIクローンプラットフォーム",
+          summary: "PoC の主題",
+          canonicalText: "AIクローンプラットフォームは金澤クローンを中心とした PoC プロジェクトである。",
+          confidence: 0.98,
+        },
+      ],
+    }));
+
+    expect(result).toEqual({
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "explicit",
+          category: "project-overview",
+          projectName: "AIクローンプラットフォーム",
+          summary: "PoC の主題",
+          canonicalText: "AIクローンプラットフォームは金澤クローンを中心とした PoC プロジェクトである。",
+          confidence: 0.98,
+        },
+      ],
+    });
+  });
+
+  it("drops roadmap observations that look like issue-level status", () => {
+    const result = parsePersonalizationExtractionReply(JSON.stringify({
+      observations: [
+        {
+          kind: "preference_or_fact",
+          source: "inferred",
+          category: "roadmap-and-milestones",
+          projectName: "AIクローンプラットフォーム",
+          summary: "AIC-38 の現在期限",
+          canonicalText: "AIC-38 は 2026-03-27 期限で現在 Backlog のままです。",
+          confidence: 0.9,
+        },
+      ],
+    }));
+
+    expect(result).toEqual({
+      observations: [{ kind: "ignore" }],
+    });
+  });
+
   it("survives malformed low-value replies through the planner runner", async () => {
     const result = await runPersonalizationExtractionTurnWithExecutor(
       async () => JSON.stringify({

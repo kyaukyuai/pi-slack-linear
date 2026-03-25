@@ -99,9 +99,9 @@ Optional:
 
 `NOTION_API_TOKEN` を設定すると、bundled `ntn v0.4.0` を使って Notion を参照できます。現状のスコープでは page search、page facts、page content 抜粋、database search、database query の読み出しに加えて、`NOTION_AGENDA_PARENT_PAGE_ID` を設定すると指定 parent page 配下に agenda page を作成できます。また、既存 page に対しては title 更新、append 追記、Cogito 管理ページに限定した heading_2 単位の `replace_section` 更新、archive/trash までサポートします。管理対象ページは `workspace/system/notion-pages.json` に登録された page です。database row の更新・削除はまだ扱いません。Notion は task system of record にはしません。
 
-`/workspace/system/AGENTS.md`, `/workspace/system/MEMORY.md`, `/workspace/system/AGENDA_TEMPLATE.md` は利用者ごとの runtime customization 用です。`AGENTS.md` には安定した進め方、返信方針、優先順位のような operating rules を置き、`MEMORY.md` には用語、背景知識、個別の好み、人物や案件のメモを置きます。`AGENTS.md` と `MEMORY.md` は manager/system turn に加えて reply/router/intake/research/follow-up planner にも毎 turn 注入されます。ただし schema、supported actions、parser contract、safety rule は上書きしません。`AGENDA_TEMPLATE.md` は Notion アジェンダの既定構成専用で、Notion agenda の作成・更新に関係する manager/system turn にだけ注入されます。repo ルートの `AGENTS.md` は開発ルール用であり、runtime customization には使いません。
+`/workspace/system/AGENTS.md`, `/workspace/system/MEMORY.md`, `/workspace/system/AGENDA_TEMPLATE.md` は利用者ごとの runtime customization 用です。`AGENTS.md` には安定した進め方、返信方針、優先順位のような operating rules を置き、`MEMORY.md` には用語や背景知識だけでなく、プロジェクト概要、メンバーと役割、ロードマップ、主要マイルストーンのような project knowledge を置きます。`MEMORY.md` のスケジュール情報は milestone-only で扱い、issue 単位の期限、現在の進捗、current status は入れません。`AGENTS.md` と `MEMORY.md` は manager/system turn に加えて reply/router/intake/research/follow-up planner にも毎 turn 注入されます。ただし schema、supported actions、parser contract、safety rule は上書きしません。`AGENDA_TEMPLATE.md` は Notion アジェンダの既定構成専用で、Notion agenda の作成・更新に関係する manager/system turn にだけ注入されます。repo ルートの `AGENTS.md` は開発ルール用であり、runtime customization には使いません。
 
-runtime `AGENTS.md` / `MEMORY.md` は会話や実行結果から silent auto-update されます。抽出候補は `/workspace/system/personalization-ledger.json` に保存され、昇格したものだけ runtime `AGENTS.md` / `MEMORY.md` に反映されます。
+runtime `AGENTS.md` / `MEMORY.md` は会話や実行結果から silent auto-update されます。抽出候補は `/workspace/system/personalization-ledger.json` に保存され、昇格したものだけ runtime `AGENTS.md` / `MEMORY.md` に反映されます。rich な project snapshot を保存したい場合は、`MEMORY に保存して` を明示して `project-overview / members-and-roles / roadmap-and-milestones` を含む structured save を使うのが主経路です。
 
 `LINEAR_WORKSPACE` は固定先の説明用です。`LINEAR_API_KEY` がある場合、`linear-cli v2.8.0` でも `-w/--workspace` と併用しないようにしています。
 
@@ -202,7 +202,7 @@ Slack から既存 issue の実行依頼もできます。主な例:
 ]
 ```
 
-`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` と `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の個別知識、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。`BOT_UID` / `BOT_GID` を設定している場合、これらの runtime system files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
+`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` と `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の project knowledge / terminology / durable context、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。`BOT_UID` / `BOT_GID` を設定している場合、これらの runtime system files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
 
 `policy.json` では次の manager knobs を調整できます。
 

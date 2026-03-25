@@ -244,18 +244,43 @@ const archiveNotionPageProposalSchema = proposalBaseSchema.extend({
 
 const workspaceMemoryCategorySchema = z.enum([
   "terminology",
+  "project-overview",
+  "members-and-roles",
+  "roadmap-and-milestones",
   "people-and-projects",
   "preferences",
   "context",
 ]);
+
+function isProjectScopedWorkspaceMemoryCategory(category: z.infer<typeof workspaceMemoryCategorySchema>): boolean {
+  return category === "project-overview"
+    || category === "members-and-roles"
+    || category === "roadmap-and-milestones";
+}
+
+function looksLikeIssueLevelRoadmapText(text: string): boolean {
+  return /AIC-\d+/i.test(text)
+    || /\b(?:Backlog|In Progress|In Review|Done|Blocked|Canceled|Cancelled)\b/i.test(text)
+    || /(?:現在|今日中|今週|今月|進捗)\b/.test(text)
+    || /\b\d+%\b/.test(text);
+}
 
 const updateWorkspaceMemoryProposalSchema = proposalBaseSchema.extend({
   commandType: z.literal("update_workspace_memory"),
   sourceLabel: optionalStringSchema,
   entries: z.array(z.object({
     category: workspaceMemoryCategorySchema,
+    projectName: optionalStringSchema,
     summary: z.string().trim().min(1),
     canonicalText: z.string().trim().min(1),
+  }).superRefine((value, ctx) => {
+    if (isProjectScopedWorkspaceMemoryCategory(value.category) && !value.projectName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["projectName"],
+        message: "projectName is required for project-scoped memory entries",
+      });
+    }
   })).min(1).max(12),
 });
 
@@ -2086,11 +2111,23 @@ async function commitArchiveNotionPageProposal(
 async function commitUpdateWorkspaceMemoryProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof updateWorkspaceMemoryProposalSchema>,
-): Promise<ManagerCommittedCommand> {
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  const invalidRoadmapEntry = proposal.entries.find((entry) =>
+    entry.category === "roadmap-and-milestones"
+    && looksLikeIssueLevelRoadmapText(`${entry.summary} ${entry.canonicalText}`));
+
+  if (invalidRoadmapEntry) {
+    return {
+      proposal,
+      reason: "roadmap-and-milestones must contain project-level milestones only, not issue-level due dates or current status",
+    };
+  }
+
   const observations: PersonalizationObservationInput[] = proposal.entries.map((entry) => ({
     kind: "preference_or_fact",
     source: "explicit",
     category: entry.category,
+    projectName: entry.projectName,
     summary: entry.summary,
     canonicalText: entry.canonicalText,
     confidence: 1,

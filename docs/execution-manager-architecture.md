@@ -10,7 +10,7 @@
 - 現在の本体 workflow は `workgraph` を primary read model として扱い、Linear を work の source of truth とする
 - 2026-03-19 時点で、Slack message / query / create / update の primary path は `pi-coding-agent + strict tools + manager commit` に移行している
 - 2026-03-24 時点で、Linear issue create webhook も同じ `agent + strict tools + manager commit` の system workflow に載せられる
-- 2026-03-24 時点で、runtime customization は `/workspace/system/AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` の固定スロット方式で扱い、`AGENTS.md` / `MEMORY.md` は turn 後に silent auto-update できる
+- 2026-03-25 時点で、runtime customization は `/workspace/system/AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` の固定スロット方式で扱い、`AGENTS.md` / `MEMORY.md` は turn 後に silent auto-update できる。`MEMORY.md` は project knowledge layer として、project overview / members and roles / roadmap and milestones を持てるが、issue-level の current state は持たない
 - scheduler / heartbeat も同じ agent/tool surface を primary path とし、旧 planner / regex / review builder は emergency fallback に縮退している
 - primary path の business judgment は agent proposal に必須化し、manager commit は validation / dedupe / execution / state 更新だけを担当する
 - emergency fallback は safety-only とし、旧 heuristics を primary path の代替判断としては使わない

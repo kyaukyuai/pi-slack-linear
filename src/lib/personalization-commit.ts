@@ -8,7 +8,18 @@ import type { SystemPaths } from "./system-workspace.js";
 export interface PersonalizationObservationInput {
   kind: "operating_rule" | "preference_or_fact";
   source: "explicit" | "inferred";
-  category: "workflow" | "reply-style" | "priority" | "terminology" | "people-and-projects" | "preferences" | "context";
+  category:
+    | "workflow"
+    | "reply-style"
+    | "priority"
+    | "terminology"
+    | "project-overview"
+    | "members-and-roles"
+    | "roadmap-and-milestones"
+    | "people-and-projects"
+    | "preferences"
+    | "context";
+  projectName?: string;
   summary: string;
   canonicalText: string;
   confidence: number;
@@ -34,16 +45,39 @@ const INFERRED_PROMOTION_EVIDENCE_COUNT = 2;
 const INFERRED_PROMOTION_CONFIDENCE = 0.8;
 const GENERATED_START = "<!-- COGITO AUTO-GENERATED START -->";
 const GENERATED_END = "<!-- COGITO AUTO-GENERATED END -->";
+const PROJECT_MEMORY_CATEGORIES = new Set<PersonalizationObservationInput["category"]>([
+  "project-overview",
+  "members-and-roles",
+  "roadmap-and-milestones",
+]);
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function normalizeProjectName(value: string | undefined): string | undefined {
+  const normalized = value ? normalizeText(value) : "";
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeMemoryCategory(
+  category: PersonalizationObservationInput["category"] | PersonalizationLedgerEntry["category"],
+): PersonalizationObservationInput["category"] | PersonalizationLedgerEntry["category"] {
+  return category === "people-and-projects" ? "project-overview" : category;
+}
+
 function buildObservationKey(observation: {
   targetFile: "agents" | "memory";
+  category: PersonalizationObservationInput["category"] | PersonalizationLedgerEntry["category"];
+  projectName?: string;
   summary: string;
 }): string {
-  return `${observation.targetFile}:${normalizeText(observation.summary).toLowerCase()}`;
+  return [
+    observation.targetFile,
+    normalizeMemoryCategory(observation.category),
+    normalizeProjectName(observation.projectName) ?? "",
+    normalizeText(observation.summary).toLowerCase(),
+  ].join(":");
 }
 
 function determineTargetFile(kind: PersonalizationObservationInput["kind"]): "agents" | "memory" {
@@ -60,7 +94,12 @@ function upsertObservation(
 } {
   const targetFile = determineTargetFile(observation.kind);
   const nextLedger = [...ledger];
-  const observationKey = buildObservationKey({ targetFile, summary: observation.summary });
+  const observationKey = buildObservationKey({
+    targetFile,
+    category: observation.category,
+    projectName: observation.projectName,
+    summary: observation.summary,
+  });
   const sameKeyEntries = nextLedger.filter((entry) =>
     entry.status !== "rejected"
     && entry.status !== "superseded"
@@ -71,6 +110,10 @@ function upsertObservation(
     exactExisting.evidenceCount += 1;
     exactExisting.lastSeenAt = nowIso;
     exactExisting.confidence = Math.max(exactExisting.confidence, observation.confidence);
+    exactExisting.projectName = normalizeProjectName(observation.projectName) ?? exactExisting.projectName;
+    if (observation.source === "explicit" && exactExisting.source !== "explicit") {
+      exactExisting.source = "explicit";
+    }
     if (
       exactExisting.status === "candidate"
       && (exactExisting.source === "explicit"
@@ -92,14 +135,13 @@ function upsertObservation(
     kind: observation.kind,
     source: observation.source,
     category: observation.category,
+    projectName: normalizeProjectName(observation.projectName),
     summary: observation.summary,
     canonicalText: observation.canonicalText,
     confidence: observation.confidence,
     evidenceCount: 1,
     lastSeenAt: nowIso,
-    status: observation.source === "explicit"
-      ? "promoted"
-      : (observation.confidence >= INFERRED_PROMOTION_CONFIDENCE ? "candidate" : "candidate"),
+    status: observation.source === "explicit" ? "promoted" : "candidate",
     targetFile,
   };
 
@@ -135,23 +177,87 @@ function renderAgents(entries: PersonalizationLedgerEntry[]): string {
     .join("\n\n");
 }
 
+function sortEntriesBySummary(entries: PersonalizationLedgerEntry[]): PersonalizationLedgerEntry[] {
+  return [...entries].sort((left, right) =>
+    normalizeText(left.summary).localeCompare(normalizeText(right.summary), "ja")
+    || normalizeText(left.canonicalText).localeCompare(normalizeText(right.canonicalText), "ja"));
+}
+
+function renderBulletSection(heading: string, entries: PersonalizationLedgerEntry[]): string {
+  if (entries.length === 0) {
+    return "";
+  }
+  return [
+    heading,
+    ...sortEntriesBySummary(entries).map((entry) => `- ${entry.canonicalText}`),
+  ].join("\n");
+}
+
 function renderMemory(entries: PersonalizationLedgerEntry[]): string {
-  const sections: Array<{ heading: string; category: PersonalizationLedgerEntry["category"] }> = [
-    { heading: "## Terminology", category: "terminology" },
-    { heading: "## People and Projects", category: "people-and-projects" },
-    { heading: "## Preferences", category: "preferences" },
-    { heading: "## Context", category: "context" },
-  ];
-  return sections
-    .map(({ heading, category }) => {
-      const lines = entries
-        .filter((entry) => entry.category === category)
-        .map((entry) => `- ${entry.canonicalText}`)
-        .sort((a, b) => a.localeCompare(b, "ja"));
-      return lines.length > 0 ? [heading, ...lines].join("\n") : "";
+  const normalizedEntries = entries.map((entry) => ({
+    ...entry,
+    category: normalizeMemoryCategory(entry.category),
+    projectName: normalizeProjectName(entry.projectName),
+  }));
+  const sections: string[] = [];
+  const projectNames = Array.from(new Set(
+    normalizedEntries
+      .filter((entry) => PROJECT_MEMORY_CATEGORIES.has(entry.category) && entry.projectName)
+      .map((entry) => entry.projectName as string),
+  )).sort((left, right) => left.localeCompare(right, "ja"));
+
+  const projectSections = projectNames
+    .map((projectName) => {
+      const projectEntries = normalizedEntries.filter((entry) => entry.projectName === projectName);
+      const parts = [
+        renderBulletSection("#### Overview", projectEntries.filter((entry) => entry.category === "project-overview")),
+        renderBulletSection("#### Members And Roles", projectEntries.filter((entry) => entry.category === "members-and-roles")),
+        renderBulletSection("#### Roadmap And Milestones", projectEntries.filter((entry) => entry.category === "roadmap-and-milestones")),
+      ].filter(Boolean);
+      if (parts.length === 0) {
+        return "";
+      }
+      return [`### ${projectName}`, ...parts].join("\n\n");
     })
-    .filter(Boolean)
-    .join("\n\n");
+    .filter(Boolean);
+
+  if (projectSections.length > 0) {
+    sections.push(["## Projects", ...projectSections].join("\n\n"));
+  }
+
+  const sharedTerminology = renderBulletSection(
+    "## Shared Terminology",
+    normalizedEntries.filter((entry) => entry.category === "terminology"),
+  );
+  if (sharedTerminology) {
+    sections.push(sharedTerminology);
+  }
+
+  const sharedPreferences = renderBulletSection(
+    "## Shared Preferences",
+    normalizedEntries.filter((entry) => entry.category === "preferences"),
+  );
+  if (sharedPreferences) {
+    sections.push(sharedPreferences);
+  }
+
+  const sharedContext = renderBulletSection(
+    "## Shared Context",
+    normalizedEntries.filter((entry) => entry.category === "context"),
+  );
+  if (sharedContext) {
+    sections.push(sharedContext);
+  }
+
+  const generalProjectContext = renderBulletSection(
+    "## General Project Context",
+    normalizedEntries.filter((entry) => entry.category === "project-overview" && !entry.projectName),
+  );
+  if (generalProjectContext) {
+    sections.push(generalProjectContext);
+  }
+
+  return sections.join("\n\n");
 }
 
 function mergeGeneratedBlock(existing: string, generatedBody: string): string {

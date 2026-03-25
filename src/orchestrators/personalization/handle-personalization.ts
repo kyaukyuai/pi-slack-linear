@@ -33,10 +33,17 @@ function hasNonEmptyText(value: string | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function requiresProjectName(category: PersonalizationObservationInput["category"]): boolean {
+  return category === "project-overview"
+    || category === "members-and-roles"
+    || category === "roadmap-and-milestones";
+}
+
 function isObservationUseful(observation: {
   kind: "operating_rule" | "preference_or_fact" | "ignore";
   source?: "explicit" | "inferred";
   category?: PersonalizationObservationInput["category"];
+  projectName?: string;
   summary?: string;
   canonicalText?: string;
   confidence?: number;
@@ -50,6 +57,9 @@ function isObservationUseful(observation: {
     || !hasNonEmptyText(observation.summary)
     || !hasNonEmptyText(observation.canonicalText)
   ) {
+    return false;
+  }
+  if (requiresProjectName(observation.category) && !hasNonEmptyText(observation.projectName)) {
     return false;
   }
   if (typeof observation.confidence !== "number") {

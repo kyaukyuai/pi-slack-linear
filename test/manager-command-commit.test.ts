@@ -1672,12 +1672,14 @@ describe("manager command commit", () => {
           sourceLabel: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
           entries: [
             {
-              category: "people-and-projects",
+              category: "project-overview",
+              projectName: "AIクローンプラットフォーム",
               summary: "AIクローンプラットフォームプロジェクトはコギトとの協働プロジェクト",
               canonicalText: "AIクローンプラットフォームプロジェクトはコギト社との協働プロジェクトであり、金澤クローンを中心としたPoCが主テーマ。",
             },
             {
-              category: "context",
+              category: "roadmap-and-milestones",
+              projectName: "AIクローンプラットフォーム",
               summary: "初回PoCでは金澤クローンのSlack運用到達を目標にする",
               canonicalText: "初回PoCでは、金澤クローンがSlack上で日常相談に耐える状態まで到達することを目標にする。",
             },
@@ -1707,7 +1709,49 @@ describe("manager command commit", () => {
     expect(result.committed[0]?.summary).toContain("2026.03.10 | AIクローンプラットフォーム 初回会議共有資料");
 
     const memory = await readFile(buildSystemPaths(workspaceDir).memoryFile, "utf8");
+    expect(memory).toContain("## Projects");
+    expect(memory).toContain("### AIクローンプラットフォーム");
     expect(memory).toContain("AIクローンプラットフォームプロジェクトはコギト社との協働プロジェクト");
     expect(memory).toContain("初回PoCでは、金澤クローンがSlack上で日常相談に耐える状態まで到達することを目標にする。");
+  });
+
+  it("rejects issue-level roadmap memory entries", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_workspace_memory",
+          entries: [
+            {
+              category: "roadmap-and-milestones",
+              projectName: "AIクローンプラットフォーム",
+              summary: "AIC-38 の現在期限",
+              canonicalText: "AIC-38 は 2026-03-27 期限で現在 Backlog のままです。",
+            },
+          ],
+          reasonSummary: "一時的な task 状態を保存しようとしたケースです。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-memory-update-reject",
+        messageTs: "msg-memory-update-reject-1",
+        userId: "U1",
+        text: "AIC-38 の期限を MEMORY に保存しておいて",
+      },
+      now: new Date("2026-03-25T01:15:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.reason).toContain("project-level milestones only");
   });
 });

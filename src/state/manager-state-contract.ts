@@ -139,6 +139,9 @@ export const personalizationCategorySchema = z.enum([
   "reply-style",
   "priority",
   "terminology",
+  "project-overview",
+  "members-and-roles",
+  "roadmap-and-milestones",
   "people-and-projects",
   "preferences",
   "context",
@@ -149,6 +152,7 @@ export const personalizationLedgerEntrySchema = z.object({
   kind: personalizationKindSchema,
   source: personalizationSourceSchema,
   category: personalizationCategorySchema,
+  projectName: z.string().trim().min(1).optional(),
   summary: z.string().trim().min(1),
   canonicalText: z.string().trim().min(1),
   confidence: z.number().min(0).max(1),
@@ -178,7 +182,29 @@ export const personalizationLedgerEntrySchema = z.object({
       message: "agents target must use an operating-rule category",
     });
   }
-  if (value.targetFile === "memory" && !["terminology", "people-and-projects", "preferences", "context"].includes(value.category)) {
+  if (
+    value.targetFile === "memory"
+    && ["project-overview", "members-and-roles", "roadmap-and-milestones"].includes(value.category)
+    && !value.projectName
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["projectName"],
+      message: "projectName is required for project-scoped memory categories",
+    });
+  }
+  if (
+    value.targetFile === "memory"
+    && ![
+      "terminology",
+      "project-overview",
+      "members-and-roles",
+      "roadmap-and-milestones",
+      "people-and-projects",
+      "preferences",
+      "context",
+    ].includes(value.category)
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["category"],

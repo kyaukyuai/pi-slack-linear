@@ -116,9 +116,9 @@ NOTION_AGENDA_PARENT_PAGE_ID=notion-page-id-...
 - `NOTION_AGENDA_PARENT_PAGE_ID` を追加すると、その parent page 配下に agenda page を作成できます。
 - 既存 Notion page への title 更新、append の追記、Cogito 管理ページに限定した heading_2 単位の `replace_section` 更新、archive/trash も Slack から扱えます。database row の更新・削除は未対応です。
 - `/workspace/system/AGENTS.md` には安定した進め方や返信方針のような operating rules を書けます。manager/system turn に加えて reply/router/intake/research/follow-up planner に毎 turn 注入されます。ただし schema や safety rule は上書きしません。
-- `/workspace/system/MEMORY.md` には業務の進め方、用語、背景知識、個別の好みを書けます。これも manager/system turn に加えて reply/router/intake/research/follow-up planner に毎 turn 注入されます。
+- `/workspace/system/MEMORY.md` には用語、背景知識、個別の好みだけでなく、プロジェクト概要、メンバーと役割、ロードマップ、主要マイルストーンのような project knowledge を書けます。これも manager/system turn に加えて reply/router/intake/research/follow-up planner に毎 turn 注入されます。issue 単位の期限や current status は入れず、スケジュールは milestone-only で扱います。
 - `/workspace/system/AGENDA_TEMPLATE.md` に agenda の既定構成を書いておくと、Notion agenda 作成・更新に関係する manager/system turn だけに注入されます。
-- runtime `AGENTS.md` / `MEMORY.md` は silent auto-update 対象で、候補は `/workspace/system/personalization-ledger.json` に残ります。
+- runtime `AGENTS.md` / `MEMORY.md` は silent auto-update 対象で、候補は `/workspace/system/personalization-ledger.json` に残ります。rich な project snapshot は `MEMORY に保存して` の明示依頼を主経路にし、silent 側は高信頼な project fact を少数だけ昇格させます。
 - repo ルートの `AGENTS.md` は開発ルール用で、runtime customization には使いません。
 - `LINEAR_WEBHOOK_ENABLED=true` の場合は、`LINEAR_WEBHOOK_PUBLIC_URL` と `LINEAR_WEBHOOK_SECRET` が必須です。
 - webhook listener は `LINEAR_WEBHOOK_PORT` / `LINEAR_WEBHOOK_PATH` で待ち受けます。Compose では同 port を host に公開します。

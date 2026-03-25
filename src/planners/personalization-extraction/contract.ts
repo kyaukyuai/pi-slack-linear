@@ -13,6 +13,9 @@ export const personalizationObservationCategorySchema = z.enum([
   "reply-style",
   "priority",
   "terminology",
+  "project-overview",
+  "members-and-roles",
+  "roadmap-and-milestones",
   "people-and-projects",
   "preferences",
   "context",
@@ -22,6 +25,7 @@ export const personalizationObservationSchema = z.object({
   kind: personalizationObservationKindSchema,
   source: personalizationObservationSourceSchema.optional(),
   category: personalizationObservationCategorySchema.optional(),
+  projectName: z.string().trim().min(1).optional(),
   summary: z.string().trim().min(1).optional(),
   canonicalText: z.string().trim().min(1).optional(),
   confidence: z.number().min(0).max(1).optional(),
@@ -64,6 +68,17 @@ export const personalizationObservationSchema = z.object({
       message: "confidence is required",
     });
   }
+  if (
+    value.kind === "preference_or_fact"
+    && (value.category === "project-overview" || value.category === "members-and-roles" || value.category === "roadmap-and-milestones")
+    && !value.projectName
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["projectName"],
+      message: "projectName is required for project-scoped categories",
+    });
+  }
 });
 
 export const personalizationExtractionSchema = z.object({
@@ -89,7 +104,18 @@ export interface PersonalizationExtractionInput {
 export interface PersonalizationObservation {
   kind: "operating_rule" | "preference_or_fact" | "ignore";
   source?: "explicit" | "inferred";
-  category?: "workflow" | "reply-style" | "priority" | "terminology" | "people-and-projects" | "preferences" | "context";
+  category?:
+    | "workflow"
+    | "reply-style"
+    | "priority"
+    | "terminology"
+    | "project-overview"
+    | "members-and-roles"
+    | "roadmap-and-milestones"
+    | "people-and-projects"
+    | "preferences"
+    | "context";
+  projectName?: string;
   summary?: string;
   canonicalText?: string;
   confidence?: number;
