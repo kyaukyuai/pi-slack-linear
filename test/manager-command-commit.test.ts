@@ -1422,4 +1422,53 @@ describe("manager command commit", () => {
     expect(result.committed[0]?.summary).toContain("Notion page archived:");
     expect(result.committed[0]?.summary).toContain("<https://www.notion.so/notion-page-3|削除対象ページ>");
   });
+
+  it("updates workspace memory explicitly from durable entries", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_workspace_memory",
+          sourceLabel: "2026.03.10 | AIクローンプラットフォーム 初回会議共有資料",
+          entries: [
+            {
+              category: "people-and-projects",
+              summary: "AIクローンプラットフォームプロジェクトはコギトとの協働プロジェクト",
+              canonicalText: "AIクローンプラットフォームプロジェクトはコギト社との協働プロジェクトであり、金澤クローンを中心としたPoCが主テーマ。",
+            },
+            {
+              category: "context",
+              summary: "初回PoCでは金澤クローンのSlack運用到達を目標にする",
+              canonicalText: "初回PoCでは、金澤クローンがSlack上で日常相談に耐える状態まで到達することを目標にする。",
+            },
+          ],
+          reasonSummary: "Notion の概要資料を MEMORY に保存する依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-memory-update",
+        messageTs: "msg-memory-update-1",
+        userId: "U1",
+        text: "この資料の概要を MEMORY に保存しておいて",
+      },
+      now: new Date("2026-03-25T01:14:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(result.committed[0]?.summary).toContain("Workspace MEMORY を更新しました。");
+    expect(result.committed[0]?.summary).toContain("2026.03.10 | AIクローンプラットフォーム 初回会議共有資料");
+
+    const memory = await readFile(buildSystemPaths(workspaceDir).memoryFile, "utf8");
+    expect(memory).toContain("AIクローンプラットフォームプロジェクトはコギト社との協働プロジェクト");
+    expect(memory).toContain("初回PoCでは、金澤クローンがSlack上で日常相談に耐える状態まで到達することを目標にする。");
+  });
 });

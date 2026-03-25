@@ -123,14 +123,22 @@ function formatNotionPageContentText(page: {
   excerpt?: string;
   lines?: Array<{ text?: string }>;
 }): string {
-  const bodyLines = (page.lines ?? [])
+  const allBodyLines = (page.lines ?? [])
     .map((line) => line.text?.trim())
-    .filter((line): line is string => Boolean(line))
-    .slice(0, 5);
+    .filter((line): line is string => Boolean(line));
+  const previewLines = allBodyLines.slice(0, 20);
   return [
     `Title: ${formatNotionPageLabel(page)}`,
     page.excerpt ? `Excerpt: ${page.excerpt}` : undefined,
-    ...(bodyLines.length > 0 ? ["Page lines:", ...bodyLines.map((line) => `- ${line}`)] : []),
+    ...(previewLines.length > 0
+      ? [
+          `Page lines preview (${previewLines.length}/${allBodyLines.length} shown):`,
+          ...previewLines.map((line) => `- ${line}`),
+          ...(allBodyLines.length > previewLines.length
+            ? [`- ... ${allBodyLines.length - previewLines.length} more lines omitted from this preview`]
+            : []),
+        ]
+      : []),
   ].filter(Boolean).join("\n");
 }
 
@@ -1134,6 +1142,24 @@ function createProposalTools(): ToolDefinition[] {
       commandType: "run_scheduler_job_now",
       parameters: Type.Object({
         jobId: Type.String({ description: "Existing custom scheduler job id." }),
+        reasonSummary: Type.String({ description: "Short reason for this proposal." }),
+        evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
+        dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
+      }),
+    }),
+    createProposalTool({
+      name: "propose_update_workspace_memory",
+      label: "Propose Update Workspace Memory",
+      description: "Propose saving durable operator-specific knowledge into workspace MEMORY. This does not execute the mutation.",
+      promptSnippet: "Use this only when the user explicitly asks to save durable facts, terminology, project context, or preferences into MEMORY.",
+      commandType: "update_workspace_memory",
+      parameters: Type.Object({
+        sourceLabel: Type.Optional(Type.String({ description: "Optional short source label such as the Notion page title." })),
+        entries: Type.Array(Type.Object({
+          category: Type.String({ description: "One of terminology | people-and-projects | preferences | context." }),
+          summary: Type.String({ description: "Short stable summary used for dedupe." }),
+          canonicalText: Type.String({ description: "Stable MEMORY sentence to save." }),
+        })),
         reasonSummary: Type.String({ description: "Short reason for this proposal." }),
         evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
         dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),

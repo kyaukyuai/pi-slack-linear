@@ -123,6 +123,9 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("If Notion tools are available, use Notion as reference material for specs, notes, and operating context.");
     expect(prompt).toContain("When the user explicitly asks to create an agenda in Notion, use propose_create_notion_agenda instead of creating a Linear issue.");
     expect(prompt).toContain("When the user explicitly asks to update, append to, retitle, archive, or delete a Notion page, use the dedicated Notion page proposal tools instead of creating or updating a Linear issue.");
+    expect(prompt).toContain("When the user explicitly asks to save durable knowledge into MEMORY or workspace memory, use propose_update_workspace_memory with a small set of stable facts instead of relying only on silent personalization.");
+    expect(prompt).toContain("For Notion-based MEMORY save requests, call notion_get_page_content first and extract durable project facts, terminology, preferences, or context from the page content.");
+    expect(prompt).toContain("Do not copy an entire document into MEMORY. Save only stable facts that should persist across future turns.");
     expect(prompt).toContain("For Notion agenda creation, use the configured default parent page unless the user clearly specifies a different Notion parent page.");
     expect(prompt).toContain("A minimal Notion agenda should have a short title and practical sections like 目的, 議題, 確認事項, and 次のアクション.");
     expect(prompt).toContain("For Notion page updates in this scope, use propose_update_notion_page with an explicit pageId");
@@ -132,6 +135,7 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("Do not apply Notion page update or archive proposals to notion-database reference items.");
     expect(prompt).toContain("For reference-material replies that mention multiple Notion pages, documents, or databases, use short bullet lines and include markdown links when URLs are available.");
     expect(prompt).toContain("When notion_get_page_content succeeds, summarize the relevant excerpt or page lines instead of saying the content is unavailable.");
+    expect(prompt).toContain("A notion_get_page_content page-lines preview may show only the first visible lines. Do not misstate that as a retrieval limit if headings and multiple sections are already visible.");
     expect(prompt).toContain("If the user explicitly says database or データベース, treat it as a database-only request unless they also ask for pages.");
     expect(prompt).toContain("A request like Notion の database を検索して is still a query. Do not downgrade it to casual conversation just because the keyword is missing.");
     expect(prompt).toContain("If the user asks to browse or search Notion databases without a keyword, use notion_list_databases before asking a follow-up question.");

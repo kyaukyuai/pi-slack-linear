@@ -12,12 +12,24 @@ const linearMocks = vi.hoisted(() => ({
   listOpenLinearIssues: vi.fn(),
 }));
 
+const notionMocks = vi.hoisted(() => ({
+  getNotionPageContent: vi.fn(),
+}));
+
 vi.mock("../src/lib/linear.js", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/linear.js")>("../src/lib/linear.js");
   return {
     ...actual,
     getLinearIssue: linearMocks.getLinearIssue,
     listOpenLinearIssues: linearMocks.listOpenLinearIssues,
+  };
+});
+
+vi.mock("../src/lib/notion.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/notion.js")>("../src/lib/notion.js");
+  return {
+    ...actual,
+    getNotionPageContent: notionMocks.getNotionPageContent,
   };
 });
 
@@ -51,6 +63,7 @@ describe("manager agent tools", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    notionMocks.getNotionPageContent.mockReset();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -216,5 +229,46 @@ describe("manager agent tools", () => {
         }),
       ]),
     );
+  });
+
+  it("shows more than five Notion page lines in the content preview when available", async () => {
+    notionMocks.getNotionPageContent.mockResolvedValueOnce({
+      id: "notion-page-1",
+      title: "AIクローンプラットフォーム 初回会議共有資料",
+      url: "https://www.notion.so/notion-page-1",
+      excerpt: "初回会議の概要",
+      lines: [
+        { text: "1. 本日の確認事項" },
+        { text: "2. 3ヶ月後の金澤クローンのゴール" },
+        { text: "3. その先に目指すビジョン" },
+        { text: "4. NotebookLM との違い" },
+        { text: "5. 今回の実施スコープ" },
+        { text: "6. 3ヶ月の進め方" },
+        { text: "7. 本日合意したいこと" },
+      ],
+    });
+
+    const tools = createManagerAgentTools(config, {
+      policy: { load: vi.fn() },
+      workgraph: {} as never,
+    });
+    const tool = tools.find((entry) => entry.name === "notion_get_page_content");
+
+    expect(tool).toBeDefined();
+    const result = await tool!.execute("tool-call-notion-content", { pageId: "notion-page-1" });
+    const text = result.content[0]?.text ?? "";
+
+    expect(text).toContain("Page lines preview (7/7 shown):");
+    expect(text).toContain("6. 3ヶ月の進め方");
+    expect(text).toContain("7. 本日合意したいこと");
+  });
+
+  it("includes a dedicated workspace memory proposal tool", async () => {
+    const tools = createManagerAgentTools(config, {
+      policy: { load: vi.fn() },
+      workgraph: {} as never,
+    });
+
+    expect(tools.some((entry) => entry.name === "propose_update_workspace_memory")).toBe(true);
   });
 });

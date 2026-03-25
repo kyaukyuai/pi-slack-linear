@@ -21,6 +21,10 @@ import {
   updateNotionPage,
   type NotionCommandEnv,
 } from "./notion.js";
+import {
+  applyPersonalizationObservations,
+  type PersonalizationObservationInput,
+} from "./personalization-commit.js";
 import { getSlackThreadContext } from "./slack-context.js";
 import { normalizeSchedulerJobs, recordManualJobRun } from "./scheduler.js";
 import {
@@ -228,6 +232,23 @@ const archiveNotionPageProposalSchema = proposalBaseSchema.extend({
   pageId: z.string().trim().min(1),
 });
 
+const workspaceMemoryCategorySchema = z.enum([
+  "terminology",
+  "people-and-projects",
+  "preferences",
+  "context",
+]);
+
+const updateWorkspaceMemoryProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("update_workspace_memory"),
+  sourceLabel: optionalStringSchema,
+  entries: z.array(z.object({
+    category: workspaceMemoryCategorySchema,
+    summary: z.string().trim().min(1),
+    canonicalText: z.string().trim().min(1),
+  })).min(1).max(12),
+});
+
 const followupExtractedFieldsSchema = z.record(z.string(), z.string()).default({});
 
 const resolveFollowupProposalSchema = proposalBaseSchema.extend({
@@ -326,6 +347,7 @@ export const managerCommandProposalSchema = z.discriminatedUnion("commandType", 
   createNotionAgendaProposalSchema,
   updateNotionPageProposalSchema,
   archiveNotionPageProposalSchema,
+  updateWorkspaceMemoryProposalSchema,
   resolveFollowupProposalSchema,
   reviewFollowupProposalSchema,
 ]);
@@ -417,7 +439,7 @@ export interface ManagerCommitResult {
 
 export interface CommitManagerCommandArgs {
   config: AppConfig;
-  repositories: Pick<ManagerRepositories, "ownerMap" | "planning" | "followups" | "workgraph">;
+  repositories: Pick<ManagerRepositories, "ownerMap" | "planning" | "followups" | "personalization" | "workgraph">;
   proposals: ManagerCommandProposal[];
   message: ManagerCommitMessageContext | ManagerCommitSystemContext;
   now: Date;
@@ -1916,6 +1938,37 @@ async function commitArchiveNotionPageProposal(
   };
 }
 
+async function commitUpdateWorkspaceMemoryProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof updateWorkspaceMemoryProposalSchema>,
+): Promise<ManagerCommittedCommand> {
+  const observations: PersonalizationObservationInput[] = proposal.entries.map((entry) => ({
+    kind: "preference_or_fact",
+    source: "explicit",
+    category: entry.category,
+    summary: entry.summary,
+    canonicalText: entry.canonicalText,
+    confidence: 1,
+  }));
+  const ledger = await args.repositories.personalization.load();
+  const result = await applyPersonalizationObservations({
+    paths: buildSystemPaths(args.config.workspaceDir),
+    ledger,
+    observations,
+    now: args.now,
+  });
+  await args.repositories.personalization.save(result.ledger);
+
+  const source = proposal.sourceLabel?.trim();
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: source
+      ? `Workspace MEMORY を更新しました。${source} から ${proposal.entries.length} 件を反映しました。`
+      : `Workspace MEMORY を更新しました。${proposal.entries.length} 件を反映しました。`,
+  };
+}
+
 async function commitResolveFollowupProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof resolveFollowupProposalSchema>,
@@ -2101,6 +2154,8 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
                   ? await commitUpdateNotionPageProposal(commitArgs, validatedProposal)
                 : validatedProposal.commandType === "archive_notion_page"
                   ? await commitArchiveNotionPageProposal(commitArgs, validatedProposal)
+                : validatedProposal.commandType === "update_workspace_memory"
+                  ? await commitUpdateWorkspaceMemoryProposal(commitArgs, validatedProposal)
                 : validatedProposal.commandType === "resolve_followup"
                   ? await commitResolveFollowupProposal(commitArgs, validatedProposal)
                   : await commitReviewFollowupProposal(commitArgs, validatedProposal);
