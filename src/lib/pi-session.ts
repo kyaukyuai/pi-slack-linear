@@ -41,6 +41,7 @@ import {
   type PersonalizationExtractionInput,
   type PersonalizationExtractionResult,
 } from "../planners/personalization-extraction/index.js";
+import { selectFinalAssistantText } from "../runtime/assistant-text.js";
 import { createManagerAgentTools } from "./manager-agent-tools.js";
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
@@ -494,30 +495,6 @@ function buildSystemPromptInput(input: SystemAgentInput, config: AppConfig): str
   ].join("\n");
 }
 
-function extractAssistantText(messages: unknown[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: string; content?: unknown };
-    if (message.role !== "assistant") continue;
-
-    const content = message.content;
-    if (typeof content === "string") return content.trim();
-    if (Array.isArray(content)) {
-      return content
-        .map((item) => {
-          if (typeof item === "string") return item;
-          if (item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item) {
-            return String(item.text);
-          }
-          return "";
-        })
-        .join("")
-        .trim();
-    }
-  }
-
-  return "";
-}
-
 async function runIsolatedPromptTurn(
   config: AppConfig,
   paths: ThreadPaths,
@@ -569,7 +546,7 @@ async function runIsolatedPromptTurn(
   try {
     await session.prompt(prompt);
     await session.agent.waitForIdle();
-    const text = deltas.join("").trim() || extractAssistantText(session.messages as unknown[]);
+    const text = selectFinalAssistantText(session.messages as unknown[], deltas);
     if (!text) {
       throw new Error("Agent finished without producing a research synthesis reply");
     }
@@ -1092,7 +1069,7 @@ async function runStructuredPromptTurn(
     await runtime.session.agent.waitForIdle();
 
     const newMessages = (runtime.session.messages as unknown[]).slice(messageCountBefore);
-    const reply = deltas.join("").trim() || extractAssistantText(newMessages);
+    const reply = selectFinalAssistantText(newMessages, deltas);
     if (!reply) {
       throw new Error("Agent finished without producing a reply");
     }
@@ -1169,7 +1146,7 @@ async function runPromptTurn(config: AppConfig, paths: ThreadPaths, prompt: stri
     await runtime.session.agent.waitForIdle();
 
     const newMessages = (runtime.session.messages as unknown[]).slice(messageCountBefore);
-    const text = deltas.join("").trim() || extractAssistantText(newMessages);
+    const text = selectFinalAssistantText(newMessages, deltas);
     if (!text) {
       throw new Error("Agent finished without producing a reply");
     }
