@@ -94,6 +94,8 @@ BOT_MODEL=claude-sonnet-4-6
 BOT_THINKING_LEVEL=minimal
 BOT_MAX_OUTPUT_TOKENS=
 BOT_RETRY_MAX_RETRIES=1
+BOT_UID=1000
+BOT_GID=1000
 WORKSPACE_DIR=/workspace
 HEARTBEAT_INTERVAL_MIN=30
 HEARTBEAT_ACTIVE_LOOKBACK_HOURS=24
@@ -125,6 +127,7 @@ NOTION_AGENDA_PARENT_PAGE_ID=notion-page-id-...
 - `BOT_THINKING_LEVEL` は `off | minimal | low | medium | high | xhigh` を受け付けます。
 - `BOT_MAX_OUTPUT_TOKENS` を入れると、repo 側の stream wrapper で every LLM call に `maxTokens` を注入します。未指定なら library/provider default のままです。
 - `BOT_RETRY_MAX_RETRIES` は SDK retry settings の `maxRetries` に対応します。
+- `BOT_UID` / `BOT_GID` は Docker bind mount 上の runtime files を host user 所有にそろえるための uid/gid です。`exe.dev` の `exedev` は通常 `1000:1000` です。ローカル Docker 運用では `id -u` / `id -g` の値を入れてください。
 - manager review と heartbeat を既定で使うなら `HEARTBEAT_INTERVAL_MIN=30` のままにします。
 - `WORKGRAPH_MAINTENANCE_INTERVAL_MIN=15` なら 15 分ごとに health check と auto compaction 判定を行います。
 - `WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS` に達すると active `workgraph-events.jsonl` を snapshot に畳み込みます。
@@ -234,6 +237,8 @@ git pull
 docker compose up -d --build
 ```
 
+`BOT_UID` / `BOT_GID` を設定している場合、container は起動時に `/workspace/system` と `/workspace/threads` をその uid/gid に寄せてから bot を同じ uid/gid で実行します。以前の deploy で root 所有になっていた runtime files も、この再起動で通常運用向け owner に戻せます。
+
 停止:
 
 ```bash
@@ -259,6 +264,8 @@ docker compose down
 - `webhook-deliveries.json`
 
 このうち、明示的に編集したくなるのは主に `policy.json`, `owner-map.json`, `HEARTBEAT.md`, runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` です。`personalization-ledger.json` は観測用で、通常は直接編集しません。
+
+`BOT_UID` / `BOT_GID` が正しく設定されていれば、これらの files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
 
 `policy.json` では follow-up mention 条件も調整できます。既定では `blocked / overdue / due_today / due_soon` を初回から mention し、`stale / owner_missing` は 1 回 unresolved の再通知から mention します。
 

@@ -84,6 +84,8 @@ Optional:
 - `BOT_THINKING_LEVEL`
 - `BOT_MAX_OUTPUT_TOKENS`
 - `BOT_RETRY_MAX_RETRIES`
+- `BOT_UID`
+- `BOT_GID`
 - `WORKSPACE_DIR`
 - `HEARTBEAT_INTERVAL_MIN`
 - `HEARTBEAT_ACTIVE_LOOKBACK_HOURS`
@@ -130,6 +132,10 @@ LLM runtime は env で global に設定できます。
   - 指定した場合は repo 側の stream wrapper で every LLM call に `maxTokens` / `max_tokens` として反映します。
 - `BOT_RETRY_MAX_RETRIES`
   - SDK retry settings の `retry.maxRetries` に入ります。
+- `BOT_UID` / `BOT_GID`
+  - Docker bind mount 上の runtime files を host user 所有にそろえるための uid/gid です。
+  - docker compose 運用では host の `id -u` / `id -g` を入れてください。
+  - 起動時に `/workspace/system` と `/workspace/threads` をこの uid/gid に寄せ、その後の bot 実行も同じ uid/gid に落とします。
 
 現状の Anthropic runtime では `sessionId` は agent までは渡りますが provider request には使われません。`temperature` と `cacheRetention` は現在 read-only で、repo 側からは設定していません。
 
@@ -196,7 +202,7 @@ Slack から既存 issue の実行依頼もできます。主な例:
 ]
 ```
 
-`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` と `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の個別知識、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。
+`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` と `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の個別知識、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。`BOT_UID` / `BOT_GID` を設定している場合、これらの runtime system files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
 
 `policy.json` では次の manager knobs を調整できます。
 
