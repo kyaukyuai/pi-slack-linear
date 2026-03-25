@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+export const BOT_THINKING_LEVEL_VALUES = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+export type BotThinkingLevel = typeof BOT_THINKING_LEVEL_VALUES[number];
+
 const booleanishSchema = z.preprocess((value) => {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -9,6 +20,12 @@ const booleanishSchema = z.preprocess((value) => {
   }
   return value;
 }, z.boolean());
+
+const optionalPositiveIntSchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
+  return value;
+}, z.coerce.number().int().positive().optional());
 
 const envSchema = z.object({
   SLACK_APP_TOKEN: z.string().min(1),
@@ -21,6 +38,9 @@ const envSchema = z.object({
   NOTION_API_TOKEN: z.string().min(1).optional(),
   NOTION_AGENDA_PARENT_PAGE_ID: z.string().min(1).optional(),
   BOT_MODEL: z.string().default("claude-sonnet-4-5"),
+  BOT_THINKING_LEVEL: z.enum(BOT_THINKING_LEVEL_VALUES).default("minimal"),
+  BOT_MAX_OUTPUT_TOKENS: optionalPositiveIntSchema,
+  BOT_RETRY_MAX_RETRIES: z.coerce.number().int().nonnegative().default(1),
   WORKSPACE_DIR: z.string().default("/workspace"),
   LINEAR_WEBHOOK_ENABLED: booleanishSchema.default(false),
   LINEAR_WEBHOOK_PUBLIC_URL: z.string().url().optional(),
@@ -72,6 +92,9 @@ export interface AppConfig {
   notionApiToken?: string;
   notionAgendaParentPageId?: string;
   botModel: string;
+  botThinkingLevel: BotThinkingLevel;
+  botMaxOutputTokens?: number;
+  botRetryMaxRetries: number;
   workspaceDir: string;
   linearWebhookEnabled: boolean;
   linearWebhookPublicUrl?: string;
@@ -103,6 +126,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     notionApiToken: parsed.NOTION_API_TOKEN,
     notionAgendaParentPageId: parsed.NOTION_AGENDA_PARENT_PAGE_ID,
     botModel: parsed.BOT_MODEL,
+    botThinkingLevel: parsed.BOT_THINKING_LEVEL,
+    botMaxOutputTokens: parsed.BOT_MAX_OUTPUT_TOKENS,
+    botRetryMaxRetries: parsed.BOT_RETRY_MAX_RETRIES,
     workspaceDir: parsed.WORKSPACE_DIR,
     linearWebhookEnabled: parsed.LINEAR_WEBHOOK_ENABLED,
     linearWebhookPublicUrl: parsed.LINEAR_WEBHOOK_PUBLIC_URL,

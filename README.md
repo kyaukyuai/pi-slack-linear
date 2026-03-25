@@ -81,6 +81,9 @@ Optional:
 - `NOTION_API_TOKEN`
 - `NOTION_AGENDA_PARENT_PAGE_ID`
 - `BOT_MODEL`
+- `BOT_THINKING_LEVEL`
+- `BOT_MAX_OUTPUT_TOKENS`
+- `BOT_RETRY_MAX_RETRIES`
 - `WORKSPACE_DIR`
 - `HEARTBEAT_INTERVAL_MIN`
 - `HEARTBEAT_ACTIVE_LOOKBACK_HOURS`
@@ -114,6 +117,21 @@ webhook を有効にする場合は以下も必要です。
   - default は `/hooks/linear`
 
 `ANTHROPIC_API_KEY` を入れない場合は、手元の `~/.pi/agent/auth.json` を docker compose で `/workspace/.pi/agent/auth.json` に mount して使えます。
+
+LLM runtime は env で global に設定できます。
+
+- `BOT_MODEL`
+  - `ModelRegistry.find("anthropic", BOT_MODEL)` で解決する model id。
+- `BOT_THINKING_LEVEL`
+  - `off | minimal | low | medium | high | xhigh`
+  - reasoning 対応 model では provider の reasoning / thinking 設定に変換されます。
+- `BOT_MAX_OUTPUT_TOKENS`
+  - 未指定なら library/provider default を使います。
+  - 指定した場合は repo 側の stream wrapper で every LLM call に `maxTokens` / `max_tokens` として反映します。
+- `BOT_RETRY_MAX_RETRIES`
+  - SDK retry settings の `retry.maxRetries` に入ります。
+
+現状の Anthropic runtime では `sessionId` は agent までは渡りますが provider request には使われません。`temperature` と `cacheRetention` は現在 read-only で、repo 側からは設定していません。
 
 ## Heartbeat and Scheduler
 
@@ -283,4 +301,10 @@ runtime personalization の ledger と現在の `AGENTS.md` / `MEMORY.md` を確
 
 ```bash
 npm run manager:diagnostics -- personalization /workspace
+```
+
+現在の LLM runtime config と provider payload preview を確認する場合:
+
+```bash
+npm run manager:diagnostics -- llm /workspace
 ```

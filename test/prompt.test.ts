@@ -43,6 +43,9 @@ const config: AppConfig = {
   notionApiToken: "secret_test",
   notionAgendaParentPageId: "parent-page-1",
   botModel: "claude-sonnet-4-6",
+  botThinkingLevel: "minimal",
+  botMaxOutputTokens: undefined,
+  botRetryMaxRetries: 1,
   workspaceDir: "/tmp/cogito-work-manager",
   linearWebhookEnabled: false,
   linearWebhookPublicUrl: undefined,
@@ -52,6 +55,9 @@ const config: AppConfig = {
   heartbeatIntervalMin: 30,
   heartbeatActiveLookbackHours: 24,
   schedulerPollSec: 30,
+  workgraphMaintenanceIntervalMin: 15,
+  workgraphHealthWarnActiveEvents: 200,
+  workgraphAutoCompactMaxActiveEvents: 500,
   logLevel: "info",
 };
 

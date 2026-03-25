@@ -8,7 +8,6 @@ import {
   DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
-  SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import {
   runManagerReplyTurnWithExecutor,
@@ -67,6 +66,12 @@ import {
 import type { TaskIntent } from "./slack.js";
 import { buildSystemPaths, loadWorkspaceCustomization, type WorkspaceCustomizationContext } from "./system-workspace.js";
 import type { AttachmentRecord, ThreadPaths } from "./thread-workspace.js";
+import {
+  createLlmSettingsManager,
+  resolveLlmRuntimeDependencies,
+  type LlmRuntimeConfig,
+  wrapStreamFnWithMaxOutputTokens,
+} from "../runtime/llm-runtime-config.js";
 
 export interface AgentInput {
   channelId: string;
@@ -195,6 +200,7 @@ interface SharedRuntime {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   model: Awaited<ReturnType<ModelRegistry["getAvailable"]>>[number];
+  llmRuntimeConfig: LlmRuntimeConfig;
   managerRepositories: ManagerRepositories;
 }
 
@@ -540,10 +546,7 @@ async function runIsolatedPromptTurn(
   sessionSuffix: string,
 ): Promise<string> {
   const shared = await getSharedRuntime(config);
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 1 },
-  });
+  const settingsManager = createLlmSettingsManager(shared.llmRuntimeConfig);
 
   const loader = new DefaultResourceLoader({
     cwd: paths.rootDir,
@@ -563,7 +566,7 @@ async function runIsolatedPromptTurn(
     cwd: paths.rootDir,
     agentDir: shared.agentDir,
     model: shared.model,
-    thinkingLevel: "minimal",
+    thinkingLevel: shared.llmRuntimeConfig.effectiveThinkingLevel,
     authStorage: shared.authStorage,
     modelRegistry: shared.modelRegistry,
     resourceLoader: loader,
@@ -572,6 +575,10 @@ async function runIsolatedPromptTurn(
     tools: [],
     customTools: [],
   });
+  session.agent.streamFn = wrapStreamFnWithMaxOutputTokens(
+    session.agent.streamFn,
+    shared.llmRuntimeConfig.maxOutputTokens,
+  );
 
   const deltas: string[] = [];
   const unsubscribe = session.subscribe((event) => {
@@ -601,27 +608,14 @@ function buildThreadRuntimeKey(paths: ThreadPaths): string {
 async function getSharedRuntime(config: AppConfig): Promise<SharedRuntime> {
   if (!sharedRuntimePromise) {
     sharedRuntimePromise = (async () => {
-      const agentDir = join(config.workspaceDir, ".pi", "agent");
-      const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-      if (config.anthropicApiKey) {
-        authStorage.setRuntimeApiKey("anthropic", config.anthropicApiKey);
-      }
-
-      const modelRegistry = new ModelRegistry(authStorage);
-      const requestedModel = modelRegistry.find("anthropic", config.botModel);
-      const availableModels = await modelRegistry.getAvailable();
-      const fallbackModel = availableModels.find((model) => model.provider === "anthropic");
-      const model = requestedModel ?? fallbackModel;
-
-      if (!model) {
-        throw new Error(`Unable to resolve bot model "${config.botModel}" for Anthropic`);
-      }
+      const resolved = await resolveLlmRuntimeDependencies(config);
 
       return {
-        agentDir,
-        authStorage,
-        modelRegistry,
-        model,
+        agentDir: resolved.agentDir,
+        authStorage: resolved.authStorage,
+        modelRegistry: resolved.modelRegistry,
+        model: resolved.model,
+        llmRuntimeConfig: resolved.runtimeConfig,
         managerRepositories: createFileBackedManagerRepositories(buildSystemPaths(config.workspaceDir)),
       };
     })().catch((error) => {
@@ -636,10 +630,7 @@ async function getSharedRuntime(config: AppConfig): Promise<SharedRuntime> {
 async function createThreadRuntime(config: AppConfig, paths: ThreadPaths): Promise<ThreadRuntime> {
   const shared = await getSharedRuntime(config);
   const managerPolicy = await shared.managerRepositories.policy.load();
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 1 },
-  });
+  const settingsManager = createLlmSettingsManager(shared.llmRuntimeConfig);
 
   const loader = new DefaultResourceLoader({
     cwd: paths.rootDir,
@@ -658,7 +649,7 @@ async function createThreadRuntime(config: AppConfig, paths: ThreadPaths): Promi
     cwd: paths.rootDir,
     agentDir: shared.agentDir,
     model: shared.model,
-    thinkingLevel: "minimal",
+    thinkingLevel: shared.llmRuntimeConfig.effectiveThinkingLevel,
     authStorage: shared.authStorage,
     modelRegistry: shared.modelRegistry,
     resourceLoader: loader,
@@ -667,6 +658,10 @@ async function createThreadRuntime(config: AppConfig, paths: ThreadPaths): Promi
     tools: [],
     customTools: createManagerAgentTools(config, shared.managerRepositories),
   });
+  session.agent.streamFn = wrapStreamFnWithMaxOutputTokens(
+    session.agent.streamFn,
+    shared.llmRuntimeConfig.maxOutputTokens,
+  );
 
   return {
     session,

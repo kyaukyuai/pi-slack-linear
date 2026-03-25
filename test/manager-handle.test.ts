@@ -451,6 +451,9 @@ describe("handleManagerMessage clarification flow", () => {
     notionApiToken: "secret_test",
     notionAgendaParentPageId: "parent-page-1",
     botModel: "claude-sonnet-4-5",
+    botThinkingLevel: "minimal",
+    botMaxOutputTokens: undefined,
+    botRetryMaxRetries: 1,
     workspaceDir: "",
     linearWebhookEnabled: false,
     linearWebhookPublicUrl: undefined,
@@ -460,6 +463,9 @@ describe("handleManagerMessage clarification flow", () => {
     heartbeatIntervalMin: 30,
     heartbeatActiveLookbackHours: 24,
     schedulerPollSec: 30,
+    workgraphMaintenanceIntervalMin: 15,
+    workgraphHealthWarnActiveEvents: 200,
+    workgraphAutoCompactMaxActiveEvents: 500,
     logLevel: "info" as const,
   };
 

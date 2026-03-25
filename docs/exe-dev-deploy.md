@@ -91,6 +91,9 @@ LINEAR_WEBHOOK_PORT=8787
 LINEAR_WEBHOOK_PATH=/hooks/linear
 ANTHROPIC_API_KEY=sk-ant-...
 BOT_MODEL=claude-sonnet-4-6
+BOT_THINKING_LEVEL=minimal
+BOT_MAX_OUTPUT_TOKENS=
+BOT_RETRY_MAX_RETRIES=1
 WORKSPACE_DIR=/workspace
 HEARTBEAT_INTERVAL_MIN=30
 HEARTBEAT_ACTIVE_LOOKBACK_HOURS=24
@@ -119,6 +122,9 @@ NOTION_AGENDA_PARENT_PAGE_ID=notion-page-id-...
 - webhook listener は `LINEAR_WEBHOOK_PORT` / `LINEAR_WEBHOOK_PATH` で待ち受けます。Compose では同 port を host に公開します。
 - Linear webhook の対象は `Issue create` のみです。判定基準は「AI にできる action があるか」で、no-op は silent、action/failed のみ control room に通知します。
 - headless 運用では `ANTHROPIC_API_KEY` を推奨します。
+- `BOT_THINKING_LEVEL` は `off | minimal | low | medium | high | xhigh` を受け付けます。
+- `BOT_MAX_OUTPUT_TOKENS` を入れると、repo 側の stream wrapper で every LLM call に `maxTokens` を注入します。未指定なら library/provider default のままです。
+- `BOT_RETRY_MAX_RETRIES` は SDK retry settings の `maxRetries` に対応します。
 - manager review と heartbeat を既定で使うなら `HEARTBEAT_INTERVAL_MIN=30` のままにします。
 - `WORKGRAPH_MAINTENANCE_INTERVAL_MIN=15` なら 15 分ごとに health check と auto compaction 判定を行います。
 - `WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS` に達すると active `workgraph-events.jsonl` を snapshot に畳み込みます。
@@ -300,6 +306,7 @@ npm run manager:diagnostics -- thread C0ALAMDRB9V 1773806473.747499 /workspace
 npm run manager:diagnostics -- issue AIC-38 /workspace
 npm run manager:diagnostics -- webhook /workspace
 npm run manager:diagnostics -- personalization /workspace
+npm run manager:diagnostics -- llm /workspace
 ```
 
 replay recovery 手順:

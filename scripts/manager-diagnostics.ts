@@ -2,14 +2,15 @@ import { resolve } from "node:path";
 import { buildManagerIssueDiagnostics, buildManagerThreadDiagnostics } from "../src/lib/manager-diagnostics.js";
 import type { AppConfig } from "../src/lib/config.js";
 import { ensureManagerStateFiles, loadWebhookDeliveries } from "../src/lib/manager-state.js";
+import { buildLlmDiagnosticsFromConfig } from "../src/runtime/llm-runtime-config.js";
 import { buildSystemPaths, readWorkspaceAgents, readWorkspaceMemory } from "../src/lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 
-type Command = "thread" | "issue" | "webhook" | "personalization";
+type Command = "thread" | "issue" | "webhook" | "personalization" | "llm";
 
 function parseCommand(value: string | undefined): Command {
-  if (value === "thread" || value === "issue" || value === "webhook" || value === "personalization") return value;
-  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook|personalization> <arg1> <arg2?> [workspaceDir]");
+  if (value === "thread" || value === "issue" || value === "webhook" || value === "personalization" || value === "llm") return value;
+  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook|personalization|llm> <arg1> <arg2?> [workspaceDir]");
 }
 
 function buildRuntimeConfig(workspaceDir: string): AppConfig {
@@ -29,6 +30,9 @@ function buildRuntimeConfig(workspaceDir: string): AppConfig {
     notionApiToken: process.env.NOTION_API_TOKEN,
     notionAgendaParentPageId: process.env.NOTION_AGENDA_PARENT_PAGE_ID,
     botModel: process.env.BOT_MODEL ?? "claude-sonnet-4-5",
+    botThinkingLevel: (process.env.BOT_THINKING_LEVEL as AppConfig["botThinkingLevel"] | undefined) ?? "minimal",
+    botMaxOutputTokens: process.env.BOT_MAX_OUTPUT_TOKENS ? Number(process.env.BOT_MAX_OUTPUT_TOKENS) : undefined,
+    botRetryMaxRetries: Number(process.env.BOT_RETRY_MAX_RETRIES ?? 1),
     workspaceDir,
     linearWebhookEnabled: process.env.LINEAR_WEBHOOK_ENABLED === "true",
     linearWebhookPublicUrl: process.env.LINEAR_WEBHOOK_PUBLIC_URL,
@@ -50,12 +54,20 @@ async function main(): Promise<void> {
   const workspaceDir = resolve(
     command === "thread"
       ? process.argv[5] ?? process.env.WORKSPACE_DIR ?? "./workspace"
-      : process.argv[4] ?? process.env.WORKSPACE_DIR ?? "./workspace",
+      : command === "issue"
+        ? process.argv[4] ?? process.env.WORKSPACE_DIR ?? "./workspace"
+        : process.argv[3] ?? process.env.WORKSPACE_DIR ?? "./workspace",
   );
   const config = buildRuntimeConfig(workspaceDir);
   const systemPaths = buildSystemPaths(workspaceDir);
   await ensureManagerStateFiles(systemPaths);
   const repositories = createFileBackedManagerRepositories(systemPaths);
+
+  if (command === "llm") {
+    const diagnostics = await buildLlmDiagnosticsFromConfig(config);
+    process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+    return;
+  }
 
   if (command === "thread") {
     const channelId = process.argv[3];

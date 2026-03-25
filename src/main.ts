@@ -25,6 +25,7 @@ import { handleIssueCreatedWebhook } from "./orchestrators/webhooks/handle-issue
 import { handlePersonalizationUpdate } from "./orchestrators/personalization/handle-personalization.js";
 import { reconcileAwaitingFollowupsWithCurrentLinear } from "./orchestrators/review/review-data.js";
 import { disposeAllThreadRuntimes, disposeIdleThreadRuntimes, runManagerSystemTurn } from "./lib/pi-session.js";
+import { buildLlmDiagnosticsFromConfig } from "./runtime/llm-runtime-config.js";
 import { SchedulerService } from "./lib/scheduler.js";
 import { postSlackProcessingNotice, sendSlackReply } from "./lib/slack-replies.js";
 import { mergeSystemReply } from "./lib/system-slack-reply.js";
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
   const managerRepositories = createFileBackedManagerRepositories(systemPaths);
   let managerPolicy = await managerRepositories.policy.load();
   const ownerMap = await managerRepositories.ownerMap.load();
+  const llmDiagnostics = await buildLlmDiagnosticsFromConfig(config);
   const workgraphPolicy = {
     warnActiveLogEvents: config.workgraphHealthWarnActiveEvents,
     autoCompactMaxActiveLogEvents: config.workgraphAutoCompactMaxActiveEvents,
@@ -175,6 +177,17 @@ async function main(): Promise<void> {
       duplicateSlackUserIds: ownerMapDiagnostics.duplicateSlackUserIds,
     });
   }
+  logger.info("LLM runtime config", {
+    configuredModel: llmDiagnostics.configured.model,
+    resolvedProvider: llmDiagnostics.resolvedModel.provider,
+    resolvedModel: llmDiagnostics.resolvedModel.modelId,
+    thinkingLevel: llmDiagnostics.effective.thread.thinkingLevel,
+    configuredMaxOutputTokens: llmDiagnostics.configured.maxOutputTokens,
+    retryMaxRetries: llmDiagnostics.configured.retryMaxRetries,
+    contextWindow: llmDiagnostics.resolvedModel.contextWindow,
+    modelMaxTokens: llmDiagnostics.resolvedModel.maxTokens,
+    authSource: llmDiagnostics.authSource.source,
+  });
 
   const logWorkgraphMaintenance = async (source: "startup" | "interval"): Promise<void> => {
     try {
