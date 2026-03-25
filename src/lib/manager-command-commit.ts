@@ -705,6 +705,10 @@ function buildPlanningEntry(sourceThread: string, parentIssueId: string | undefi
   };
 }
 
+function buildManagerCommitOwnerResolution(): "mapped" {
+  return "mapped";
+}
+
 async function getExistingThreadIntakeAtTurnStart(
   args: CommitManagerCommandArgs,
   threadKey: string,
@@ -1011,15 +1015,19 @@ async function commitCreateIssueProposal(
           && reusableDuplicate.identifier !== effectiveParentIssueId
           && reusableDuplicate.parent?.identifier !== effectiveParentIssueId,
         );
-        const reusedIssue = attachedToParent
+        let reusedIssue = attachedToParent
           ? await updateManagedLinearIssue(
               {
                 issueId: reusableDuplicate.identifier,
                 parent: effectiveParentIssueId,
+                assignee: proposal.issue.assigneeMode === "assign" ? proposal.issue.assignee : undefined,
               },
               args.env,
             )
           : reusableDuplicate;
+        if (!attachedToParent && proposal.issue.assigneeMode === "assign" && proposal.issue.assignee) {
+          reusedIssue = await assignLinearIssue(reusedIssue.identifier, proposal.issue.assignee, args.env);
+        }
         await recordIntakeLinkedExisting(args.repositories.workgraph, {
           occurredAt,
           source: {
@@ -1102,7 +1110,7 @@ async function commitCreateIssueProposal(
       effectiveParentIssueId,
       [issue.identifier],
       proposal.planningReason,
-      proposal.issue.assignee ? "mapped" : "fallback",
+      buildManagerCommitOwnerResolution(),
       occurredAt,
     ),
   ];
@@ -1121,7 +1129,7 @@ async function commitCreateIssueProposal(
       assignee: proposal.issue.assignee,
     })],
     planningReason: proposal.planningReason,
-    ownerResolution: proposal.issue.assignee ? "mapped" : "fallback",
+    ownerResolution: buildManagerCommitOwnerResolution(),
     lastResolvedIssueId: issue.identifier,
     originalText: args.message.text,
   });
@@ -1133,7 +1141,7 @@ async function commitCreateIssueProposal(
       threadParentIssue,
       [issue],
       "single-issue",
-      proposal.issue.assigneeMode === "leave-unassigned",
+      false,
       threadParentIssue ? { attachedToExistingParent: true } : undefined,
     ),
   };
@@ -1233,7 +1241,7 @@ async function commitCreateIssueBatchProposal(
       parent.identifier,
       children.map((issue) => issue.identifier),
       proposal.planningReason,
-      [proposal.parent, ...proposal.children].some((entry) => !entry.assignee) ? "fallback" : "mapped",
+      buildManagerCommitOwnerResolution(),
       occurredAt,
     ),
   ];
@@ -1262,7 +1270,7 @@ async function commitCreateIssueBatchProposal(
       },
     )),
     planningReason: proposal.planningReason,
-    ownerResolution: [proposal.parent, ...proposal.children].some((entry) => !entry.assignee) ? "fallback" : "mapped",
+    ownerResolution: buildManagerCommitOwnerResolution(),
     lastResolvedIssueId: children[0]?.identifier,
     originalText: args.message.text,
   });
@@ -1274,7 +1282,7 @@ async function commitCreateIssueBatchProposal(
       parent,
       children,
       proposal.planningReason,
-      [proposal.parent, ...proposal.children].some((entry) => !entry.assignee),
+      false,
     ),
   };
 }

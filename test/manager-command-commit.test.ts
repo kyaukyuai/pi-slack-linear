@@ -413,6 +413,7 @@ describe("manager command commit", () => {
     );
     expect(result.committed[0]?.summary).toContain("親は AIC-39 AIマネージャーを実用レベルへ引き上げる");
     expect(result.committed[0]?.summary).toContain("子 task として <https://linear.app/kyaukyuai/issue/AIC-40|AIC-40 コギトをシステム設定・プロンプトに命名として反映する> を追加しています。");
+    expect(result.committed[0]?.summary).not.toContain("担当が未定義だった task は、いったん kyaukyuai に寄せています。");
   });
 
   it("commits multiple create_issue_batch proposals in the same turn without tripping thread dedupe", async () => {
@@ -696,6 +697,71 @@ describe("manager command commit", () => {
     );
     expect(result.committed[0]?.summary).toContain("既存の issue を親 issue に紐づけ直しました。");
     expect(result.committed[0]?.summary).toContain("親は AIC-39 AIマネージャーを実用レベルへ引き上げる です。");
+  });
+
+  it("applies assignee updates when reusing an existing duplicate issue", async () => {
+    linearMocks.searchLinearIssues.mockResolvedValueOnce([
+      {
+        id: "issue-55",
+        identifier: "AIC-55",
+        title: "契約締結対応",
+        url: "https://linear.app/kyaukyuai/issue/AIC-55",
+        relations: [],
+        inverseRelations: [],
+      },
+    ]);
+    linearMocks.assignLinearIssue.mockResolvedValueOnce({
+      id: "issue-55",
+      identifier: "AIC-55",
+      title: "契約締結対応",
+      url: "https://linear.app/kyaukyuai/issue/AIC-55",
+      assignee: { id: "user-1", displayName: "y.kakui" },
+      relations: [],
+      inverseRelations: [],
+    });
+
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "create_issue",
+          planningReason: "single-issue",
+          threadParentHandling: "ignore",
+          duplicateHandling: "reuse-existing",
+          issue: {
+            title: "契約締結対応",
+            description: "契約締結に向けた対応タスク。",
+            assigneeMode: "assign",
+            assignee: "y.kakui",
+            dueDate: "2026-03-31",
+            priority: 2,
+          },
+          reasonSummary: "既存 issue を再利用しつつ担当を設定します。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-assign-duplicate",
+        messageTs: "msg-assign-duplicate-1",
+        userId: "U1",
+        text: "kyaukyuai 担当で良いです",
+      },
+      now: new Date("2026-03-25T00:58:22.480Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toHaveLength(1);
+    expect(linearMocks.createManagedLinearIssue).not.toHaveBeenCalled();
+    expect(linearMocks.assignLinearIssue).toHaveBeenCalledWith("AIC-55", "y.kakui", expect.any(Object));
+    expect(result.committed[0]?.issueIds).toEqual(["AIC-55"]);
+    expect(result.committed[0]?.summary).toContain("同じ内容の issue が見つかったので、新規起票はせず既存の issue に寄せます。");
   });
 
   it("sets an existing issue parent directly", async () => {
