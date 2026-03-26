@@ -50,6 +50,7 @@ import type { AppConfig } from "./config.js";
 import { getLinearIssue } from "./linear.js";
 import { createLinearCustomTools } from "./linear-tools.js";
 import type { PendingManagerClarification } from "./pending-manager-clarification.js";
+import type { PendingManagerConfirmation } from "./pending-manager-confirmation.js";
 import type { ThreadQueryContinuation } from "./query-continuation.js";
 import type { ThreadNotionPageTarget } from "./thread-notion-page-target.js";
 import {
@@ -101,6 +102,7 @@ export interface ManagerAgentInput {
   currentThreadNotionPageTarget?: ThreadNotionPageTarget;
   combinedRequestText?: string;
   pendingClarification?: PendingManagerClarification;
+  pendingConfirmation?: PendingManagerConfirmation;
   workspaceAgents?: string;
   workspaceMemory?: string;
   agendaTemplate?: string;
@@ -328,7 +330,7 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.",
     "For webhook-issue-created system tasks, if you decide execute, do the smallest safe action set needed to satisfy the issue instead of adding extra side effects.",
     "For webhook-issue-created system tasks, treat human work items, design tasks, implementation tasks, and ambiguous requests as no-op unless they map cleanly onto an existing proposal tool.",
-    "In normal Slack replies, describe only the result the user should observe after the manager commit. Do not mention an extra manual confirmation or approval step unless the manager explicitly rejected the action.",
+    "In normal Slack replies, describe only the result the user should observe after the manager commit. The one exception is owner-map updates, which may go through a manager-owned preview-and-confirm step before commit.",
     "Report your current intent with report_manager_intent once per turn before or during tool usage.",
     "When the turn is a read-only reference lookup using Notion, Slack context, docs, memos, or lightweight web material, report intent=query with queryKind=reference-material.",
     "Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.",
@@ -389,6 +391,12 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "When the user explicitly asks to create an agenda in Notion, use propose_create_notion_agenda instead of creating a Linear issue.",
     "When the user explicitly asks to update, append to, retitle, archive, or delete a Notion page, use the dedicated Notion page proposal tools instead of creating or updating a Linear issue.",
     "When the user explicitly asks to save durable knowledge into MEMORY or workspace memory, use propose_update_workspace_memory as the primary path instead of relying only on silent personalization.",
+    "When the user explicitly asks to update, replace, rewrite, edit, or reflect changes into AGENDA_TEMPLATE.md, use intent=update_workspace_config, read the current file with workspace_get_agenda_template first, and then use propose_replace_workspace_text_file with target=agenda-template.",
+    "When the user explicitly asks to update, replace, rewrite, edit, or reflect changes into HEARTBEAT.md, use intent=update_workspace_config, read the current file with workspace_get_heartbeat_prompt first, and then use propose_replace_workspace_text_file with target=heartbeat-prompt.",
+    "When the user explicitly asks to update, change, edit, add to, or delete from owner-map.json, use intent=update_workspace_config, read the current file with workspace_get_owner_map first, and then use propose_update_owner_map with a structured operation instead of free-form JSON edits.",
+    "Do not route AGENDA_TEMPLATE.md, HEARTBEAT.md, or owner-map.json changes through MEMORY saves or silent personalization.",
+    "owner-map updates use a preview-first path in this scope. The first turn may return a confirmation preview instead of an immediate commit.",
+    "Never reply that direct file editing tools are unavailable for AGENDA_TEMPLATE.md, HEARTBEAT.md, or owner-map.json. Use the dedicated workspace config read and proposal tools in this runtime.",
     "For explicit MEMORY saves, it is valid to save a structured project snapshot with several entries such as project-overview, members-and-roles, roadmap-and-milestones, terminology, and context.",
     "For Notion-based MEMORY save requests, call notion_get_page_content first and extract durable project facts, members, roadmap milestones, terminology, preferences, or context from the page content.",
     "When the user asks to read an entire Notion page or save its overall content into MEMORY, continue calling notion_get_page_content with later startLine values if the current window says more lines are available.",
@@ -826,10 +834,62 @@ function shouldIncludeAgendaTemplateForManagerSystem(input: ManagerSystemInput):
   return Object.values(input.metadata ?? {}).some((value) => hasNotionSignal(value));
 }
 
+function detectWorkspaceConfigUpdateTarget(
+  text: string | undefined,
+): "agenda-template" | "heartbeat-prompt" | "owner-map" | undefined {
+  const normalized = text?.trim();
+  if (!normalized) return undefined;
+  if (/(?:AGENDA_TEMPLATE\.md|agenda template)/i.test(normalized)) {
+    return "agenda-template";
+  }
+  if (/(?:HEARTBEAT\.md|heartbeat prompt)/i.test(normalized)) {
+    return "heartbeat-prompt";
+  }
+  if (/(?:owner-map(?:\.json)?|owner map)/i.test(normalized)) {
+    return "owner-map";
+  }
+  return undefined;
+}
+
+function buildWorkspaceConfigUpdateHints(
+  target: "agenda-template" | "heartbeat-prompt" | "owner-map" | undefined,
+): string[] {
+  if (target === "agenda-template") {
+    return [
+      "- The latest message explicitly targets AGENDA_TEMPLATE.md. Treat this as intent=update_workspace_config, not as a read-only query.",
+      "- You may inspect prior agendas or Notion context first, but finish the turn with the workspace config proposal instead of a manual-edit instruction.",
+      "- Read the current file with workspace_get_agenda_template before proposing the change.",
+      "- Then use propose_replace_workspace_text_file with target=agenda-template. In this scope, AGENDA_TEMPLATE.md updates are full-file replacements.",
+      "- Do not say that direct file editing is unavailable. The manager commit path for AGENDA_TEMPLATE.md is available in this runtime.",
+    ];
+  }
+  if (target === "heartbeat-prompt") {
+    return [
+      "- The latest message explicitly targets HEARTBEAT.md. Treat this as intent=update_workspace_config, not as a read-only query.",
+      "- Read the current file with workspace_get_heartbeat_prompt before proposing the change.",
+      "- Then use propose_replace_workspace_text_file with target=heartbeat-prompt. In this scope, HEARTBEAT.md updates are full-file replacements.",
+      "- Do not say that direct file editing is unavailable. The manager commit path for HEARTBEAT.md is available in this runtime.",
+    ];
+  }
+  if (target === "owner-map") {
+    return [
+      "- The latest message explicitly targets owner-map.json. Treat this as intent=update_workspace_config, not as a read-only query.",
+      "- Read the current file with workspace_get_owner_map before proposing the change.",
+      "- Then use propose_update_owner_map with one structured operation instead of free-form JSON edits.",
+      "- owner-map uses a preview-first path. The first turn may return a confirmation preview instead of an immediate commit.",
+      "- Do not say that direct file editing is unavailable. The manager-owned structured update path for owner-map.json is available in this runtime.",
+    ];
+  }
+  return [];
+}
+
 export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
   const notionRecheck = shouldTreatAsNotionRecheck(input.text, input.lastQueryContext);
   const styleHints = buildManagerReplyStyleHints(input.text, input.lastQueryContext, input.pendingClarification)
     .map((hint) => `- ${hint}`);
+  const workspaceConfigUpdateHints = buildWorkspaceConfigUpdateHints(
+    detectWorkspaceConfigUpdateTarget(input.text),
+  );
   const lastQueryContextLines = input.lastQueryContext
     ? [
         `- kind: ${input.lastQueryContext.kind}`,
@@ -861,6 +921,15 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
         `- threadParentIssueId: ${input.pendingClarification.threadParentIssueId ?? "(none)"}`,
         `- relatedIssueIds: ${input.pendingClarification.relatedIssueIds.join(", ") || "(none)"}`,
         `- recordedAt: ${input.pendingClarification.recordedAt}`,
+      ]
+    : ["- (none)"];
+  const pendingConfirmationLines = input.pendingConfirmation
+    ? [
+        `- kind: ${input.pendingConfirmation.kind}`,
+        `- originalUserMessage: ${input.pendingConfirmation.originalUserMessage}`,
+        `- previewSummaryLines: ${input.pendingConfirmation.previewSummaryLines.join(" | ") || "(none)"}`,
+        `- proposalCount: ${input.pendingConfirmation.proposals.length}`,
+        `- recordedAt: ${input.pendingConfirmation.recordedAt}`,
       ]
     : ["- (none)"];
   const currentThreadNotionPageLines = input.currentThreadNotionPageTarget
@@ -909,6 +978,9 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
     "Pending manager clarification context:",
     ...pendingClarificationLines,
     "",
+    "Pending manager confirmation context:",
+    ...pendingConfirmationLines,
+    "",
     "Current thread Notion page target:",
     ...currentThreadNotionPageLines,
     ...workspaceAgentsSection,
@@ -917,6 +989,13 @@ export function buildManagerAgentPrompt(input: ManagerAgentInput): string {
     "",
     "Public reply style hints:",
     ...styleHints,
+    ...(workspaceConfigUpdateHints.length > 0
+      ? [
+          "",
+          "Workspace config update hints:",
+          ...workspaceConfigUpdateHints,
+        ]
+      : []),
   ].join("\n");
 }
 

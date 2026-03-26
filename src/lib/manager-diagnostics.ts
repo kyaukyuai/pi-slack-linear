@@ -9,6 +9,19 @@ import { loadLastManagerAgentTurn, type LastManagerAgentTurn } from "./last-mana
 import { loadPendingManagerClarification, type PendingManagerClarification } from "./pending-manager-clarification.js";
 import { loadThreadQueryContinuation, type ThreadQueryContinuation } from "./query-continuation.js";
 import { getRecentChannelContext, getSlackThreadContext } from "./slack-context.js";
+import {
+  buildSystemPaths,
+  inspectSystemStateFiles,
+  readWorkspaceMemory,
+  type SystemStateFileClassification,
+  type SystemStateFileStatus,
+  type SystemStateOperatorAction,
+  type SystemStateWritePolicy,
+} from "./system-workspace.js";
+import {
+  analyzeWorkspaceMemory,
+  type WorkspaceMemoryCoverageDiagnostics,
+} from "./workspace-memory-diagnostics.js";
 import type { FollowupLedgerEntry } from "../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import { buildWorkgraphThreadKey } from "../state/workgraph/events.js";
@@ -44,6 +57,37 @@ export interface ManagerIssueDiagnostics {
   followup?: FollowupLedgerEntry;
   slackThreadContext?: Awaited<ReturnType<typeof getSlackThreadContext>>;
   linearIssue?: LinearIssue | null;
+}
+
+export interface ManagerStateFilesDiagnostics {
+  workspaceDir: string;
+  systemRoot: string;
+  files: SystemStateFileStatus[];
+  classificationSummary: Record<SystemStateFileClassification, string[]>;
+  operatorActionSummary: {
+    editOk: string[];
+    inspectOnly: string[];
+    doNotEdit: string[];
+  };
+  writePolicySummary: Record<SystemStateWritePolicy, string[]>;
+  notes: {
+    editable: string;
+    internal: string;
+    derived: string;
+  };
+  writePolicyNotes: {
+    humanPrimary: string;
+    silentAutoUpdate: string;
+    explicitSlackUpdate: string;
+    managerCommitOnly: string;
+    systemMaintained: string;
+    rebuildOnly: string;
+  };
+}
+
+export interface ManagerWorkspaceMemoryDiagnostics extends WorkspaceMemoryCoverageDiagnostics {
+  workspaceDir: string;
+  memoryFile: string;
 }
 
 async function loadLinearIssueBestEffort(
@@ -128,5 +172,89 @@ export async function buildManagerIssueDiagnostics(args: {
     followup,
     slackThreadContext,
     linearIssue,
+  };
+}
+
+function summarizeByClassification(
+  files: SystemStateFileStatus[],
+  classification: SystemStateFileClassification,
+): string[] {
+  return files
+    .filter((file) => file.classification === classification)
+    .map((file) => file.relativePath);
+}
+
+function summarizeByOperatorAction(
+  files: SystemStateFileStatus[],
+  action: SystemStateOperatorAction,
+): string[] {
+  return files
+    .filter((file) => file.operatorAction === action)
+    .map((file) => file.relativePath);
+}
+
+function summarizeByWritePolicy(
+  files: SystemStateFileStatus[],
+  writePolicy: SystemStateWritePolicy,
+): string[] {
+  return files
+    .filter((file) => file.writePolicy === writePolicy)
+    .map((file) => file.relativePath);
+}
+
+export async function buildManagerStateFileDiagnostics(args: {
+  workspaceDir: string;
+}): Promise<ManagerStateFilesDiagnostics> {
+  const systemPaths = buildSystemPaths(args.workspaceDir);
+  const files = await inspectSystemStateFiles(systemPaths);
+
+  return {
+    workspaceDir: args.workspaceDir,
+    systemRoot: systemPaths.rootDir,
+    files,
+    classificationSummary: {
+      editable: summarizeByClassification(files, "editable"),
+      internal: summarizeByClassification(files, "internal"),
+      derived: summarizeByClassification(files, "derived"),
+    },
+    operatorActionSummary: {
+      editOk: summarizeByOperatorAction(files, "edit-ok"),
+      inspectOnly: summarizeByOperatorAction(files, "inspect-only"),
+      doNotEdit: summarizeByOperatorAction(files, "do-not-edit"),
+    },
+    writePolicySummary: {
+      "human-primary": summarizeByWritePolicy(files, "human-primary"),
+      "silent-auto-update": summarizeByWritePolicy(files, "silent-auto-update"),
+      "explicit-slack-update": summarizeByWritePolicy(files, "explicit-slack-update"),
+      "manager-commit-only": summarizeByWritePolicy(files, "manager-commit-only"),
+      "system-maintained": summarizeByWritePolicy(files, "system-maintained"),
+      "rebuild-only": summarizeByWritePolicy(files, "rebuild-only"),
+    },
+    notes: {
+      editable: "Operator-managed runtime config or prompt slots. Direct edits are expected.",
+      internal: "System-managed ledgers or registries. Inspect them when needed, but avoid hand edits.",
+      derived: "Generated execution state. Rebuild or recover it with tooling instead of editing by hand.",
+    },
+    writePolicyNotes: {
+      humanPrimary: "Primarily edited by humans. The system should not rewrite it silently.",
+      silentAutoUpdate: "The system may update it automatically when confidence is high.",
+      explicitSlackUpdate: "Silent updates are disabled. Change it only through an explicit Slack request plus manager commit.",
+      managerCommitOnly: "Automation should update it only through typed proposals and manager commit logic.",
+      systemMaintained: "The runtime owns writes directly as part of normal execution.",
+      rebuildOnly: "Treat it as generated state. Rebuild or recover it instead of editing.",
+    },
+  };
+}
+
+export async function buildManagerWorkspaceMemoryDiagnostics(args: {
+  workspaceDir: string;
+}): Promise<ManagerWorkspaceMemoryDiagnostics> {
+  const systemPaths = buildSystemPaths(args.workspaceDir);
+  const workspaceMemory = await readWorkspaceMemory(systemPaths);
+
+  return {
+    workspaceDir: args.workspaceDir,
+    memoryFile: systemPaths.memoryFile,
+    ...analyzeWorkspaceMemory(workspaceMemory),
   };
 }

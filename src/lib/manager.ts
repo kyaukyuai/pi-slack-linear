@@ -95,6 +95,12 @@ import {
   savePendingManagerClarification,
   type PendingManagerClarification,
 } from "./pending-manager-clarification.js";
+import {
+  clearPendingManagerConfirmation,
+  loadPendingManagerConfirmation,
+  parsePendingManagerConfirmationDecision,
+  savePendingManagerConfirmation,
+} from "./pending-manager-confirmation.js";
 import { handlePersonalizationUpdate } from "../orchestrators/personalization/handle-personalization.js";
 
 export type ManagerMessageKind = "request" | "query" | "progress" | "completed" | "blocked" | "conversation" | "scheduler";
@@ -365,6 +371,14 @@ function formatCommitLogs(commitSummaries: string[]): string {
   return commitSummaries
     .map((summary) => `> system log: ${summary}`)
     .join("\n");
+}
+
+function formatPendingOwnerMapConfirmationReply(summaryLines: string[]): string {
+  return [
+    "owner-map.json の変更案を保持しています。",
+    formatSlackBullets(summaryLines),
+    "適用するなら「はい」か「適用して」、取り消すなら「キャンセル」と返信してください。",
+  ].filter(Boolean).join("\n");
 }
 
 function normalizeCommitSummaryForCompare(text: string): string {
@@ -1218,7 +1232,65 @@ export async function handleManagerMessage(
     const lastQueryContext = await loadThreadQueryContinuation(paths).catch(() => undefined);
     const currentThreadNotionPageTarget = await loadThreadNotionPageTarget(paths).catch(() => undefined);
     const pendingManagerClarification = await loadPendingManagerClarification(paths, now).catch(() => undefined);
+    const pendingManagerConfirmation = await loadPendingManagerConfirmation(paths, now).catch(() => undefined);
+    const pendingConfirmationDecision = pendingManagerConfirmation
+      ? parsePendingManagerConfirmationDecision(message.text)
+      : undefined;
     const threadPlanningContext = await getThreadPlanningContext(repositories.workgraph, threadKey).catch(() => undefined);
+
+    if (pendingManagerConfirmation && pendingConfirmationDecision === "cancel") {
+      await clearPendingManagerConfirmation(paths);
+      return {
+        handled: true,
+        reply: "owner-map.json の変更案を取り消しました。",
+        diagnostics: {
+          agent: {
+            source: "fallback",
+            intent: "update_workspace_config",
+            toolCalls: [],
+            proposalCount: 0,
+            committedCommands: [],
+            commitRejections: [],
+            missingQuerySnapshot: false,
+          },
+        },
+      };
+    }
+
+    if (pendingManagerConfirmation && pendingConfirmationDecision === "confirm") {
+      const confirmCommitResult = await commitManagerCommandProposals({
+        config,
+        repositories,
+        proposals: pendingManagerConfirmation.proposals,
+        message,
+        now,
+        policy,
+        env,
+        ownerMapConfirmationMode: "confirm",
+        runSchedulerJobNow: runtimeActions?.runSchedulerJobNow,
+      });
+      if (confirmCommitResult.committed.length > 0 && confirmCommitResult.rejected.length === 0) {
+        await clearPendingManagerConfirmation(paths);
+      }
+      return {
+        handled: true,
+        reply: confirmCommitResult.replySummaries.join(" ")
+          || buildCommitRejectionReply(confirmCommitResult.rejected.map((entry) => entry.reason))
+          || "owner-map.json の変更を確定できませんでした。",
+        diagnostics: {
+          agent: {
+            source: "fallback",
+            intent: "update_workspace_config",
+            toolCalls: [],
+            proposalCount: pendingManagerConfirmation.proposals.length,
+            committedCommands: confirmCommitResult.committed.map((entry) => entry.commandType),
+            commitRejections: confirmCommitResult.rejected.map((entry) => entry.reason),
+            missingQuerySnapshot: false,
+          },
+        },
+      };
+    }
+
     const agentTurn = await runManagerAgentTurn(config, paths, {
       kind: "message",
       channelId: message.channelId,
@@ -1230,6 +1302,7 @@ export async function handleManagerMessage(
       lastQueryContext,
       currentThreadNotionPageTarget,
       pendingClarification: pendingManagerClarification,
+      pendingConfirmation: pendingManagerConfirmation,
     });
 
     if (agentTurn.invalidProposalCount > 0 && agentTurn.proposals.length === 0) {
@@ -1263,13 +1336,16 @@ export async function handleManagerMessage(
       ? extractedQuerySnapshot
       : undefined;
     const missingQuerySnapshot = agentIntent === "query" && !completeQuerySnapshot;
-    const mergedReply = missingQuerySnapshot
+    const mergedReplyBase = missingQuerySnapshot
       ? buildSafetyQueryReply()
       : mergeAgentReplyWithCommit({
           agentReply: agentTurn.reply,
           commitSummaries: commitResult.replySummaries,
           commitRejections: commitResult.rejected.map((entry) => entry.reason),
         });
+    const mergedReply = commitResult.pendingConfirmation?.kind === "owner-map"
+      ? commitResult.pendingConfirmation.previewReply
+      : mergedReplyBase;
 
     if (agentIntent === "query") {
       const queryKind = agentTurn.intentReport?.queryKind;
@@ -1304,6 +1380,7 @@ export async function handleManagerMessage(
       || agentIntent === "update_schedule"
       || agentIntent === "delete_schedule"
       || agentIntent === "followup_resolution"
+      || agentIntent === "update_workspace_config"
       || agentIntent === "review"
       || agentIntent === "heartbeat"
       || agentIntent === "scheduler"
@@ -1347,6 +1424,16 @@ export async function handleManagerMessage(
           threadPlanningContext?.latestResolvedIssue?.issueId ?? "",
         ].filter(Boolean)),
         now,
+      });
+    }
+
+    if (commitResult.pendingConfirmation?.kind === "owner-map") {
+      await savePendingManagerConfirmation(paths, {
+        kind: "owner-map",
+        originalUserMessage: message.text,
+        proposals: commitResult.pendingConfirmation.proposals,
+        previewSummaryLines: commitResult.pendingConfirmation.previewSummaryLines,
+        recordedAt: now.toISOString(),
       });
     }
 

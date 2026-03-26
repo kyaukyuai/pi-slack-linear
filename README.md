@@ -47,8 +47,10 @@ execution manager としての中長期設計方針と、repo 向けの目標デ
     MEMORY.md
     AGENDA_TEMPLATE.md
     jobs.json
+    job-status.json
     policy.json
     owner-map.json
+    notion-pages.json
     followups.json
     planning-ledger.json
     personalization-ledger.json
@@ -99,7 +101,7 @@ Optional:
 
 `NOTION_API_TOKEN` を設定すると、bundled `ntn v0.4.0` を使って Notion を参照できます。現状のスコープでは page search、page facts、page content 抜粋、database search、database query の読み出しに加えて、`NOTION_AGENDA_PARENT_PAGE_ID` を設定すると指定 parent page 配下に agenda page を作成できます。また、既存 page に対しては title 更新、append 追記、Cogito 管理ページに限定した heading_2 単位の `replace_section` 更新、archive/trash までサポートします。管理対象ページは `workspace/system/notion-pages.json` に登録された page です。database row の更新・削除はまだ扱いません。Notion は task system of record にはしません。
 
-`/workspace/system/AGENTS.md`, `/workspace/system/MEMORY.md`, `/workspace/system/AGENDA_TEMPLATE.md` は利用者ごとの runtime customization 用です。`AGENTS.md` には安定した進め方、返信方針、優先順位のような operating rules を置き、`MEMORY.md` には用語や背景知識だけでなく、プロジェクト概要、メンバーと役割、ロードマップ、主要マイルストーンのような project knowledge を置きます。`MEMORY.md` のスケジュール情報は milestone-only で扱い、issue 単位の期限、現在の進捗、current status は入れません。`AGENTS.md` と `MEMORY.md` は manager/system turn に加えて reply/router/intake/research/follow-up planner にも毎 turn 注入されます。ただし schema、supported actions、parser contract、safety rule は上書きしません。`AGENDA_TEMPLATE.md` は Notion アジェンダの既定構成専用で、Notion agenda の作成・更新に関係する manager/system turn にだけ注入されます。repo ルートの `AGENTS.md` は開発ルール用であり、runtime customization には使いません。
+`/workspace/system/AGENTS.md`, `/workspace/system/MEMORY.md`, `/workspace/system/AGENDA_TEMPLATE.md` は利用者ごとの runtime customization 用です。`AGENTS.md` には安定した進め方、返信方針、優先順位のような operating rules を置き、`MEMORY.md` には用語や背景知識だけでなく、プロジェクト概要、メンバーと役割、ロードマップ、主要マイルストーンのような project knowledge を置きます。`MEMORY.md` のスケジュール情報は milestone-only で扱い、issue 単位の期限、現在の進捗、current status は入れません。`AGENTS.md` と `MEMORY.md` は manager/system turn に加えて reply/router/intake/research/follow-up planner にも毎 turn 注入されます。ただし schema、supported actions、parser contract、safety rule は上書きしません。`AGENDA_TEMPLATE.md` は Notion アジェンダの既定構成専用で、Notion agenda の作成・更新に関係する manager/system turn にだけ注入されます。`HEARTBEAT.md` は heartbeat system turn の prompt override、`owner-map.json` は owner routing 用の control-plane config です。repo ルートの `AGENTS.md` は開発ルール用であり、runtime customization には使いません。
 
 runtime `AGENTS.md` / `MEMORY.md` は会話や実行結果から silent auto-update されます。抽出候補は `/workspace/system/personalization-ledger.json` に保存され、昇格したものだけ runtime `AGENTS.md` / `MEMORY.md` に反映されます。rich な project snapshot を保存したい場合は、`MEMORY に保存して` を明示して `project-overview / members-and-roles / roadmap-and-milestones` を含む structured save を使うのが主経路です。
 
@@ -147,11 +149,11 @@ LLM runtime は env で global に設定できます。
 - `HEARTBEAT_ACTIVE_LOOKBACK_HOURS`
   - 直近何時間に会話があった channel を heartbeat 対象にするか
 - `SCHEDULER_POLL_SEC`
-  - `jobs.json` を何秒ごとに確認するか
+  - scheduler runtime state を何秒ごとに確認するか
 
 heartbeat は isolated session `heartbeat:<channel>` 相当で動き、返答が `HEARTBEAT_OK` の時は Slack に投稿しません。
 
-scheduler は `/workspace/system/jobs.json` を読み、`at`, `every`, `daily`, `weekly` の job を isolated session `cron:<jobId>` 相当で実行します。初回起動時に、control room 向けの manager review jobs が自動生成されます。
+scheduler は `/workspace/system/jobs.json` の custom job 定義、`/workspace/system/job-status.json` の runtime status、`policy.json` 由来の built-in review schedule を合わせて読み、`at`, `every`, `daily`, `weekly` の job を isolated session `cron:<jobId>` 相当で実行します。
 
 Slack からも scheduler を管理できます。主な例:
 
@@ -165,7 +167,7 @@ Slack からも scheduler を管理できます。主な例:
 - `夕方レビューを止めて`
 - `heartbeat を 60分ごとにして`
 
-built-in schedules は `morning-review`, `evening-review`, `weekly-review`, `heartbeat` です。これらは `policy.json` が正で、Slack からの変更も内部的には policy update として反映されます。custom jobs だけが `jobs.json` に直接保存されます。
+built-in schedules は `morning-review`, `evening-review`, `weekly-review`, `heartbeat` です。これらは `policy.json` が正で、Slack からの変更も内部的には policy update として反映されます。custom jobs だけが `jobs.json` に保存され、`nextRunAt` / `lastRunAt` / `lastStatus` / `lastResult` / `lastError` は `job-status.json` に保存されます。
 即時実行 / テスト実行は custom job のみ対応です。built-in review / heartbeat は今回の scope では対象外です。
 
 Slack から既存 issue の実行依頼もできます。主な例:
@@ -181,28 +183,41 @@ Slack から既存 issue の実行依頼もできます。主な例:
 ```json
 [
   {
-    "id": "manager-review-morning",
+    "id": "daily-task-check",
     "enabled": true,
     "channelId": "C0123456789",
-    "prompt": "manager review: morning",
+    "prompt": "AIC の期限近い task を確認する",
     "kind": "daily",
-    "time": "09:00",
-    "action": "morning-review"
-  },
-  {
-    "id": "manager-review-weekly",
-    "enabled": true,
-    "channelId": "C0123456789",
-    "prompt": "manager review: weekly",
-    "kind": "weekly",
-    "weekday": "mon",
-    "time": "09:30",
-    "action": "weekly-review"
+    "time": "09:00"
   }
 ]
 ```
 
-`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` と `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の project knowledge / terminology / durable context、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。`BOT_UID` / `BOT_GID` を設定している場合、これらの runtime system files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
+`policy.json` と `owner-map.json` は起動時に自動生成されます。初期値では control room を `C0ALAMDRB9V`、assistant 名を `コギト`、fallback owner を `kyaukyuai` に設定します。あわせて空の runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md`, `jobs.json`, `job-status.json`, `personalization-ledger.json` も生成されます。用途は固定スロット方式で、`AGENTS.md` は全 planner 共通の operating rules、`MEMORY.md` は全 planner 共通の project knowledge / terminology / durable context、`AGENDA_TEMPLATE.md` は Notion agenda 専用です。`BOT_UID` / `BOT_GID` を設定している場合、これらの runtime system files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
+
+runtime state file の大まかな扱いは次の 3 分類です。
+
+- `editable`: `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md`, `HEARTBEAT.md`, `policy.json`, `owner-map.json`, `jobs.json`
+- `internal`: `job-status.json`, `followups.json`, `planning-ledger.json`, `notion-pages.json`, `personalization-ledger.json`, `webhook-deliveries.json`
+- `derived`: `workgraph-events.jsonl`, `workgraph-snapshot.json`, `sessions/`
+
+`editable` は operator が直接編集できます。`internal` は system-maintained ledger / registry なので基本は閲覧専用、`derived` は生成物なので recovery / diagnostics を使って扱い、手編集しません。
+
+更新方針は別軸で見ます。
+
+- `silent-auto-update`: `AGENTS.md`, `MEMORY.md`
+- `explicit-slack-update`: `AGENDA_TEMPLATE.md`, `HEARTBEAT.md`, `owner-map.json`
+- `manager-commit-only`: `policy.json`, `jobs.json`
+- `system-maintained`: `job-status.json`, `followups.json`, `planning-ledger.json`, `notion-pages.json`, `personalization-ledger.json`, `webhook-deliveries.json`
+- `rebuild-only`: `workgraph-events.jsonl`, `workgraph-snapshot.json`, `sessions/`
+
+意味:
+
+- `silent-auto-update`: 高信頼時に system が自律更新してよい
+- `explicit-slack-update`: silent update はせず、Slack の明示依頼 + manager commit 経由でのみ更新する
+- `manager-commit-only`: typed proposal と manager commit 経由でのみ自動更新する
+- `system-maintained`: runtime が通常処理の中で直接保守する
+- `rebuild-only`: generated state なので edit せず recovery / rebuild で扱う
 
 `policy.json` では次の manager knobs を調整できます。
 
@@ -288,32 +303,48 @@ npm test
 
 ## Operator Diagnostics
 
+`manager:diagnostics` は app 本体と同じく repo の `.env` を読みます。host で見るときは `./workspace`、Docker container / `exe.dev` では `/workspace` を使ってください。
+
 thread の解釈を確認する場合:
 
 ```bash
-npm run manager:diagnostics -- thread C0ALAMDRB9V 1773806473.747499 /workspace
+npm run manager:diagnostics -- thread C0ALAMDRB9V 1773806473.747499 ./workspace
 ```
 
 issue の context を確認する場合:
 
 ```bash
-npm run manager:diagnostics -- issue AIC-38 /workspace
+npm run manager:diagnostics -- issue AIC-38 ./workspace
 ```
 
 直近 webhook delivery を確認する場合:
 
 ```bash
-npm run manager:diagnostics -- webhook /workspace
+npm run manager:diagnostics -- webhook ./workspace
+```
+
+runtime state file の分類と編集可否を確認する場合:
+
+```bash
+npm run manager:diagnostics -- state-files ./workspace
 ```
 
 runtime personalization の ledger と現在の `AGENTS.md` / `MEMORY.md` を確認する場合:
 
 ```bash
-npm run manager:diagnostics -- personalization /workspace
+npm run manager:diagnostics -- personalization ./workspace
+```
+
+`MEMORY.md` の project coverage と current-state 混入 warning を確認する場合:
+
+```bash
+npm run manager:diagnostics -- memory ./workspace
 ```
 
 現在の LLM runtime config と provider payload preview を確認する場合:
 
 ```bash
-npm run manager:diagnostics -- llm /workspace
+npm run manager:diagnostics -- llm ./workspace
 ```
+
+`ANTHROPIC_API_KEY` があれば `authSource.source` は `runtime-override`、それが無く `workspace/.pi/agent/auth.json` を使う場合は `auth-storage` になります。local と `exe.dev` の差分確認では `configured.model`, `configured.thinkingLevel`, `configured.maxOutputTokens`, `configured.retryMaxRetries`, `authSource.source` を見比べてください。

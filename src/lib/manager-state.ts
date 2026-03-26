@@ -16,8 +16,7 @@ import {
 import { createFileBackedManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import { EMPTY_WORKGRAPH_SNAPSHOT } from "../state/workgraph/snapshot.js";
 import type { SystemPaths } from "./system-workspace.js";
-import { loadSchedulerJobs, saveSchedulerJobs } from "./system-workspace.js";
-import { syncBuiltInReviewJobs } from "./scheduler-management.js";
+import { ensureSystemWorkspace } from "./system-workspace.js";
 
 export type {
   FollowupLedgerEntry,
@@ -59,6 +58,7 @@ async function ensureTextFile(path: string, defaultValue: string): Promise<void>
 }
 
 export async function ensureManagerStateFiles(paths: SystemPaths): Promise<void> {
+  await ensureSystemWorkspace(paths);
   await ensureJsonFile(paths.policyFile, DEFAULT_POLICY);
   await ensureJsonFile(paths.ownerMapFile, DEFAULT_OWNER_MAP);
   await ensureJsonFile(paths.followupsFile, []);
@@ -69,14 +69,6 @@ export async function ensureManagerStateFiles(paths: SystemPaths): Promise<void>
   await ensureTextFile(paths.workgraphEventsFile, "");
   await ensureJsonFile(paths.workgraphSnapshotFile, EMPTY_WORKGRAPH_SNAPSHOT);
   await rm(join(paths.rootDir, "intake-ledger.json"), { force: true });
-
-  const policy = await loadManagerPolicy(paths);
-  const jobs = await loadSchedulerJobs(paths);
-  const nextJobs = syncBuiltInReviewJobs(policy, jobs);
-
-  if (JSON.stringify(jobs) !== JSON.stringify(nextJobs)) {
-    await saveSchedulerJobs(paths, nextJobs);
-  }
 }
 
 export async function loadManagerPolicy(paths: SystemPaths): Promise<ManagerPolicy> {
@@ -89,6 +81,10 @@ export async function saveManagerPolicy(paths: SystemPaths, policy: ManagerPolic
 
 export async function loadOwnerMap(paths: SystemPaths): Promise<OwnerMap> {
   return createFileBackedManagerRepositories(paths).ownerMap.load();
+}
+
+export async function saveOwnerMap(paths: SystemPaths, ownerMap: OwnerMap): Promise<void> {
+  await createFileBackedManagerRepositories(paths).ownerMap.save(ownerMap);
 }
 
 export async function loadFollowupsLedger(paths: SystemPaths): Promise<FollowupLedgerEntry[]> {

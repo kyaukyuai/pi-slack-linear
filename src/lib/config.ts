@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const DEFAULT_BOT_MODEL = "claude-sonnet-4-6";
+
 export const BOT_THINKING_LEVEL_VALUES = [
   "off",
   "minimal",
@@ -37,7 +39,7 @@ const envSchema = z.object({
   LINEAR_TEAM_KEY: z.string().min(1),
   NOTION_API_TOKEN: z.string().min(1).optional(),
   NOTION_AGENDA_PARENT_PAGE_ID: z.string().min(1).optional(),
-  BOT_MODEL: z.string().default("claude-sonnet-4-5"),
+  BOT_MODEL: z.string().default(DEFAULT_BOT_MODEL),
   BOT_THINKING_LEVEL: z.enum(BOT_THINKING_LEVEL_VALUES).default("minimal"),
   BOT_MAX_OUTPUT_TOKENS: optionalPositiveIntSchema,
   BOT_RETRY_MAX_RETRIES: z.coerce.number().int().nonnegative().default(1),

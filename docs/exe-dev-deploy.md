@@ -256,14 +256,33 @@ docker compose down
 - `workgraph-events.jsonl`
 - `workgraph-snapshot.json`
 - `jobs.json`
+- `job-status.json`
 - `HEARTBEAT.md`
 - `AGENTS.md`
 - `MEMORY.md`
 - `AGENDA_TEMPLATE.md`
+- `notion-pages.json`
 - `personalization-ledger.json`
 - `webhook-deliveries.json`
+- `sessions/`
 
-このうち、明示的に編集したくなるのは主に `policy.json`, `owner-map.json`, `HEARTBEAT.md`, runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md` です。`personalization-ledger.json` は観測用で、通常は直接編集しません。
+分類の目安:
+
+- `editable`: `policy.json`, `owner-map.json`, `jobs.json`, `HEARTBEAT.md`, runtime `AGENTS.md`, `MEMORY.md`, `AGENDA_TEMPLATE.md`
+- `internal`: `job-status.json`, `followups.json`, `planning-ledger.json`, `notion-pages.json`, `personalization-ledger.json`, `webhook-deliveries.json`
+- `derived`: `workgraph-events.jsonl`, `workgraph-snapshot.json`, `sessions/`
+
+`editable` は operator が直接編集できます。`internal` は system ledger / registry なので基本は閲覧専用、`derived` は生成物なので手編集しません。
+
+更新方針は別軸で見ます。
+
+- `silent-auto-update`: runtime `AGENTS.md`, `MEMORY.md`
+- `explicit-slack-update`: `AGENDA_TEMPLATE.md`, `HEARTBEAT.md`, `owner-map.json`
+- `manager-commit-only`: `policy.json`, `jobs.json`
+- `system-maintained`: `job-status.json`, `followups.json`, `planning-ledger.json`, `notion-pages.json`, `personalization-ledger.json`, `webhook-deliveries.json`
+- `rebuild-only`: `workgraph-events.jsonl`, `workgraph-snapshot.json`, `sessions/`
+
+`explicit-slack-update` は silent update を許しません。`AGENDA_TEMPLATE.md` と `HEARTBEAT.md` は Slack で明示依頼された全文置換だけを manager commit で反映し、`owner-map.json` は structured proposal + preview/confirm を通して更新します。
 
 `BOT_UID` / `BOT_GID` が正しく設定されていれば、これらの files は host 側 operator が `sudo` なしで編集できる owner に保たれます。
 
@@ -284,7 +303,8 @@ Slack から scheduler を操作する場合は、通常こちらを優先しま
 補足:
 
 - built-in review / heartbeat は `policy.json` が正です
-- custom job だけが `jobs.json` に直接保存されます
+- custom job だけが `jobs.json` に保存されます
+- `nextRunAt` / `lastRunAt` / `lastStatus` / `lastResult` / `lastError` は `job-status.json` に保存されます
 - built-in の `削除` は内部的には `disable` として扱います
 - built-in review / heartbeat の即時実行は今回の scope では未対応です
 
@@ -314,9 +334,20 @@ thread の解釈や issue context を確認する場合:
 npm run manager:diagnostics -- thread C0ALAMDRB9V 1773806473.747499 /workspace
 npm run manager:diagnostics -- issue AIC-38 /workspace
 npm run manager:diagnostics -- webhook /workspace
+npm run manager:diagnostics -- state-files /workspace
 npm run manager:diagnostics -- personalization /workspace
+npm run manager:diagnostics -- memory /workspace
 npm run manager:diagnostics -- llm /workspace
 ```
+
+`manager:diagnostics` は repo の `.env` を読んで app 本体と同じ runtime config を組み立てます。`ANTHROPIC_API_KEY` が入っていれば `authSource.source=runtime-override`、未設定で `/workspace/.pi/agent/auth.json` を使う場合は `authSource.source=auth-storage` です。
+
+local と `exe.dev` の差分確認手順:
+
+1. local host では `npm run manager:diagnostics -- llm ./workspace` を実行する
+2. `exe.dev` では `npm run manager:diagnostics -- llm /workspace` を実行する
+3. `configured.model`, `configured.thinkingLevel`, `configured.maxOutputTokens`, `configured.retryMaxRetries`, `authSource.source` を比較する
+4. 差分が残る場合は `.env`, Docker / VM の credential 配置, `auth.json` 利用有無のどれが原因かを確認する
 
 replay recovery 手順:
 
@@ -367,13 +398,12 @@ EOF
 cat > workspace/system/jobs.json <<'EOF'
 [
   {
-    "id": "manager-review-morning",
+    "id": "daily-task-check",
     "enabled": true,
     "channelId": "C0ALAMDRB9V",
-    "prompt": "manager review: morning",
+    "prompt": "AIC の期限近い task を確認する",
     "kind": "daily",
-    "time": "09:00",
-    "action": "morning-review"
+    "time": "09:00"
   }
 ]
 EOF

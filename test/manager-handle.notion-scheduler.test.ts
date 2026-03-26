@@ -1,9 +1,13 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleManagerMessage } from "../src/lib/manager.js";
 import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
+import {
+  loadPendingManagerConfirmation,
+  savePendingManagerConfirmation,
+} from "../src/lib/pending-manager-confirmation.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
 import { loadThreadNotionPageTarget } from "../src/lib/thread-notion-page-target.js";
 import { buildThreadPaths } from "../src/lib/thread-workspace.js";
@@ -566,5 +570,238 @@ describe("handleManagerMessage Notion and scheduler flows", () => {
         id: "weekly-notion-agenda-ai-clone",
       }),
     );
+  });
+
+  it("commits agenda template replacements immediately from Slack", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "Notion agenda template を更新します。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "replace_workspace_text_file",
+          target: "agenda-template",
+          content: "## 目的\n- 共有\n## 議題\n- 次の判断",
+          reasonSummary: "agenda template の明示更新依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "update_workspace_config",
+        confidence: 0.98,
+        summary: "agenda template の更新依頼です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-workspace-agenda",
+        messageTs: "msg-workspace-agenda-1",
+        userId: "U1",
+        text: "AGENDA_TEMPLATE.md を更新して",
+      },
+      new Date("2026-03-26T02:10:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("Notion agenda template を更新しました。");
+    await expect(readFile(systemPaths.agendaTemplateFile, "utf8")).resolves.toBe("## 目的\n- 共有\n## 議題\n- 次の判断\n");
+  });
+
+  it("stores an owner-map preview and waits for confirmation", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "owner-map を更新します。",
+      toolCalls: [],
+      proposals: [
+        {
+          commandType: "update_owner_map",
+          operation: "upsert-entry",
+          entryId: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          primary: false,
+          reasonSummary: "OPT 担当 mapping の追加依頼です。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "update_workspace_config",
+        confidence: 0.97,
+        summary: "owner-map の変更依頼です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-confirm",
+        messageTs: "msg-owner-map-confirm-1",
+        userId: "U1",
+        text: "owner-map に OPT 担当を追加して",
+      },
+      new Date("2026-03-26T02:11:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("owner-map.json の変更案です。");
+    expect(result.reply).toContain("entry opt を追加/更新");
+
+    const pending = await loadPendingManagerConfirmation(
+      buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-owner-map-confirm"),
+    );
+    expect(pending).toMatchObject({
+      kind: "owner-map",
+      previewSummaryLines: ["entry opt を追加/更新"],
+    });
+    await expect(readFile(systemPaths.ownerMapFile, "utf8")).resolves.not.toContain("\"id\": \"opt\"");
+  });
+
+  it("commits a pending owner-map preview when the user confirms", async () => {
+    const threadPaths = buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-owner-map-apply");
+    await savePendingManagerConfirmation(threadPaths, {
+      kind: "owner-map",
+      originalUserMessage: "owner-map に OPT 担当を追加して",
+      proposals: [
+        {
+          commandType: "update_owner_map",
+          operation: "upsert-entry",
+          entryId: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          primary: false,
+          reasonSummary: "OPT 担当 mapping の追加依頼です。",
+        },
+      ],
+      previewSummaryLines: ["entry opt を追加/更新"],
+      recordedAt: "2026-03-26T02:12:00.000Z",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-apply",
+        messageTs: "msg-owner-map-apply-1",
+        userId: "U1",
+        text: "はい",
+      },
+      new Date("2026-03-26T02:13:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("owner-map.json を更新しました。");
+    await expect(loadPendingManagerConfirmation(threadPaths)).resolves.toBeUndefined();
+    await expect(readFile(systemPaths.ownerMapFile, "utf8")).resolves.toContain("\"id\": \"opt\"");
+    expect(piSessionMocks.runManagerAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it("clears a pending owner-map preview when the user cancels", async () => {
+    const threadPaths = buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-owner-map-cancel");
+    await savePendingManagerConfirmation(threadPaths, {
+      kind: "owner-map",
+      originalUserMessage: "owner-map に OPT 担当を追加して",
+      proposals: [
+        {
+          commandType: "update_owner_map",
+          operation: "upsert-entry",
+          entryId: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          primary: false,
+          reasonSummary: "OPT 担当 mapping の追加依頼です。",
+        },
+      ],
+      previewSummaryLines: ["entry opt を追加/更新"],
+      recordedAt: "2026-03-26T02:14:00.000Z",
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-cancel",
+        messageTs: "msg-owner-map-cancel-1",
+        userId: "U1",
+        text: "キャンセル",
+      },
+      new Date("2026-03-26T02:15:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toBe("owner-map.json の変更案を取り消しました。");
+    await expect(loadPendingManagerConfirmation(threadPaths)).resolves.toBeUndefined();
+    await expect(readFile(systemPaths.ownerMapFile, "utf8")).resolves.not.toContain("\"id\": \"opt\"");
+    expect(piSessionMocks.runManagerAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending owner-map confirmation for non-confirm follow-up messages", async () => {
+    const threadPaths = buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-owner-map-question");
+    await savePendingManagerConfirmation(threadPaths, {
+      kind: "owner-map",
+      originalUserMessage: "owner-map に OPT 担当を追加して",
+      proposals: [
+        {
+          commandType: "update_owner_map",
+          operation: "upsert-entry",
+          entryId: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          primary: false,
+          reasonSummary: "OPT 担当 mapping の追加依頼です。",
+        },
+      ],
+      previewSummaryLines: ["entry opt を追加/更新"],
+      recordedAt: "2026-03-26T02:16:00.000Z",
+    });
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "変更案は opt entry の追加です。適用するなら「はい」、取り消すなら「キャンセル」と返信してください。",
+      toolCalls: [],
+      proposals: [],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "conversation",
+        confidence: 0.75,
+        summary: "pending owner-map preview の説明です。",
+      },
+    });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-question",
+        messageTs: "msg-owner-map-question-1",
+        userId: "U1",
+        text: "どういう変更ですか？",
+      },
+      new Date("2026-03-26T02:17:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toContain("変更案は opt entry の追加です。");
+    expect(piSessionMocks.runManagerAgentTurn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        pendingConfirmation: expect.objectContaining({
+          kind: "owner-map",
+          previewSummaryLines: ["entry opt を追加/更新"],
+        }),
+      }),
+    );
+    await expect(loadPendingManagerConfirmation(threadPaths)).resolves.toMatchObject({
+      kind: "owner-map",
+    });
   });
 });

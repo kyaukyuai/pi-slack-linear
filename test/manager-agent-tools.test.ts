@@ -62,6 +62,29 @@ const config: AppConfig = {
   logLevel: "info",
 };
 
+function buildRepositoriesForTools() {
+  return {
+    policy: { load: vi.fn() },
+    ownerMap: {
+      load: vi.fn().mockResolvedValue({
+        defaultOwner: "kyaukyuai",
+        entries: [
+          {
+            id: "kyaukyuai",
+            domains: ["default"],
+            keywords: ["manager"],
+            linearAssignee: "y.kakui",
+            slackUserId: "U01L86BCA9X",
+            primary: true,
+          },
+        ],
+      }),
+      save: vi.fn(),
+    },
+    workgraph: {} as never,
+  };
+}
+
 describe("manager agent tools", () => {
   const tempDirs: string[] = [];
 
@@ -89,10 +112,7 @@ describe("manager agent tools", () => {
         },
       ]);
 
-      const tools = createManagerAgentTools(config, {
-        policy: { load: vi.fn() },
-        workgraph: {} as never,
-      });
+      const tools = createManagerAgentTools(config, buildRepositoriesForTools());
       const tool = tools.find((entry) => entry.name === "linear_list_review_facts");
 
       expect(tool).toBeDefined();
@@ -143,10 +163,7 @@ describe("manager agent tools", () => {
       inverseRelations: [],
     });
 
-    const tools = createManagerAgentTools(config, {
-      policy: { load: vi.fn() },
-      workgraph: {} as never,
-    });
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
     const tool = tools.find((entry) => entry.name === "linear_list_review_facts");
 
     expect(tool).toBeDefined();
@@ -199,10 +216,7 @@ describe("manager agent tools", () => {
 
     const tools = createManagerAgentTools(
       { ...config, workspaceDir },
-      {
-        policy: { load: vi.fn() },
-        workgraph: {} as never,
-      },
+      buildRepositoriesForTools(),
     );
     const tool = tools.find((entry) => entry.name === "scheduler_list_schedules");
 
@@ -251,10 +265,7 @@ describe("manager agent tools", () => {
       ],
     });
 
-    const tools = createManagerAgentTools(config, {
-      policy: { load: vi.fn() },
-      workgraph: {} as never,
-    });
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
     const tool = tools.find((entry) => entry.name === "notion_get_page_content");
 
     expect(tool).toBeDefined();
@@ -276,10 +287,7 @@ describe("manager agent tools", () => {
       lines: Array.from({ length: 61 }, (_, index) => ({ text: `Line ${index + 1}` })),
     });
 
-    const tools = createManagerAgentTools(config, {
-      policy: { load: vi.fn() },
-      workgraph: {} as never,
-    });
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
     const tool = tools.find((entry) => entry.name === "notion_get_page_content");
 
     expect(tool).toBeDefined();
@@ -294,11 +302,18 @@ describe("manager agent tools", () => {
   });
 
   it("includes a dedicated workspace memory proposal tool", async () => {
-    const tools = createManagerAgentTools(config, {
-      policy: { load: vi.fn() },
-      workgraph: {} as never,
-    });
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
 
     expect(tools.some((entry) => entry.name === "propose_update_workspace_memory")).toBe(true);
+  });
+
+  it("includes dedicated workspace config read and proposal tools", async () => {
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
+
+    expect(tools.some((entry) => entry.name === "workspace_get_agenda_template")).toBe(true);
+    expect(tools.some((entry) => entry.name === "workspace_get_heartbeat_prompt")).toBe(true);
+    expect(tools.some((entry) => entry.name === "workspace_get_owner_map")).toBe(true);
+    expect(tools.some((entry) => entry.name === "propose_replace_workspace_text_file")).toBe(true);
+    expect(tools.some((entry) => entry.name === "propose_update_owner_map")).toBe(true);
   });
 });

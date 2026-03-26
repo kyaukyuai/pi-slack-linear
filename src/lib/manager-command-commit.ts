@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import {
@@ -43,6 +44,7 @@ import type {
   FollowupLedgerEntry,
   ManagerPolicy,
   NotionManagedPageEntry,
+  OwnerMapEntry,
 } from "../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import {
@@ -284,6 +286,29 @@ const updateWorkspaceMemoryProposalSchema = proposalBaseSchema.extend({
   })).min(1).max(12),
 });
 
+const workspaceTextFileTargetSchema = z.enum(["agenda-template", "heartbeat-prompt"]);
+
+const replaceWorkspaceTextFileProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("replace_workspace_text_file"),
+  target: workspaceTextFileTargetSchema,
+  content: z.string(),
+});
+
+const ownerMapUpdateOperationSchema = z.enum(["set-default-owner", "upsert-entry", "delete-entry"]);
+const ownerMapStringListSchema = z.array(z.string().trim().min(1)).max(20).optional();
+
+const updateOwnerMapProposalSchema = proposalBaseSchema.extend({
+  commandType: z.literal("update_owner_map"),
+  operation: ownerMapUpdateOperationSchema,
+  entryId: optionalStringSchema,
+  defaultOwner: optionalStringSchema,
+  linearAssignee: optionalStringSchema,
+  slackUserId: optionalStringSchema,
+  domains: ownerMapStringListSchema,
+  keywords: ownerMapStringListSchema,
+  primary: z.boolean().optional(),
+});
+
 const followupExtractedFieldsSchema = z.record(z.string(), z.string()).default({});
 
 const resolveFollowupProposalSchema = proposalBaseSchema.extend({
@@ -383,6 +408,8 @@ export const managerCommandProposalSchema = z.discriminatedUnion("commandType", 
   updateNotionPageProposalSchema,
   archiveNotionPageProposalSchema,
   updateWorkspaceMemoryProposalSchema,
+  replaceWorkspaceTextFileProposalSchema,
+  updateOwnerMapProposalSchema,
   resolveFollowupProposalSchema,
   reviewFollowupProposalSchema,
 ]);
@@ -404,6 +431,7 @@ export interface ManagerIntentReport {
     | "update_schedule"
     | "delete_schedule"
     | "followup_resolution"
+    | "update_workspace_config"
     | "review"
     | "heartbeat"
     | "scheduler";
@@ -472,10 +500,18 @@ export interface ManagerCommittedCommand {
   };
 }
 
+export interface ManagerPendingConfirmationDraft {
+  kind: "owner-map";
+  proposals: Array<z.infer<typeof updateOwnerMapProposalSchema>>;
+  previewSummaryLines: string[];
+  previewReply: string;
+}
+
 export interface ManagerCommitResult {
   committed: ManagerCommittedCommand[];
   rejected: ManagerProposalRejection[];
   replySummaries: string[];
+  pendingConfirmation?: ManagerPendingConfirmationDraft;
 }
 
 export interface CommitManagerCommandArgs {
@@ -487,6 +523,7 @@ export interface CommitManagerCommandArgs {
   policy: ManagerPolicy;
   env: LinearCommandEnv;
   existingThreadIntakeAtTurnStart?: ExistingThreadIntakeContext | null;
+  ownerMapConfirmationMode?: "preview" | "confirm";
   runSchedulerJobNow?: (job: SchedulerJob) => Promise<{
     status: "ok" | "error";
     persistedSummary: string;
@@ -522,6 +559,140 @@ function validateUpdateNotionPageProposal(
     return "replace_section では summary や sections は使えません。sectionHeading と paragraph/bullets を使ってください。";
   }
   return undefined;
+}
+
+function normalizeWorkspaceTextContent(content: string): string {
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function resolveWorkspaceTextFilePath(
+  workspaceDir: string,
+  target: z.infer<typeof workspaceTextFileTargetSchema>,
+): string {
+  const systemPaths = buildSystemPaths(workspaceDir);
+  return target === "agenda-template"
+    ? systemPaths.agendaTemplateFile
+    : systemPaths.heartbeatPromptFile;
+}
+
+function normalizeOwnerMapStringList(values: string[] | undefined): string[] {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}
+
+function buildOwnerMapPreviewSummaryLine(
+  proposal: z.infer<typeof updateOwnerMapProposalSchema>,
+): string {
+  if (proposal.operation === "set-default-owner") {
+    return `defaultOwner を ${proposal.defaultOwner} に変更`;
+  }
+  if (proposal.operation === "delete-entry") {
+    return `entry ${proposal.entryId} を削除`;
+  }
+  return `entry ${proposal.entryId} を追加/更新`;
+}
+
+function buildOwnerMapPreviewReply(
+  proposals: Array<z.infer<typeof updateOwnerMapProposalSchema>>,
+): string {
+  const lines = proposals.map(buildOwnerMapPreviewSummaryLine);
+  return [
+    "owner-map.json の変更案です。",
+    ...lines.map((line) => `- ${line}`),
+    "この内容でよければ「はい」か「適用して」、取り消すなら「キャンセル」と返信してください。",
+  ].join("\n");
+}
+
+function validateUpdateOwnerMapProposal(
+  proposal: z.infer<typeof updateOwnerMapProposalSchema>,
+): string | undefined {
+  if (proposal.operation === "set-default-owner") {
+    if (!proposal.defaultOwner) {
+      return "set-default-owner では defaultOwner が必要です。";
+    }
+    if (proposal.entryId || proposal.linearAssignee || proposal.slackUserId || proposal.domains || proposal.keywords || proposal.primary !== undefined) {
+      return "set-default-owner では defaultOwner 以外の項目は使えません。";
+    }
+    return undefined;
+  }
+
+  if (!proposal.entryId) {
+    return "entryId を明示してください。";
+  }
+
+  if (proposal.operation === "delete-entry") {
+    if (proposal.defaultOwner || proposal.linearAssignee || proposal.slackUserId || proposal.domains || proposal.keywords || proposal.primary !== undefined) {
+      return "delete-entry では entryId 以外の項目は使えません。";
+    }
+    return undefined;
+  }
+
+  if (!proposal.linearAssignee) {
+    return "upsert-entry では linearAssignee が必要です。";
+  }
+  if (proposal.defaultOwner) {
+    return "upsert-entry では defaultOwner は使えません。";
+  }
+  return undefined;
+}
+
+function applyOwnerMapProposal(
+  ownerMap: {
+    defaultOwner: string;
+    entries: OwnerMapEntry[];
+  },
+  proposal: z.infer<typeof updateOwnerMapProposalSchema>,
+): {
+  nextOwnerMap: {
+    defaultOwner: string;
+    entries: OwnerMapEntry[];
+  };
+  summary: string;
+} | ManagerProposalRejection {
+  if (proposal.operation === "set-default-owner") {
+    return {
+      nextOwnerMap: {
+        ...ownerMap,
+        defaultOwner: proposal.defaultOwner!,
+      },
+      summary: `owner-map.json を更新しました。defaultOwner を ${proposal.defaultOwner} に変更しました。`,
+    };
+  }
+
+  if (proposal.operation === "delete-entry") {
+    const exists = ownerMap.entries.some((entry) => entry.id === proposal.entryId);
+    if (!exists) {
+      return {
+        proposal,
+        reason: `${proposal.entryId} は owner-map に存在しません。`,
+      };
+    }
+    return {
+      nextOwnerMap: {
+        ...ownerMap,
+        entries: ownerMap.entries.filter((entry) => entry.id !== proposal.entryId),
+      },
+      summary: `owner-map.json を更新しました。entry ${proposal.entryId} を削除しました。`,
+    };
+  }
+
+  const nextEntry: OwnerMapEntry = {
+    id: proposal.entryId!,
+    linearAssignee: proposal.linearAssignee!,
+    slackUserId: proposal.slackUserId,
+    domains: normalizeOwnerMapStringList(proposal.domains),
+    keywords: normalizeOwnerMapStringList(proposal.keywords),
+    primary: proposal.primary ?? false,
+  };
+  return {
+    nextOwnerMap: {
+      ...ownerMap,
+      entries: [
+        ...ownerMap.entries.filter((entry) => entry.id !== proposal.entryId),
+        nextEntry,
+      ].sort((left, right) => left.id.localeCompare(right.id)),
+    },
+    summary: `owner-map.json を更新しました。entry ${proposal.entryId} を追加/更新しました。`,
+  };
 }
 
 function upsertManagedNotionPage(
@@ -993,12 +1164,14 @@ export function extractIntentReport(toolCalls: ManagerAgentToolCall[]): ManagerI
         "run_task",
         "create_work",
         "create_schedule",
+        "run_schedule",
         "update_progress",
         "update_completed",
         "update_blocked",
         "update_schedule",
         "delete_schedule",
         "followup_resolution",
+        "update_workspace_config",
         "review",
         "heartbeat",
         "scheduler",
@@ -1665,7 +1838,7 @@ async function commitCreateSchedulerJobProposal(
   if (!parsedJob.success) {
     return {
       proposal,
-      reason: parsedJob.error.issues.map((issue) => issue.message).join(" / "),
+      reason: parsedJob.error.issues.map((issue: z.ZodIssue) => issue.message).join(" / "),
     };
   }
 
@@ -1745,7 +1918,7 @@ async function commitUpdateSchedulerJobProposal(
   if (!parsedJob.success) {
     return {
       proposal,
-      reason: parsedJob.error.issues.map((issue) => issue.message).join(" / "),
+      reason: parsedJob.error.issues.map((issue: z.ZodIssue) => issue.message).join(" / "),
     };
   }
 
@@ -2151,6 +2324,45 @@ async function commitUpdateWorkspaceMemoryProposal(
   };
 }
 
+async function commitReplaceWorkspaceTextFileProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof replaceWorkspaceTextFileProposalSchema>,
+): Promise<ManagerCommittedCommand> {
+  const path = resolveWorkspaceTextFilePath(args.config.workspaceDir, proposal.target);
+  await writeFile(path, normalizeWorkspaceTextContent(proposal.content), "utf8");
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: proposal.target === "agenda-template"
+      ? "Notion agenda template を更新しました。"
+      : "HEARTBEAT prompt を更新しました。",
+  };
+}
+
+async function commitUpdateOwnerMapProposal(
+  args: CommitManagerCommandArgs,
+  proposal: z.infer<typeof updateOwnerMapProposalSchema>,
+): Promise<ManagerCommittedCommand | ManagerProposalRejection> {
+  const validationError = validateUpdateOwnerMapProposal(proposal);
+  if (validationError) {
+    return {
+      proposal,
+      reason: validationError,
+    };
+  }
+  const ownerMap = await args.repositories.ownerMap.load();
+  const result = applyOwnerMapProposal(ownerMap, proposal);
+  if ("reason" in result) {
+    return result;
+  }
+  await args.repositories.ownerMap.save(result.nextOwnerMap);
+  return {
+    commandType: proposal.commandType,
+    issueIds: [],
+    summary: result.summary,
+  };
+}
+
 async function commitResolveFollowupProposal(
   args: CommitManagerCommandArgs,
   proposal: z.infer<typeof resolveFollowupProposalSchema>,
@@ -2266,13 +2478,26 @@ async function commitReviewFollowupProposal(
   };
 }
 
+function getWorkspaceConfigTarget(
+  proposal: ManagerCommandProposal,
+): "agenda-template" | "heartbeat-prompt" | "owner-map" | undefined {
+  if (proposal.commandType === "replace_workspace_text_file") {
+    return proposal.target;
+  }
+  if (proposal.commandType === "update_owner_map") {
+    return "owner-map";
+  }
+  return undefined;
+}
+
 export async function commitManagerCommandProposals(args: CommitManagerCommandArgs): Promise<ManagerCommitResult> {
   const deduped = new Map<string, ManagerCommandProposal>();
   for (const proposal of args.proposals) {
     deduped.set(dedupeProposalKey(proposal), proposal);
   }
+  const dedupedProposals = Array.from(deduped.values());
 
-  const needsIntakeDedupeCheck = Array.from(deduped.values()).some((proposal) => (
+  const needsIntakeDedupeCheck = dedupedProposals.some((proposal) => (
     proposal.commandType === "create_issue" || proposal.commandType === "create_issue_batch"
   ));
   const commitArgs = needsIntakeDedupeCheck && !args.existingThreadIntakeAtTurnStart
@@ -2288,8 +2513,79 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
 
   const committed: ManagerCommittedCommand[] = [];
   const rejected: ManagerProposalRejection[] = [];
+  const rejectedKeys = new Set<string>();
 
-  for (const proposal of deduped.values()) {
+  const workspaceConfigProposals = dedupedProposals.filter((proposal) => getWorkspaceConfigTarget(proposal) !== undefined);
+  const workspaceConfigTargets = unique(workspaceConfigProposals.map((proposal) => getWorkspaceConfigTarget(proposal)));
+  if (workspaceConfigTargets.length > 1) {
+    for (const proposal of workspaceConfigProposals) {
+      rejected.push({
+        proposal,
+        reason: "workspace config の変更は 1 turn で 1 target ずつに分けてください。",
+      });
+      rejectedKeys.add(dedupeProposalKey(proposal));
+    }
+  }
+
+  const replaceWorkspaceTextFileProposals = workspaceConfigProposals.filter((proposal) => proposal.commandType === "replace_workspace_text_file");
+  if (replaceWorkspaceTextFileProposals.length > 1) {
+    for (const proposal of replaceWorkspaceTextFileProposals) {
+      if (rejectedKeys.has(dedupeProposalKey(proposal))) continue;
+      rejected.push({
+        proposal,
+        reason: "AGENDA_TEMPLATE.md と HEARTBEAT.md の更新は 1 turn で 1 proposal のみにしてください。",
+      });
+      rejectedKeys.add(dedupeProposalKey(proposal));
+    }
+  }
+
+  const ownerMapProposals = dedupedProposals.filter((proposal): proposal is z.infer<typeof updateOwnerMapProposalSchema> => (
+    proposal.commandType === "update_owner_map"
+  ));
+  if (ownerMapProposals.length > 0 && dedupedProposals.some((proposal) => proposal.commandType !== "update_owner_map")) {
+    for (const proposal of ownerMapProposals) {
+      if (rejectedKeys.has(dedupeProposalKey(proposal))) continue;
+      rejected.push({
+        proposal,
+        reason: "owner-map の変更は専用 turn に分けてください。",
+      });
+      rejectedKeys.add(dedupeProposalKey(proposal));
+    }
+  }
+
+  const remainingProposals = dedupedProposals.filter((proposal) => !rejectedKeys.has(dedupeProposalKey(proposal)));
+  const pendingOwnerMapProposals = remainingProposals.filter((proposal): proposal is z.infer<typeof updateOwnerMapProposalSchema> => (
+    proposal.commandType === "update_owner_map"
+  ));
+  const validPendingOwnerMapProposals: Array<z.infer<typeof updateOwnerMapProposalSchema>> = [];
+  for (const proposal of pendingOwnerMapProposals) {
+    const validationError = validateUpdateOwnerMapProposal(proposal);
+    if (validationError) {
+      rejected.push({
+        proposal,
+        reason: validationError,
+      });
+      rejectedKeys.add(dedupeProposalKey(proposal));
+    } else {
+      validPendingOwnerMapProposals.push(proposal);
+    }
+  }
+  const executableProposals = remainingProposals.filter((proposal) => !rejectedKeys.has(dedupeProposalKey(proposal)));
+  if (validPendingOwnerMapProposals.length > 0 && (args.ownerMapConfirmationMode ?? "preview") !== "confirm") {
+    return {
+      committed,
+      rejected,
+      replySummaries: committed.map((entry) => entry.summary),
+      pendingConfirmation: {
+        kind: "owner-map",
+        proposals: validPendingOwnerMapProposals,
+        previewSummaryLines: validPendingOwnerMapProposals.map(buildOwnerMapPreviewSummaryLine),
+        previewReply: buildOwnerMapPreviewReply(validPendingOwnerMapProposals),
+      },
+    };
+  }
+
+  for (const proposal of executableProposals) {
     const parsedProposal = managerCommandProposalSchema.safeParse(proposal);
     if (!parsedProposal.success) {
       const missingDecisionFields = parsedProposal.error.issues
@@ -2306,41 +2602,73 @@ export async function commitManagerCommandProposals(args: CommitManagerCommandAr
     }
 
     const validatedProposal = parsedProposal.data;
-      const result = validatedProposal.commandType === "create_issue"
-      ? await commitCreateIssueProposal(commitArgs, validatedProposal)
-      : validatedProposal.commandType === "create_issue_batch"
-        ? await commitCreateIssueBatchProposal(commitArgs, validatedProposal)
-      : validatedProposal.commandType === "update_issue_status"
-          ? await commitUpdateIssueStatusProposal(commitArgs, validatedProposal)
-        : validatedProposal.commandType === "assign_issue"
-            ? await commitAssignIssueProposal(commitArgs, validatedProposal)
-          : validatedProposal.commandType === "add_comment"
-              ? await commitAddCommentProposal(commitArgs, validatedProposal)
-            : validatedProposal.commandType === "add_relation"
-                ? await commitAddRelationProposal(commitArgs, validatedProposal)
-              : validatedProposal.commandType === "set_issue_parent"
-                  ? await commitSetIssueParentProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "create_scheduler_job"
-                  ? await commitCreateSchedulerJobProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "update_scheduler_job"
-                  ? await commitUpdateSchedulerJobProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "delete_scheduler_job"
-                  ? await commitDeleteSchedulerJobProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "update_builtin_schedule"
-                  ? await commitUpdateBuiltinScheduleProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "run_scheduler_job_now"
-                  ? await commitRunSchedulerJobNowProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "create_notion_agenda"
-                  ? await commitCreateNotionAgendaProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "update_notion_page"
-                  ? await commitUpdateNotionPageProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "archive_notion_page"
-                  ? await commitArchiveNotionPageProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "update_workspace_memory"
-                  ? await commitUpdateWorkspaceMemoryProposal(commitArgs, validatedProposal)
-                : validatedProposal.commandType === "resolve_followup"
-                  ? await commitResolveFollowupProposal(commitArgs, validatedProposal)
-                  : await commitReviewFollowupProposal(commitArgs, validatedProposal);
+    let result: ManagerCommittedCommand | ManagerProposalRejection;
+    switch (validatedProposal.commandType) {
+      case "create_issue":
+        result = await commitCreateIssueProposal(commitArgs, validatedProposal);
+        break;
+      case "create_issue_batch":
+        result = await commitCreateIssueBatchProposal(commitArgs, validatedProposal);
+        break;
+      case "update_issue_status":
+        result = await commitUpdateIssueStatusProposal(commitArgs, validatedProposal);
+        break;
+      case "assign_issue":
+        result = await commitAssignIssueProposal(commitArgs, validatedProposal);
+        break;
+      case "add_comment":
+        result = await commitAddCommentProposal(commitArgs, validatedProposal);
+        break;
+      case "add_relation":
+        result = await commitAddRelationProposal(commitArgs, validatedProposal);
+        break;
+      case "set_issue_parent":
+        result = await commitSetIssueParentProposal(commitArgs, validatedProposal);
+        break;
+      case "create_scheduler_job":
+        result = await commitCreateSchedulerJobProposal(commitArgs, validatedProposal);
+        break;
+      case "update_scheduler_job":
+        result = await commitUpdateSchedulerJobProposal(commitArgs, validatedProposal);
+        break;
+      case "delete_scheduler_job":
+        result = await commitDeleteSchedulerJobProposal(commitArgs, validatedProposal);
+        break;
+      case "update_builtin_schedule":
+        result = await commitUpdateBuiltinScheduleProposal(commitArgs, validatedProposal);
+        break;
+      case "run_scheduler_job_now":
+        result = await commitRunSchedulerJobNowProposal(commitArgs, validatedProposal);
+        break;
+      case "create_notion_agenda":
+        result = await commitCreateNotionAgendaProposal(commitArgs, validatedProposal);
+        break;
+      case "update_notion_page":
+        result = await commitUpdateNotionPageProposal(commitArgs, validatedProposal);
+        break;
+      case "archive_notion_page":
+        result = await commitArchiveNotionPageProposal(commitArgs, validatedProposal);
+        break;
+      case "update_workspace_memory":
+        result = await commitUpdateWorkspaceMemoryProposal(commitArgs, validatedProposal);
+        break;
+      case "replace_workspace_text_file":
+        result = await commitReplaceWorkspaceTextFileProposal(commitArgs, validatedProposal);
+        break;
+      case "update_owner_map":
+        result = await commitUpdateOwnerMapProposal(commitArgs, validatedProposal);
+        break;
+      case "resolve_followup":
+        result = await commitResolveFollowupProposal(commitArgs, validatedProposal);
+        break;
+      case "review_followup":
+        result = await commitReviewFollowupProposal(commitArgs, validatedProposal);
+        break;
+      default: {
+        const unreachable: never = validatedProposal;
+        throw new Error(`Unhandled proposal commandType: ${(unreachable as { commandType?: string }).commandType ?? "unknown"}`);
+      }
+    }
 
     if ("reason" in result) {
       rejected.push(result);

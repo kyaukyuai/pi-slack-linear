@@ -2,9 +2,11 @@ import type { ManagerPolicy } from "../state/manager-state-contract.js";
 import { DEFAULT_HEARTBEAT_PROMPT } from "./heartbeat.js";
 import { normalizeSchedulerJobs } from "./scheduler.js";
 import {
+  loadSchedulerJobStatuses,
   loadSchedulerJobs,
   readHeartbeatInstructions,
   type SchedulerJob,
+  type SchedulerJobStatus,
   type SystemPaths,
 } from "./system-workspace.js";
 
@@ -161,6 +163,33 @@ export function syncBuiltInReviewJobs(policy: ManagerPolicy, jobs: SchedulerJob[
   return [...customJobs, ...desiredJobs];
 }
 
+function applySchedulerJobStatuses(
+  jobs: SchedulerJob[],
+  statuses: SchedulerJobStatus[],
+): SchedulerJob[] {
+  const statusById = new Map(statuses.map((status) => [status.id, status]));
+  return jobs.map((job) => ({
+    ...job,
+    ...(statusById.get(job.id) ?? {}),
+  }));
+}
+
+export async function loadExecutableSchedulerJobs(
+  paths: SystemPaths,
+  policy: ManagerPolicy,
+): Promise<SchedulerJob[]> {
+  const [customJobs, statuses] = await Promise.all([
+    loadSchedulerJobs(paths),
+    loadSchedulerJobStatuses(paths),
+  ]);
+
+  const builtInJobs = buildManagerReviewJobs(policy);
+  return [
+    ...normalizeSchedulerJobs(customJobs),
+    ...normalizeSchedulerJobs(applySchedulerJobStatuses(builtInJobs, statuses)),
+  ];
+}
+
 function buildCustomScheduleView(job: SchedulerJob, policy: ManagerPolicy): SchedulerScheduleView {
   return {
     id: job.id,
@@ -237,7 +266,7 @@ export async function listUnifiedSchedules(
   },
 ): Promise<SchedulerScheduleView[]> {
   const channelId = options?.channelId ?? policy.controlRoomChannelId;
-  const jobs = normalizeSchedulerJobs(await loadSchedulerJobs(paths));
+  const jobs = await loadExecutableSchedulerJobs(paths, policy);
   const heartbeatPrompt = (await readHeartbeatInstructions(paths)) ?? DEFAULT_HEARTBEAT_PROMPT;
   const customViews = jobs
     .filter((job) => !isBuiltInReviewJobId(job.id))
@@ -261,7 +290,7 @@ export async function getUnifiedSchedule(
   policy: ManagerPolicy,
   id: string,
 ): Promise<SchedulerScheduleView | undefined> {
-  const jobs = normalizeSchedulerJobs(await loadSchedulerJobs(paths));
+  const jobs = await loadExecutableSchedulerJobs(paths, policy);
   if (id === "heartbeat") {
     const heartbeatPrompt = (await readHeartbeatInstructions(paths)) ?? DEFAULT_HEARTBEAT_PROMPT;
     return buildHeartbeatView(policy, heartbeatPrompt);

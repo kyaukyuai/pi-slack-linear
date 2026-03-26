@@ -2,7 +2,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildManagerIssueDiagnostics, buildManagerThreadDiagnostics } from "../src/lib/manager-diagnostics.js";
+import {
+  buildManagerIssueDiagnostics,
+  buildManagerStateFileDiagnostics,
+  buildManagerThreadDiagnostics,
+  buildManagerWorkspaceMemoryDiagnostics,
+} from "../src/lib/manager-diagnostics.js";
 import { saveLastManagerAgentTurn } from "../src/lib/last-manager-agent-turn.js";
 import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
 import { savePendingManagerClarification } from "../src/lib/pending-manager-clarification.js";
@@ -228,5 +233,105 @@ describe("manager diagnostics", () => {
     expect(diagnostics.followup?.requestKind).toBe("status");
     expect(diagnostics.slackThreadContext?.entries).toHaveLength(1);
     expect(diagnostics.linearIssue?.identifier).toBe("AIC-970");
+  });
+
+  it("builds state file diagnostics with classification summaries", async () => {
+    const diagnostics = await buildManagerStateFileDiagnostics({ workspaceDir });
+
+    expect(diagnostics.systemRoot).toBe(join(workspaceDir, "system"));
+    expect(diagnostics.classificationSummary.editable).toEqual(
+      expect.arrayContaining(["policy.json", "owner-map.json", "HEARTBEAT.md"]),
+    );
+    expect(diagnostics.classificationSummary.internal).toEqual(
+      expect.arrayContaining(["followups.json", "notion-pages.json", "webhook-deliveries.json", "job-status.json"]),
+    );
+    expect(diagnostics.classificationSummary.derived).toEqual(
+      expect.arrayContaining(["workgraph-events.jsonl", "workgraph-snapshot.json", "sessions/"]),
+    );
+    expect(diagnostics.operatorActionSummary.doNotEdit).toEqual(
+      expect.arrayContaining(["workgraph-events.jsonl", "sessions/"]),
+    );
+    expect(diagnostics.writePolicySummary["silent-auto-update"]).toEqual(
+      expect.arrayContaining(["AGENTS.md", "MEMORY.md"]),
+    );
+    expect(diagnostics.writePolicySummary["explicit-slack-update"]).toEqual(
+      expect.arrayContaining(["AGENDA_TEMPLATE.md", "HEARTBEAT.md", "owner-map.json"]),
+    );
+    expect(diagnostics.writePolicySummary["manager-commit-only"]).toEqual(
+      expect.arrayContaining(["policy.json", "jobs.json"]),
+    );
+    expect(diagnostics.writePolicySummary["system-maintained"]).toEqual(
+      expect.arrayContaining(["followups.json", "webhook-deliveries.json", "job-status.json"]),
+    );
+    expect(diagnostics.writePolicySummary["rebuild-only"]).toEqual(
+      expect.arrayContaining(["workgraph-events.jsonl", "sessions/"]),
+    );
+    expect(diagnostics.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relativePath: "policy.json",
+        exists: true,
+        classification: "editable",
+      }),
+      expect.objectContaining({
+        relativePath: "sessions/",
+        entryType: "directory",
+      }),
+    ]));
+    expect(diagnostics.writePolicyNotes.silentAutoUpdate).toContain("automatically");
+    expect(diagnostics.writePolicyNotes.explicitSlackUpdate).toContain("explicit Slack request");
+  });
+
+  it("builds workspace memory diagnostics with coverage and boundary warnings", async () => {
+    const systemPaths = buildSystemPaths(workspaceDir);
+    await writeFile(systemPaths.memoryFile, [
+      "## Projects",
+      "",
+      "### AIクローンプラットフォーム",
+      "",
+      "#### Overview",
+      "- AIクローンプラットフォームは金澤クローンプロジェクトである。",
+      "",
+      "#### Members And Roles",
+      "- 金澤さんは初期 PoC の中心となるクローン対象者である。",
+      "",
+      "#### Roadmap And Milestones",
+      "- 3ヶ月後に金澤クローンが Slack 上で日常相談に耐える状態を目標にする。",
+      "",
+      "### OPT社内利用開始",
+      "",
+      "#### Overview",
+      "- OPT 社内利用開始は AIクローンプラットフォームの利用対象を広げる導入フェーズである。",
+      "",
+      "#### Roadmap And Milestones",
+      "- AIC-38 は 2026-03-27 期限で現在 Backlog のままです。",
+      "",
+    ].join("\n"), "utf8");
+
+    const diagnostics = await buildManagerWorkspaceMemoryDiagnostics({ workspaceDir });
+
+    expect(diagnostics.projectNames).toEqual(["AIクローンプラットフォーム", "OPT社内利用開始"]);
+    expect(diagnostics.completeProjects).toEqual(["AIクローンプラットフォーム"]);
+    expect(diagnostics.incompleteProjects).toEqual(["OPT社内利用開始"]);
+    expect(diagnostics.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        projectName: "AIクローンプラットフォーム",
+        missingSections: [],
+        bulletCounts: {
+          Overview: 1,
+          "Members And Roles": 1,
+          "Roadmap And Milestones": 1,
+        },
+      }),
+      expect.objectContaining({
+        projectName: "OPT社内利用開始",
+        missingSections: ["Members And Roles"],
+      }),
+    ]));
+    expect(diagnostics.currentStateWarnings).toEqual([
+      expect.objectContaining({
+        reason: "issue-reference",
+        line: "- AIC-38 は 2026-03-27 期限で現在 Backlog のままです。",
+      }),
+    ]);
   });
 });

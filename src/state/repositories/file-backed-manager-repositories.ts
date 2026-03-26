@@ -31,7 +31,7 @@ export interface MutableRepository<T> extends ReadonlyRepository<T> {
 }
 
 export type PolicyRepository = ReadonlyRepository<ManagerPolicy>;
-export type OwnerMapRepository = ReadonlyRepository<OwnerMap>;
+export type OwnerMapRepository = MutableRepository<OwnerMap>;
 export type FollowupRepository = MutableRepository<FollowupLedgerEntry[]>;
 export type PlanningRepository = MutableRepository<PlanningLedgerEntry[]>;
 export type WebhookDeliveryRepository = MutableRepository<WebhookDeliveryEntry[]>;
@@ -95,7 +95,7 @@ function createMutableJsonRepository<S extends z.ZodTypeAny>(
 export function createFileBackedManagerRepositories(paths: SystemPaths): ManagerRepositories {
   return {
     policy: createReadonlyJsonRepository(paths.policyFile, managerPolicySchema, DEFAULT_POLICY),
-    ownerMap: createReadonlyJsonRepository(paths.ownerMapFile, ownerMapSchema, DEFAULT_OWNER_MAP),
+    ownerMap: createMutableJsonRepository(paths.ownerMapFile, ownerMapSchema, DEFAULT_OWNER_MAP),
     followups: createMutableJsonRepository(paths.followupsFile, followupsLedgerSchema, []),
     planning: createMutableJsonRepository(paths.planningLedgerFile, planningLedgerSchema, []),
     personalization: createMutableJsonRepository(paths.personalizationLedgerFile, personalizationLedgerSchema, []),

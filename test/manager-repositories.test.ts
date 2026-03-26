@@ -62,9 +62,33 @@ describe("file-backed manager repositories", () => {
 
     await repositories.followups.save(followups);
     await repositories.planning.save(planningLedger);
+    await repositories.ownerMap.save({
+      defaultOwner: "y.kakui",
+      entries: [
+        {
+          id: "opt",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          linearAssignee: "t.tahira",
+          primary: false,
+        },
+      ],
+    });
 
     expect(await loadFollowupsLedger(systemPaths)).toEqual(followups);
     expect(await loadPlanningLedger(systemPaths)).toEqual(planningLedger);
+    await expect(repositories.ownerMap.load()).resolves.toEqual({
+      defaultOwner: "y.kakui",
+      entries: [
+        {
+          id: "opt",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          linearAssignee: "t.tahira",
+          primary: false,
+        },
+      ],
+    });
   });
 
   it("reloads saved values from a new repository instance", async () => {

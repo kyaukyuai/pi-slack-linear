@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../src/lib/config.js";
+import { DEFAULT_BOT_MODEL, loadConfig } from "../src/lib/config.js";
 
 const baseEnv = {
   SLACK_APP_TOKEN: "xapp-test",
@@ -17,6 +17,7 @@ describe("loadConfig", () => {
     expect(config.linearWebhookEnabled).toBe(false);
     expect(config.linearWebhookPort).toBe(8787);
     expect(config.linearWebhookPath).toBe("/hooks/linear");
+    expect(config.botModel).toBe(DEFAULT_BOT_MODEL);
     expect(config.botThinkingLevel).toBe("minimal");
     expect(config.botMaxOutputTokens).toBeUndefined();
     expect(config.botRetryMaxRetries).toBe(1);

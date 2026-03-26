@@ -1106,6 +1106,11 @@ describe("manager command commit", () => {
         kind: "weekly",
         weekday: "thu",
         time: "09:00",
+      },
+    ], null, 2)}\n`, "utf8");
+    await writeFile(systemPaths.jobStatusFile, `${JSON.stringify([
+      {
+        id: "weekly-notion-agenda-ai-clone",
         nextRunAt: "2026-03-26T00:00:00.000Z",
       },
     ], null, 2)}\n`, "utf8");
@@ -1143,8 +1148,8 @@ describe("manager command commit", () => {
       }),
     });
 
-    const jobs = JSON.parse(await readFile(systemPaths.jobsFile, "utf8")) as Array<Record<string, unknown>>;
-    const updatedJob = jobs.find((job) => job.id === "weekly-notion-agenda-ai-clone");
+    const jobStatuses = JSON.parse(await readFile(systemPaths.jobStatusFile, "utf8")) as Array<Record<string, unknown>>;
+    const updatedJob = jobStatuses.find((job) => job.id === "weekly-notion-agenda-ai-clone");
 
     expect(result.committed).toHaveLength(1);
     expect(result.committed[0]?.summary).toContain("Notion agenda created:");
@@ -1753,5 +1758,229 @@ describe("manager command commit", () => {
     expect(result.committed).toEqual([]);
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.reason).toContain("project-level milestones only");
+  });
+
+  it("replaces the agenda template immediately through manager commit", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "replace_workspace_text_file",
+          target: "agenda-template",
+          content: "## 目的\n- 方針確認\n## 議題\n- 期限整理",
+          reasonSummary: "agenda template の明示更新依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-agenda-template",
+        messageTs: "msg-agenda-template-1",
+        userId: "U1",
+        text: "AGENDA_TEMPLATE.md をこの内容で更新して",
+      },
+      now: new Date("2026-03-26T01:00:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.pendingConfirmation).toBeUndefined();
+    expect(result.rejected).toEqual([]);
+    expect(result.committed).toEqual([
+      expect.objectContaining({
+        commandType: "replace_workspace_text_file",
+        summary: "Notion agenda template を更新しました。",
+      }),
+    ]);
+    await expect(readFile(buildSystemPaths(workspaceDir).agendaTemplateFile, "utf8")).resolves.toBe("## 目的\n- 方針確認\n## 議題\n- 期限整理\n");
+  });
+
+  it("replaces the heartbeat prompt immediately through manager commit", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "replace_workspace_text_file",
+          target: "heartbeat-prompt",
+          content: "現在の blocked issue だけ短く知らせてください。",
+          reasonSummary: "heartbeat prompt の明示更新依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-heartbeat-template",
+        messageTs: "msg-heartbeat-template-1",
+        userId: "U1",
+        text: "HEARTBEAT.md をこの内容で更新して",
+      },
+      now: new Date("2026-03-26T01:01:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.pendingConfirmation).toBeUndefined();
+    expect(result.rejected).toEqual([]);
+    expect(result.committed).toEqual([
+      expect.objectContaining({
+        commandType: "replace_workspace_text_file",
+        summary: "HEARTBEAT prompt を更新しました。",
+      }),
+    ]);
+    await expect(readFile(buildSystemPaths(workspaceDir).heartbeatPromptFile, "utf8")).resolves.toBe("現在の blocked issue だけ短く知らせてください。\n");
+  });
+
+  it("returns an owner-map preview before confirmation", async () => {
+    const before = await repositories.ownerMap.load();
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "update_owner_map",
+          operation: "upsert-entry",
+          entryId: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+          primary: false,
+          reasonSummary: "OPT 担当 mapping の追加依頼です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-preview",
+        messageTs: "msg-owner-map-preview-1",
+        userId: "U1",
+        text: "owner-map に OPT 担当を追加して",
+      },
+      now: new Date("2026-03-26T01:02:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toEqual([]);
+    expect(result.rejected).toEqual([]);
+    expect(result.pendingConfirmation).toMatchObject({
+      kind: "owner-map",
+      previewSummaryLines: ["entry opt を追加/更新"],
+    });
+    await expect(repositories.ownerMap.load()).resolves.toEqual(before);
+  });
+
+  it("commits owner-map changes only after explicit confirmation mode", async () => {
+    const proposals = [
+      {
+        commandType: "update_owner_map" as const,
+        operation: "set-default-owner" as const,
+        defaultOwner: "y.kakui",
+        reasonSummary: "fallback owner を変更する依頼です。",
+      },
+      {
+        commandType: "update_owner_map" as const,
+        operation: "upsert-entry" as const,
+        entryId: "opt",
+        linearAssignee: "t.tahira",
+        domains: ["sales"],
+        keywords: ["OPT"],
+        primary: false,
+        reasonSummary: "OPT 担当 mapping の追加依頼です。",
+      },
+    ];
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals,
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-owner-map-confirm",
+        messageTs: "msg-owner-map-confirm-1",
+        userId: "U1",
+        text: "はい",
+      },
+      now: new Date("2026-03-26T01:03:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+      ownerMapConfirmationMode: "confirm",
+    });
+
+    expect(result.pendingConfirmation).toBeUndefined();
+    expect(result.rejected).toEqual([]);
+    expect(result.committed).toHaveLength(2);
+    await expect(repositories.ownerMap.load()).resolves.toEqual({
+      defaultOwner: "y.kakui",
+      entries: expect.arrayContaining([
+        expect.objectContaining({
+          id: "kyaukyuai",
+        }),
+        expect.objectContaining({
+          id: "opt",
+          linearAssignee: "t.tahira",
+          domains: ["sales"],
+          keywords: ["OPT"],
+        }),
+      ]),
+    });
+  });
+
+  it("rejects mixed workspace config targets in one turn", async () => {
+    const result = await commitManagerCommandProposals({
+      config: { ...config, workspaceDir },
+      repositories,
+      proposals: [
+        {
+          commandType: "replace_workspace_text_file",
+          target: "agenda-template",
+          content: "## 議題\n- 共有",
+          reasonSummary: "agenda template の更新です。",
+        },
+        {
+          commandType: "update_owner_map",
+          operation: "set-default-owner",
+          defaultOwner: "y.kakui",
+          reasonSummary: "default owner の更新です。",
+        },
+      ],
+      message: {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-workspace-config-mixed",
+        messageTs: "msg-workspace-config-mixed-1",
+        userId: "U1",
+        text: "agenda と owner-map を両方変えて",
+      },
+      now: new Date("2026-03-26T01:04:00.000Z"),
+      policy: await repositories.policy.load(),
+      env: {
+        ...process.env,
+        LINEAR_API_KEY: "lin_api_test",
+        LINEAR_WORKSPACE: "kyaukyuai",
+        LINEAR_TEAM_KEY: "AIC",
+      },
+    });
+
+    expect(result.committed).toEqual([]);
+    expect(result.pendingConfirmation).toBeUndefined();
+    expect(result.rejected).toHaveLength(2);
+    expect(result.rejected[0]?.reason).toContain("1 target");
   });
 });

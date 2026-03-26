@@ -1,12 +1,18 @@
+import "dotenv/config";
 import { resolve } from "node:path";
-import { buildManagerIssueDiagnostics, buildManagerThreadDiagnostics } from "../src/lib/manager-diagnostics.js";
-import type { AppConfig } from "../src/lib/config.js";
+import {
+  buildManagerIssueDiagnostics,
+  buildManagerStateFileDiagnostics,
+  buildManagerThreadDiagnostics,
+  buildManagerWorkspaceMemoryDiagnostics,
+} from "../src/lib/manager-diagnostics.js";
+import { DEFAULT_BOT_MODEL, type AppConfig } from "../src/lib/config.js";
 import { ensureManagerStateFiles, loadWebhookDeliveries } from "../src/lib/manager-state.js";
 import { buildLlmDiagnosticsFromConfig } from "../src/runtime/llm-runtime-config.js";
 import { buildSystemPaths, readWorkspaceAgents, readWorkspaceMemory } from "../src/lib/system-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 
-type Command = "thread" | "issue" | "webhook" | "personalization" | "llm";
+type Command = "thread" | "issue" | "webhook" | "personalization" | "llm" | "state-files" | "memory";
 
 function extractMarkdownHeadings(value: string | undefined): string[] {
   if (!value) {
@@ -19,8 +25,8 @@ function extractMarkdownHeadings(value: string | undefined): string[] {
 }
 
 function parseCommand(value: string | undefined): Command {
-  if (value === "thread" || value === "issue" || value === "webhook" || value === "personalization" || value === "llm") return value;
-  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook|personalization|llm> <arg1> <arg2?> [workspaceDir]");
+  if (value === "thread" || value === "issue" || value === "webhook" || value === "personalization" || value === "llm" || value === "state-files" || value === "memory") return value;
+  throw new Error("Usage: tsx scripts/manager-diagnostics.ts <thread|issue|webhook|personalization|llm|state-files|memory> <arg1> <arg2?> [workspaceDir]");
 }
 
 function buildRuntimeConfig(workspaceDir: string): AppConfig {
@@ -39,7 +45,7 @@ function buildRuntimeConfig(workspaceDir: string): AppConfig {
     linearTeamKey: process.env.LINEAR_TEAM_KEY ?? "",
     notionApiToken: process.env.NOTION_API_TOKEN,
     notionAgendaParentPageId: process.env.NOTION_AGENDA_PARENT_PAGE_ID,
-    botModel: process.env.BOT_MODEL ?? "claude-sonnet-4-5",
+    botModel: process.env.BOT_MODEL ?? DEFAULT_BOT_MODEL,
     botThinkingLevel: (process.env.BOT_THINKING_LEVEL as AppConfig["botThinkingLevel"] | undefined) ?? "minimal",
     botMaxOutputTokens: process.env.BOT_MAX_OUTPUT_TOKENS ? Number(process.env.BOT_MAX_OUTPUT_TOKENS) : undefined,
     botRetryMaxRetries: Number(process.env.BOT_RETRY_MAX_RETRIES ?? 1),
@@ -75,6 +81,18 @@ async function main(): Promise<void> {
 
   if (command === "llm") {
     const diagnostics = await buildLlmDiagnosticsFromConfig(config);
+    process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+    return;
+  }
+
+  if (command === "state-files") {
+    const diagnostics = await buildManagerStateFileDiagnostics({ workspaceDir });
+    process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+    return;
+  }
+
+  if (command === "memory") {
+    const diagnostics = await buildManagerWorkspaceMemoryDiagnostics({ workspaceDir });
     process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`);
     return;
   }

@@ -131,6 +131,16 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("When the user explicitly asks to create an agenda in Notion, use propose_create_notion_agenda instead of creating a Linear issue.");
     expect(prompt).toContain("When the user explicitly asks to update, append to, retitle, archive, or delete a Notion page, use the dedicated Notion page proposal tools instead of creating or updating a Linear issue.");
     expect(prompt).toContain("When the user explicitly asks to save durable knowledge into MEMORY or workspace memory, use propose_update_workspace_memory as the primary path instead of relying only on silent personalization.");
+    expect(prompt).toContain("When the user explicitly asks to update, replace, rewrite, edit, or reflect changes into AGENDA_TEMPLATE.md, use intent=update_workspace_config");
+    expect(prompt).toContain("workspace_get_agenda_template");
+    expect(prompt).toContain("When the user explicitly asks to update, replace, rewrite, edit, or reflect changes into HEARTBEAT.md, use intent=update_workspace_config");
+    expect(prompt).toContain("workspace_get_heartbeat_prompt");
+    expect(prompt).toContain("When the user explicitly asks to update, change, edit, add to, or delete from owner-map.json, use intent=update_workspace_config");
+    expect(prompt).toContain("workspace_get_owner_map");
+    expect(prompt).toContain("propose_update_owner_map");
+    expect(prompt).toContain("Do not route AGENDA_TEMPLATE.md, HEARTBEAT.md, or owner-map.json changes through MEMORY saves or silent personalization.");
+    expect(prompt).toContain("owner-map updates use a preview-first path in this scope.");
+    expect(prompt).toContain("Never reply that direct file editing tools are unavailable for AGENDA_TEMPLATE.md, HEARTBEAT.md, or owner-map.json.");
     expect(prompt).toContain("For explicit MEMORY saves, it is valid to save a structured project snapshot with several entries such as project-overview, members-and-roles, roadmap-and-milestones, terminology, and context.");
     expect(prompt).toContain("For Notion-based MEMORY save requests, call notion_get_page_content first and extract durable project facts, members, roadmap milestones, terminology, preferences, or context from the page content.");
     expect(prompt).toContain("When the user asks to read an entire Notion page or save its overall content into MEMORY, continue calling notion_get_page_content with later startLine values if the current window says more lines are available.");
@@ -347,6 +357,59 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("- threadParentIssueId: AIC-39");
     expect(prompt).toContain("- originalUserMessage: 箇条書きや太文字が Slack にそのまま表示されているので、それを修正するタスクを作成してください。");
     expect(prompt).toContain("If the latest message looks like a clarification or intent correction");
+  });
+
+  it("includes pending manager confirmation context for owner-map previews", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.679",
+      userId: "U123",
+      text: "どういう変更ですか？",
+      currentDate: "2026-03-23",
+      pendingConfirmation: {
+        kind: "owner-map",
+        originalUserMessage: "owner-map に OPT 担当を追加して",
+        proposals: [
+          {
+            commandType: "update_owner_map",
+            operation: "upsert-entry",
+            entryId: "opt",
+            linearAssignee: "t.tahira",
+            domains: ["sales"],
+            keywords: ["OPT"],
+            primary: false,
+            reasonSummary: "OPT 担当 mapping を追加する依頼です。",
+          },
+        ],
+        previewSummaryLines: ["entry opt を追加/更新"],
+        recordedAt: "2026-03-23T03:20:00.000Z",
+      },
+    });
+
+    expect(prompt).toContain("Pending manager confirmation context:");
+    expect(prompt).toContain("- kind: owner-map");
+    expect(prompt).toContain("- originalUserMessage: owner-map に OPT 担当を追加して");
+    expect(prompt).toContain("- previewSummaryLines: entry opt を追加/更新");
+  });
+
+  it("adds workspace config update hints when the latest message targets AGENDA_TEMPLATE.md", () => {
+    const prompt = buildManagerAgentPrompt({
+      kind: "message",
+      channelId: "C0ALAMDRB9V",
+      rootThreadTs: "12345.678",
+      messageTs: "12345.679",
+      userId: "U123",
+      text: "今まで作ってきたアジェンダを確認して、AGENDA_TEMPLATE.md を更新して",
+      currentDate: "2026-03-26",
+    });
+
+    expect(prompt).toContain("Workspace config update hints:");
+    expect(prompt).toContain("Treat this as intent=update_workspace_config, not as a read-only query.");
+    expect(prompt).toContain("workspace_get_agenda_template");
+    expect(prompt).toContain("propose_replace_workspace_text_file with target=agenda-template");
+    expect(prompt).toContain("Do not say that direct file editing is unavailable.");
   });
 
   it("adds reference-material follow-up guidance when prior pages are stored", () => {

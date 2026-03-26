@@ -1,6 +1,5 @@
 import type { Logger } from "./logger.js";
-import type { SchedulerJob, SystemPaths } from "./system-workspace.js";
-import { loadSchedulerJobs, saveSchedulerJobs } from "./system-workspace.js";
+import type { SchedulerJob } from "./system-workspace.js";
 
 export interface SchedulerExecutionContext {
   job: SchedulerJob;
@@ -13,8 +12,9 @@ export interface SchedulerExecutionResult {
 
 export interface SchedulerServiceOptions {
   logger: Logger;
-  systemPaths: SystemPaths;
   pollSec: number;
+  loadJobs: () => Promise<SchedulerJob[]>;
+  persistJobs: (jobs: SchedulerJob[]) => Promise<void>;
   executeJob: (context: SchedulerExecutionContext) => Promise<SchedulerExecutionResult>;
 }
 
@@ -214,10 +214,10 @@ export class SchedulerService {
     this.running = true;
 
     try {
-      const loadedJobs = await loadSchedulerJobs(this.options.systemPaths);
+      const loadedJobs = await this.options.loadJobs();
       const jobs = normalizeSchedulerJobs(loadedJobs);
       if (JSON.stringify(loadedJobs) !== JSON.stringify(jobs)) {
-        await saveSchedulerJobs(this.options.systemPaths, jobs);
+        await this.options.persistJobs(jobs);
       }
 
       const dueJobs = jobs.filter((job) => isJobDue(job));
@@ -241,7 +241,7 @@ export class SchedulerService {
         }
       }
 
-      await saveSchedulerJobs(this.options.systemPaths, mutatedJobs);
+      await this.options.persistJobs(mutatedJobs);
     } finally {
       this.running = false;
     }

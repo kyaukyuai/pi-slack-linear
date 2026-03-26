@@ -9,6 +9,7 @@ import {
   buildSystemPaths,
   buildWebhookPaths,
   ensureSystemWorkspace,
+  listSystemStateFiles,
   loadWorkspaceCustomization,
   readAgendaTemplate,
   readWorkspaceAgents,
@@ -21,6 +22,7 @@ describe("system workspace helpers", () => {
 
     expect(paths.rootDir).toBe("/workspace/system");
     expect(paths.jobsFile).toBe("/workspace/system/jobs.json");
+    expect(paths.jobStatusFile).toBe("/workspace/system/job-status.json");
     expect(paths.heartbeatPromptFile).toBe("/workspace/system/HEARTBEAT.md");
     expect(paths.workspaceAgentsFile).toBe("/workspace/system/AGENTS.md");
     expect(paths.memoryFile).toBe("/workspace/system/MEMORY.md");
@@ -55,7 +57,50 @@ describe("system workspace helpers", () => {
     expect(paths.sessionFile).toBe("/workspace/system/sessions/webhook/AIC_123/session.jsonl");
   });
 
-  it("creates default manager files and review jobs", async () => {
+  it("describes runtime state files with classification and operator guidance", () => {
+    const files = listSystemStateFiles(buildSystemPaths("/workspace"));
+
+    expect(files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relativePath: "policy.json",
+        classification: "editable",
+        operatorAction: "edit-ok",
+        writePolicy: "manager-commit-only",
+      }),
+      expect.objectContaining({
+        relativePath: "owner-map.json",
+        classification: "editable",
+        operatorAction: "edit-ok",
+        writePolicy: "explicit-slack-update",
+      }),
+      expect.objectContaining({
+        relativePath: "followups.json",
+        classification: "internal",
+        operatorAction: "inspect-only",
+        writePolicy: "system-maintained",
+      }),
+      expect.objectContaining({
+        relativePath: "job-status.json",
+        classification: "internal",
+        operatorAction: "inspect-only",
+        writePolicy: "system-maintained",
+      }),
+      expect.objectContaining({
+        relativePath: "workgraph-events.jsonl",
+        classification: "derived",
+        operatorAction: "do-not-edit",
+        writePolicy: "rebuild-only",
+      }),
+      expect.objectContaining({
+        relativePath: "sessions/",
+        classification: "derived",
+        operatorAction: "do-not-edit",
+        writePolicy: "rebuild-only",
+      }),
+    ]));
+  });
+
+  it("creates default manager files and empty scheduler persistence files", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-system-"));
     const paths = buildSystemPaths(workspaceDir);
 
@@ -64,6 +109,7 @@ describe("system workspace helpers", () => {
     const policy = await loadManagerPolicy(paths);
     const ownerMap = await loadOwnerMap(paths);
     const jobs = JSON.parse(await readFile(paths.jobsFile, "utf8")) as Array<{ id: string }>;
+    const jobStatuses = JSON.parse(await readFile(paths.jobStatusFile, "utf8")) as Array<{ id: string }>;
     const personalization = JSON.parse(await readFile(paths.personalizationLedgerFile, "utf8")) as unknown[];
     const notionPages = JSON.parse(await readFile(paths.notionPagesFile, "utf8")) as unknown[];
     const deliveries = JSON.parse(await readFile(paths.webhookDeliveriesFile, "utf8")) as unknown[];
@@ -74,13 +120,8 @@ describe("system workspace helpers", () => {
     expect(personalization).toEqual([]);
     expect(notionPages).toEqual([]);
     expect(deliveries).toEqual([]);
-    expect(jobs.map((job) => job.id)).toEqual(
-      expect.arrayContaining([
-        "manager-review-morning",
-        "manager-review-evening",
-        "manager-review-weekly",
-      ]),
-    );
+    expect(jobs).toEqual([]);
+    expect(jobStatuses).toEqual([]);
   });
 
   it("removes the legacy intake ledger file during manager state bootstrap", async () => {
@@ -140,7 +181,7 @@ describe("system workspace helpers", () => {
     });
   });
 
-  it("removes disabled built-in review jobs when syncing manager state", async () => {
+  it("keeps custom jobs isolated from built-in review policy changes", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "cogito-work-manager-builtins-"));
     const paths = buildSystemPaths(workspaceDir);
 
@@ -151,12 +192,6 @@ describe("system workspace helpers", () => {
     await ensureManagerStateFiles(paths);
 
     const jobs = JSON.parse(await readFile(paths.jobsFile, "utf8")) as Array<{ id: string }>;
-    expect(jobs.find((job) => job.id === "manager-review-evening")).toBeUndefined();
-    expect(jobs.map((job) => job.id)).toEqual(
-      expect.arrayContaining([
-        "manager-review-morning",
-        "manager-review-weekly",
-      ]),
-    );
+    expect(jobs).toEqual([]);
   });
 });

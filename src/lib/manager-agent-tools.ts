@@ -27,9 +27,15 @@ import {
   type SchedulerScheduleView,
 } from "./scheduler-management.js";
 import { getRecentChannelContext, getSlackThreadContext } from "./slack-context.js";
-import { buildSystemPaths } from "./system-workspace.js";
+import {
+  buildSystemPaths,
+  readAgendaTemplate,
+  readHeartbeatInstructions,
+} from "./system-workspace.js";
 import { webFetchUrl, webSearchFetch } from "./web-research.js";
 import { createWorkgraphReadTools } from "./workgraph-tools.js";
+import { analyzeOwnerMap } from "./owner-map-diagnostics.js";
+import type { OwnerMap } from "../state/manager-state-contract.js";
 import {
   managerCommandProposalSchema,
   type ManagerCommandProposal,
@@ -467,7 +473,7 @@ function createIntentReportTool(): ToolDefinition {
     description: "Record the current high-level intent before or during tool usage. Use this once per turn.",
     promptSnippet: "Call this early to tell the manager what kind of turn this is.",
     parameters: Type.Object({
-      intent: Type.String({ description: "conversation | query | query_schedule | run_task | create_work | create_schedule | run_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | review | heartbeat | scheduler" }),
+      intent: Type.String({ description: "conversation | query | query_schedule | run_task | create_work | create_schedule | run_schedule | update_progress | update_completed | update_blocked | update_schedule | delete_schedule | followup_resolution | update_workspace_config | review | heartbeat | scheduler" }),
       queryKind: Type.Optional(Type.String({ description: "Optional query subtype: list-active | list-today | what-should-i-do | inspect-work | search-existing | recommend-next-step | reference-material." })),
       queryScope: Type.Optional(Type.String({ description: "Optional query scope self | team | thread-context." })),
       confidence: Type.Optional(Type.Number({ description: "Confidence between 0 and 1." })),
@@ -857,6 +863,87 @@ function createSchedulerReadTools(config: AppConfig): ToolDefinition[] {
   ];
 }
 
+function formatOwnerMapText(ownerMap: OwnerMap): string {
+  const diagnostics = analyzeOwnerMap(ownerMap);
+  return [
+    "Owner map summary:",
+    `- defaultOwner: ${ownerMap.defaultOwner}`,
+    `- entries: ${ownerMap.entries.map((entry) => entry.id).join(", ") || "(none)"}`,
+    `- duplicateSlackMappings: ${diagnostics.duplicateSlackUserIds.length > 0
+      ? diagnostics.duplicateSlackUserIds
+        .map((entry) => `${entry.slackUserId} -> ${entry.entryIds.join(", ")}`)
+        .join(" | ")
+      : "(none)"}`,
+    `- unmappedEntries: ${diagnostics.unmappedSlackEntries.length > 0
+      ? diagnostics.unmappedSlackEntries.map((entry) => entry.id).join(", ")
+      : "(none)"}`,
+    "",
+    "Owner map JSON:",
+    formatJsonDetails(ownerMap),
+  ].join("\n");
+}
+
+function createWorkspaceReadTools(
+  config: AppConfig,
+  repositories: Pick<ManagerRepositories, "ownerMap">,
+): ToolDefinition[] {
+  const systemPaths = buildSystemPaths(config.workspaceDir);
+
+  return [
+    {
+      name: "workspace_get_agenda_template",
+      label: "Workspace Get Agenda Template",
+      description: "Read the current AGENDA_TEMPLATE.md contents. Read-only.",
+      promptSnippet: "Use this before proposing any AGENDA_TEMPLATE.md update or replacement so you can preserve the intended structure.",
+      parameters: Type.Object({}),
+      async execute() {
+        const content = await readAgendaTemplate(systemPaths);
+        return {
+          content: [{ type: "text", text: content ?? "(empty agenda template)" }],
+          details: { content: content ?? "" },
+        };
+      },
+    },
+    {
+      name: "workspace_get_heartbeat_prompt",
+      label: "Workspace Get HEARTBEAT Prompt",
+      description: "Read the current HEARTBEAT.md contents. Read-only.",
+      promptSnippet: "Use this before proposing any HEARTBEAT.md update or replacement so you inspect the current prompt first.",
+      parameters: Type.Object({}),
+      async execute() {
+        const content = await readHeartbeatInstructions(systemPaths);
+        return {
+          content: [{ type: "text", text: content ?? "(empty heartbeat prompt)" }],
+          details: { content: content ?? "" },
+        };
+      },
+    },
+    {
+      name: "workspace_get_owner_map",
+      label: "Workspace Get Owner Map",
+      description: "Read owner-map.json with both raw JSON and duplicate or unmapped-entry diagnostics. Read-only.",
+      promptSnippet: "Use this before proposing owner-map changes so you inspect the current default owner and entries first.",
+      parameters: Type.Object({}),
+      async execute() {
+        const ownerMap = await repositories.ownerMap.load();
+        const diagnostics = analyzeOwnerMap(ownerMap);
+        return {
+          content: [{ type: "text", text: formatOwnerMapText(ownerMap) }],
+          details: {
+            ownerMap,
+            summary: {
+              defaultOwner: ownerMap.defaultOwner,
+              entryIds: ownerMap.entries.map((entry) => entry.id),
+              duplicateSlackMappings: diagnostics.duplicateSlackUserIds,
+              unmappedEntryIds: diagnostics.unmappedSlackEntries.map((entry) => entry.id),
+            },
+          },
+        };
+      },
+    },
+  ];
+}
+
 function createSlackContextTools(config: AppConfig): ToolDefinition[] {
   return [
     {
@@ -1183,6 +1270,40 @@ function createProposalTools(): ToolDefinition[] {
       }),
     }),
     createProposalTool({
+      name: "propose_replace_workspace_text_file",
+      label: "Propose Replace Workspace Text File",
+      description: "Propose updating AGENDA_TEMPLATE.md or HEARTBEAT.md by replacing the full file contents. This does not execute the mutation.",
+      promptSnippet: "Use this for explicit Slack requests to update or replace the whole agenda template or heartbeat prompt. Read the current file first with the matching workspace_get tool. Do not say that file editing is unavailable.",
+      commandType: "replace_workspace_text_file",
+      parameters: Type.Object({
+        target: Type.String({ description: "agenda-template | heartbeat-prompt" }),
+        content: Type.String({ description: "Final full file content after replacement." }),
+        reasonSummary: Type.String({ description: "Short reason for this proposal." }),
+        evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
+        dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
+      }),
+    }),
+    createProposalTool({
+      name: "propose_update_owner_map",
+      label: "Propose Update Owner Map",
+      description: "Propose a structured owner-map.json change. This does not execute the mutation.",
+      promptSnippet: "Use this only for explicit Slack requests to update owner-map.json. Call workspace_get_owner_map first and propose one structured operation at a time. Do not say that file editing is unavailable.",
+      commandType: "update_owner_map",
+      parameters: Type.Object({
+        operation: Type.String({ description: "set-default-owner | upsert-entry | delete-entry" }),
+        entryId: Type.Optional(Type.String({ description: "Target entry id. Required for upsert-entry and delete-entry." })),
+        defaultOwner: Type.Optional(Type.String({ description: "New default owner. Required for set-default-owner." })),
+        linearAssignee: Type.Optional(Type.String({ description: "Linear assignee label. Required for upsert-entry." })),
+        slackUserId: Type.Optional(Type.String({ description: "Optional Slack user id for upsert-entry." })),
+        domains: Type.Optional(Type.Array(Type.String({ description: "Optional domains for upsert-entry." }))),
+        keywords: Type.Optional(Type.Array(Type.String({ description: "Optional keywords for upsert-entry." }))),
+        primary: Type.Optional(Type.Boolean({ description: "Optional primary flag for upsert-entry." })),
+        reasonSummary: Type.String({ description: "Short reason for this proposal." }),
+        evidenceSummary: Type.Optional(Type.String({ description: "Short evidence summary." })),
+        dedupeKeyCandidate: Type.Optional(Type.String({ description: "Stable dedupe key when you can infer one." })),
+      }),
+    }),
+    createProposalTool({
       name: "propose_create_notion_agenda",
       label: "Propose Create Notion Agenda",
       description: "Propose creating a Notion agenda page. This does not execute the mutation.",
@@ -1289,7 +1410,7 @@ function createProposalTools(): ToolDefinition[] {
 
 export function createManagerAgentTools(
   config: AppConfig,
-  repositories: Pick<ManagerRepositories, "policy" | "workgraph">,
+  repositories: Pick<ManagerRepositories, "policy" | "workgraph" | "ownerMap">,
 ): ToolDefinition[] {
   return [
     createIntentReportTool(),
@@ -1298,6 +1419,7 @@ export function createManagerAgentTools(
     createQuerySnapshotTool(),
     ...createLinearReadTools(config),
     ...createSchedulerReadTools(config),
+    ...createWorkspaceReadTools(config, repositories),
     ...createNotionReadTools(config),
     ...createSlackContextTools(config),
     ...createWorkgraphReadTools(repositories),
