@@ -5,14 +5,27 @@ import {
   runManagerSystemTurn,
   type ManagerAgentTurnResult,
 } from "../../lib/pi-session.js";
-import { commitManagerCommandProposals, type ManagerCommitResult } from "../../lib/manager-command-commit.js";
+import {
+  commitManagerCommandProposals,
+  type ManagerCommandProposal,
+  type ManagerCommitResult,
+} from "../../lib/manager-command-commit.js";
 import type { AppConfig } from "../../lib/config.js";
-import type { LinearCommandEnv, LinearIssue } from "../../lib/linear.js";
+import {
+  getLinearIssue,
+  type LinearCommandEnv,
+  type LinearIssue,
+} from "../../lib/linear.js";
 import type { SchedulerJob } from "../../lib/system-workspace.js";
 import { buildSystemPaths } from "../../lib/system-workspace.js";
 import type { ManagerPolicy } from "../../state/manager-state-contract.js";
 import type { ManagerRepositories } from "../../state/repositories/file-backed-manager-repositories.js";
 import type { ThreadPaths } from "../../lib/thread-workspace.js";
+import {
+  WEBHOOK_INITIAL_PROPOSAL_DEDUPE_KEY_PREFIX,
+  hasWebhookInitialProposalComment,
+  normalizeWebhookInitialProposalCommentBody,
+} from "./initial-proposal-comment.js";
 
 export interface HandleIssueCreatedWebhookArgs {
   config: AppConfig;
@@ -68,19 +81,37 @@ function summarizeIssue(issue: LinearIssue): string {
   if (labelNames.length > 0) lines.push(`- labels: ${labelNames.join(", ")}`);
   lines.push(`- childCount: ${issue.children?.length ?? 0}`);
   lines.push(`- relationCount: ${relationCount}`);
+  lines.push(`- commentCount: ${issue.comments?.length ?? 0}`);
   lines.push(`- descriptionPresent: ${description ? "yes" : "no"}`);
   if (description) lines.push(`- descriptionLength: ${description.length}`);
 
   lines.push("");
   lines.push("Task:");
-  lines.push("Decide whether there is any clear action you can execute now through existing proposal tools.");
-  lines.push("If yes, do the smallest safe action set needed to satisfy the issue.");
-  lines.push("If no executable action is available, do nothing.");
+  lines.push("Default to adding one best-effort initial proposal comment to this issue.");
+  lines.push("Use add_comment only. No status changes, assignment changes, relations, or child issue creation are allowed here.");
+  lines.push("If an initial proposal comment already exists, do nothing.");
   lines.push("Do not ask follow-up questions in webhook mode.");
   lines.push("");
   lines.push("Issue description:");
   lines.push(description || "(none)");
   return lines.join("\n");
+}
+
+function selectWebhookCommentProposal(
+  issueIdentifier: string,
+  proposals: ManagerCommandProposal[],
+): Extract<ManagerCommandProposal, { commandType: "add_comment" }> | undefined {
+  const selected = proposals.find((proposal): proposal is Extract<ManagerCommandProposal, { commandType: "add_comment" }> => (
+    proposal.commandType === "add_comment" && proposal.issueId === issueIdentifier
+  ));
+  if (!selected) {
+    return undefined;
+  }
+  return {
+    ...selected,
+    body: normalizeWebhookInitialProposalCommentBody(selected.body),
+    dedupeKeyCandidate: selected.dedupeKeyCandidate ?? `${WEBHOOK_INITIAL_PROPOSAL_DEDUPE_KEY_PREFIX}:${issueIdentifier}`,
+  };
 }
 
 function collectCreatedIssueIds(commitResult: ManagerCommitResult): string[] {
@@ -93,7 +124,17 @@ export async function handleIssueCreatedWebhook(
   args: HandleIssueCreatedWebhookArgs,
 ): Promise<HandleIssueCreatedWebhookResult> {
   try {
-    const webhookSummary = summarizeIssue(args.issue);
+    const hydratedIssue = await getLinearIssue(args.issue.identifier, args.env, undefined, { includeComments: true })
+      .catch(() => args.issue);
+    if (hasWebhookInitialProposalComment(hydratedIssue)) {
+      return {
+        status: "noop",
+        createdIssueIds: [],
+        reason: "initial proposal comment already exists",
+      };
+    }
+
+    const webhookSummary = summarizeIssue(hydratedIssue);
     const updatePersonalization = async (reply: string, commitResult: ManagerCommitResult): Promise<void> => {
       try {
         await handlePersonalizationUpdate({
@@ -108,8 +149,8 @@ export async function handleIssueCreatedWebhook(
           rejectedReasons: commitResult.rejected.map((entry) => entry.reason),
           currentDate: args.currentDate,
           issueContext: {
-            issueId: args.issue.id,
-            issueIdentifier: args.issue.identifier,
+            issueId: hydratedIssue.id,
+            issueIdentifier: hydratedIssue.identifier,
           },
           now: args.now,
         });
@@ -121,7 +162,7 @@ export async function handleIssueCreatedWebhook(
     const agentResult = await runManagerSystemTurn(args.config, args.paths, {
       kind: "webhook-issue-created",
       channelId: args.policy.controlRoomChannelId,
-      rootThreadTs: `webhook:${args.issue.identifier}`,
+      rootThreadTs: `webhook:${hydratedIssue.identifier}`,
       messageTs: args.deliveryId,
       text: webhookSummary,
       currentDate: args.currentDate,
@@ -130,18 +171,29 @@ export async function handleIssueCreatedWebhook(
         trigger: "linear-webhook",
         deliveryId: args.deliveryId,
         webhookId: args.webhookId ?? "",
-        issueId: args.issue.id,
-        issueIdentifier: args.issue.identifier,
+        issueId: hydratedIssue.id,
+        issueIdentifier: hydratedIssue.identifier,
       },
     });
+    const webhookCommentProposal = selectWebhookCommentProposal(hydratedIssue.identifier, agentResult.proposals);
+    if (agentResult.proposals.length > 0 && !webhookCommentProposal) {
+      const reason = `webhook issue-created では ${hydratedIssue.identifier} への add_comment のみ自動実行できます。`;
+      return {
+        status: "failed",
+        agentResult,
+        createdIssueIds: [],
+        reason,
+        reply: reason,
+      };
+    }
 
     const commitResult = await commitManagerCommandProposals({
       config: args.config,
       repositories: args.repositories,
-      proposals: agentResult.proposals,
+      proposals: webhookCommentProposal ? [webhookCommentProposal] : [],
       message: {
         channelId: args.policy.controlRoomChannelId,
-        rootThreadTs: `webhook:${args.issue.identifier}`,
+        rootThreadTs: `webhook:${hydratedIssue.identifier}`,
         messageTs: args.deliveryId,
         text: webhookSummary,
       },

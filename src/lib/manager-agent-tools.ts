@@ -420,6 +420,13 @@ function buildIssueFacts(issue: LinearIssue): Record<string, unknown> {
     daysUntilDue: relativeDue.daysUntilDue,
     dueRelativeLabel: relativeDue.dueRelativeLabel,
     staleBusinessDays: businessDaysSince(issue.updatedAt),
+    commentCount: issue.comments?.length ?? 0,
+    comments: issue.comments?.slice(0, 10).map((comment) => ({
+      id: comment.id,
+      body: comment.body,
+      createdAt: comment.createdAt ?? undefined,
+      user: comment.user ?? undefined,
+    })) ?? [],
     ownerMissing: !issue.assignee,
     dueMissing: !issue.dueDate,
     blockedSignals: {

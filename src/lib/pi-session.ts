@@ -45,6 +45,10 @@ import {
   detectSlackCapabilityQuery,
   detectSlackOutboundPostRequest,
 } from "../orchestrators/shared/slack-conversation.js";
+import {
+  WEBHOOK_INITIAL_PROPOSAL_HEADING,
+  WEBHOOK_INITIAL_PROPOSAL_MARKER,
+} from "../orchestrators/webhooks/initial-proposal-comment.js";
 import { selectFinalAssistantText } from "../runtime/assistant-text.js";
 import { findAssistantLlmFailure, LlmProviderFailureError } from "./llm-failure.js";
 import { createManagerAgentTools } from "./manager-agent-tools.js";
@@ -331,12 +335,18 @@ export function buildSystemPrompt(config: AppConfig, assistantName = "コギト"
     "If a Notion agenda template is provided in the prompt context, prefer it when creating or extending Notion agendas unless the user explicitly overrides it.",
     "Use proposal tools for create/update/follow-up actions. Proposal tools do not execute side effects.",
     "Never pretend a proposal has already been committed. The manager will validate and commit proposals after your turn.",
-    "When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether there is any clear, safe action you can execute now through the existing proposal tools.",
-    "For webhook-issue-created system tasks, use actionability-first reasoning: execute only when a concrete manager-operable action is available now, and otherwise choose no-op.",
+    "When runKind=webhook-issue-created, default to a best-effort initial proposal comment on the created issue instead of no-op.",
+    "For webhook-issue-created system tasks, first call linear_get_issue_facts for the created issue to inspect raw facts and existing comments before you decide.",
     "Webhook issue-created processing has no Slack thread context. Use the issue facts you are given plus normal read tools, assume the control room is the only operator surface, and do not ask follow-up questions in webhook mode.",
-    "For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.",
-    "For webhook-issue-created system tasks, if you decide execute, do the smallest safe action set needed to satisfy the issue instead of adding extra side effects.",
-    "For webhook-issue-created system tasks, treat human work items, design tasks, implementation tasks, and ambiguous requests as no-op unless they map cleanly onto an existing proposal tool.",
+    "For webhook-issue-created system tasks, the only allowed mutation proposal is propose_add_comment for the created issue itself. Do not propose status changes, assignee changes, relations, child issues, or any other side effects.",
+    `For webhook-issue-created system tasks, if issue facts already show a comment containing the exact marker ${WEBHOOK_INITIAL_PROPOSAL_MARKER}, use report_task_execution_decision with decision=noop and do not propose another comment.`,
+    `For webhook-issue-created system tasks, when you propose the initial comment body, start it with the exact marker ${WEBHOOK_INITIAL_PROPOSAL_MARKER} on its own line, then ${WEBHOOK_INITIAL_PROPOSAL_HEADING} on its own line.`,
+    "For webhook-issue-created system tasks, write the comment in Japanese and keep it best-effort even when the issue is underspecified.",
+    "For webhook-issue-created system tasks, include at least one concrete next step, one implementation or investigation suggestion, and one risk, tradeoff, or confirmation point in the comment.",
+    "For webhook-issue-created system tasks, for research or design issues propose an approach, alternatives, decision criteria, and the next step.",
+    "For webhook-issue-created system tasks, for execution or implementation issues propose a first approach, a practical breakdown, key risks, and what to verify next.",
+    "For webhook-issue-created system tasks, for thin issues do not stop at generalities. State hypotheses, the first thing to confirm, and a provisional path forward.",
+    "For webhook-issue-created system tasks, use report_task_execution_decision once with decision=execute when you propose a comment, and use noop only for duplicate-marker or technical inability.",
     "In normal Slack replies, describe only the result the user should observe after the manager commit, and never say 提案しました, 準備ができました, or 送る準備ができました for work that commits in the same turn. The one exception is owner-map updates, which may go through a manager-owned preview-and-confirm step before commit.",
     "Report your current intent with report_manager_intent once per turn before or during tool usage.",
     "When intent=conversation, include conversationKind=greeting | smalltalk | other in report_manager_intent.",

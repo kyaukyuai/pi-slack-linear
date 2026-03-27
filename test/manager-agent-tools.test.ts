@@ -6,6 +6,7 @@ import type { AppConfig } from "../src/lib/config.js";
 import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
 import { createManagerAgentTools } from "../src/lib/manager-agent-tools.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
+import { WEBHOOK_INITIAL_PROPOSAL_MARKER } from "../src/orchestrators/webhooks/initial-proposal-comment.js";
 
 const linearMocks = vi.hoisted(() => ({
   getLinearIssue: vi.fn(),
@@ -90,6 +91,8 @@ describe("manager agent tools", () => {
 
   afterEach(async () => {
     notionMocks.getNotionPageContent.mockReset();
+    linearMocks.getLinearIssue.mockReset();
+    linearMocks.listOpenLinearIssues.mockReset();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -210,6 +213,43 @@ describe("manager agent tools", () => {
           stateType: "done",
           isOpen: false,
           completedAt: "2026-03-23T08:56:11.797Z",
+        }),
+      ],
+    });
+  });
+
+  it("includes comment facts in linear_get_issue_facts", async () => {
+    linearMocks.getLinearIssue.mockResolvedValue({
+      id: "issue-1",
+      identifier: "AIC-85",
+      title: "Slackから自動収集してAIクローンに反映する仕組みの検討",
+      url: "https://linear.app/kyaukyuai/issue/AIC-85",
+      description: "どのような仕組みにすべきか検討したい。",
+      state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+      relations: [],
+      inverseRelations: [],
+      comments: [
+        {
+          id: "comment-1",
+          body: `${WEBHOOK_INITIAL_PROPOSAL_MARKER}\n\n既存の初回提案コメント`,
+          createdAt: "2026-03-27T02:25:00.000Z",
+          user: { name: "cogito" },
+        },
+      ],
+    });
+
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
+    const tool = tools.find((entry) => entry.name === "linear_get_issue_facts");
+
+    expect(tool).toBeDefined();
+    const result = await tool!.execute("tool-call-issue-facts", { issueId: "AIC-85" });
+
+    expect(result.details).toMatchObject({
+      identifier: "AIC-85",
+      commentCount: 1,
+      comments: [
+        expect.objectContaining({
+          body: `${WEBHOOK_INITIAL_PROPOSAL_MARKER}\n\n既存の初回提案コメント`,
         }),
       ],
     });

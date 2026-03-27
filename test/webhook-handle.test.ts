@@ -1,10 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { handleIssueCreatedWebhook } from "../src/orchestrators/webhooks/handle-issue-created.js";
 import { LlmProviderFailureError } from "../src/lib/llm-failure.js";
+import {
+  WEBHOOK_INITIAL_PROPOSAL_DEDUPE_KEY_PREFIX,
+  WEBHOOK_INITIAL_PROPOSAL_HEADING,
+  WEBHOOK_INITIAL_PROPOSAL_MARKER,
+} from "../src/orchestrators/webhooks/initial-proposal-comment.js";
 
 const mocks = vi.hoisted(() => ({
   runManagerSystemTurn: vi.fn(),
   commitManagerCommandProposals: vi.fn(),
+  getLinearIssue: vi.fn(),
 }));
 
 vi.mock("../src/lib/pi-session.js", async () => {
@@ -23,10 +29,29 @@ vi.mock("../src/lib/manager-command-commit.js", async () => {
   };
 });
 
+vi.mock("../src/lib/linear.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/linear.js")>("../src/lib/linear.js");
+  return {
+    ...actual,
+    getLinearIssue: mocks.getLinearIssue,
+  };
+});
+
 describe("handleIssueCreatedWebhook", () => {
   beforeEach(() => {
     mocks.runManagerSystemTurn.mockReset();
     mocks.commitManagerCommandProposals.mockReset();
+    mocks.getLinearIssue.mockReset();
+    mocks.getLinearIssue.mockResolvedValue({
+      id: "issue-uuid-1",
+      identifier: "AIC-123",
+      title: "Webhook generated issue",
+      description: "Check whether the AI should take action.",
+      url: "https://linear.app/kyaukyuai/issue/AIC-123",
+      relations: [],
+      inverseRelations: [],
+      comments: [],
+    });
   });
 
   const args = {
@@ -70,6 +95,8 @@ describe("handleIssueCreatedWebhook", () => {
       planning: {} as never,
       followups: {} as never,
       workgraph: {} as never,
+      personalization: {} as never,
+      notionPages: {} as never,
     },
     policy: {
       controlRoomChannelId: "C0ALAMDRB9V",
@@ -122,81 +149,114 @@ describe("handleIssueCreatedWebhook", () => {
     });
   });
 
-  it("returns committed with created issue ids from create proposals", async () => {
+  it("commits an initial proposal comment for a detailed issue", async () => {
     mocks.runManagerSystemTurn.mockResolvedValue({
-      reply: "AIC-123 に対して親子 task を作ります。",
+      reply: "AIC-123 に初回提案コメントを追加します。",
       toolCalls: [],
-      proposals: [{ commandType: "create_issue_batch" }],
+      proposals: [{
+        commandType: "add_comment",
+        issueId: "AIC-123",
+        body: "提案内容です。",
+        reasonSummary: "初回提案を残すため",
+      }],
       invalidProposalCount: 0,
-      intentReport: { intent: "create_work" },
+      intentReport: { intent: "run_task" },
     });
     mocks.commitManagerCommandProposals.mockResolvedValue({
       committed: [
         {
-          commandType: "create_issue_batch",
-          issueIds: ["AIC-200", "AIC-201"],
-          summary: "AIC-200 と AIC-201 を作成しました。",
+          commandType: "add_comment",
+          issueIds: ["AIC-123"],
+          summary: "AIC-123 にコメントを追加しました。",
         },
       ],
       rejected: [],
-      replySummaries: ["AIC-200 と AIC-201 を作成しました。"],
-    });
-
-    await expect(handleIssueCreatedWebhook(args)).resolves.toMatchObject({
-      status: "committed",
-      createdIssueIds: ["AIC-200", "AIC-201"],
-    });
-  });
-
-  it("keeps webhook notifications mention-free", async () => {
-    mocks.runManagerSystemTurn.mockResolvedValue({
-      reply: "AIC-123 には自動対応しません。チームで確認してください。",
-      toolCalls: [],
-      proposals: [{ commandType: "create_issue_batch" }],
-      invalidProposalCount: 0,
-      intentReport: { intent: "create_work" },
-    });
-    mocks.commitManagerCommandProposals.mockResolvedValue({
-      committed: [
-        {
-          commandType: "create_issue_batch",
-          issueIds: ["AIC-200"],
-          summary: "AIC-200 を作成しました。",
-        },
-      ],
-      rejected: [],
-      replySummaries: ["AIC-200 を作成しました。"],
+      replySummaries: ["AIC-123 にコメントを追加しました。"],
     });
 
     const result = await handleIssueCreatedWebhook(args);
 
-    expect(result.reply).toBeDefined();
-    expect(result.reply).not.toContain("<@");
+    expect(result).toMatchObject({
+      status: "committed",
+      createdIssueIds: [],
+    });
+    expect(mocks.commitManagerCommandProposals).toHaveBeenCalledWith(expect.objectContaining({
+      proposals: [expect.objectContaining({
+        commandType: "add_comment",
+        issueId: "AIC-123",
+        body: `${WEBHOOK_INITIAL_PROPOSAL_MARKER}\n${WEBHOOK_INITIAL_PROPOSAL_HEADING}\n\n提案内容です。`,
+        dedupeKeyCandidate: `${WEBHOOK_INITIAL_PROPOSAL_DEDUPE_KEY_PREFIX}:AIC-123`,
+      })],
+    }));
   });
 
-  it("returns failed when proposals are rejected", async () => {
+  it("adds a best-effort initial proposal comment even for a thin issue", async () => {
+    mocks.getLinearIssue.mockResolvedValue({
+      id: "issue-uuid-1",
+      identifier: "AIC-123",
+      title: "Webhook generated issue",
+      description: "",
+      url: "https://linear.app/kyaukyuai/issue/AIC-123",
+      relations: [],
+      inverseRelations: [],
+      comments: [],
+    });
     mocks.runManagerSystemTurn.mockResolvedValue({
-      reply: "確認したいです。",
+      reply: "AIC-123 に仮説ベースの提案コメントを追加します。",
       toolCalls: [],
-      proposals: [{ commandType: "create_issue" }],
+      proposals: [{
+        commandType: "add_comment",
+        issueId: "AIC-123",
+        body: "最初に確認する論点と暫定方針を残します。",
+        reasonSummary: "薄い issue にも best-effort で初回提案を残すため",
+      }],
       invalidProposalCount: 0,
-      intentReport: { intent: "create_work" },
+      intentReport: { intent: "run_task" },
     });
     mocks.commitManagerCommandProposals.mockResolvedValue({
-      committed: [],
-      rejected: [
+      committed: [
         {
-          proposal: { commandType: "create_issue" },
-          reason: "validation failed",
+          commandType: "add_comment",
+          issueIds: ["AIC-123"],
+          summary: "AIC-123 にコメントを追加しました。",
         },
       ],
-      replySummaries: [],
+      rejected: [],
+      replySummaries: ["AIC-123 にコメントを追加しました。"],
     });
 
     await expect(handleIssueCreatedWebhook(args)).resolves.toMatchObject({
-      status: "failed",
-      reason: "validation failed",
+      status: "committed",
+      createdIssueIds: [],
     });
+  });
+
+  it("returns noop when an initial proposal comment already exists", async () => {
+    mocks.getLinearIssue.mockResolvedValue({
+      id: "issue-uuid-1",
+      identifier: "AIC-123",
+      title: "Webhook generated issue",
+      description: "Check whether the AI should take action.",
+      url: "https://linear.app/kyaukyuai/issue/AIC-123",
+      relations: [],
+      inverseRelations: [],
+      comments: [
+        {
+          id: "comment-1",
+          body: `${WEBHOOK_INITIAL_PROPOSAL_MARKER}\n${WEBHOOK_INITIAL_PROPOSAL_HEADING}\n\n既存コメント`,
+          createdAt: "2026-03-24T03:00:00.000Z",
+          user: { name: "cogito" },
+        },
+      ],
+    });
+
+    await expect(handleIssueCreatedWebhook(args)).resolves.toMatchObject({
+      status: "noop",
+      createdIssueIds: [],
+      reason: "initial proposal comment already exists",
+    });
+    expect(mocks.runManagerSystemTurn).not.toHaveBeenCalled();
+    expect(mocks.commitManagerCommandProposals).not.toHaveBeenCalled();
   });
 
   it("returns provider-aware Slack reply while keeping the raw reason for LLM failures", async () => {

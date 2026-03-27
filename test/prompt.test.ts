@@ -25,6 +25,10 @@ import type { AppConfig } from "../src/lib/config.js";
 import { DEFAULT_HEARTBEAT_PROMPT } from "../src/lib/heartbeat.js";
 import { createLinearCustomTools } from "../src/lib/linear-tools.js";
 import {
+  WEBHOOK_INITIAL_PROPOSAL_HEADING,
+  WEBHOOK_INITIAL_PROPOSAL_MARKER,
+} from "../src/orchestrators/webhooks/initial-proposal-comment.js";
+import {
   buildAgentPrompt,
   buildManagerAgentPrompt,
   buildManagerSystemPromptInput,
@@ -82,12 +86,13 @@ describe("prompt helpers", () => {
     expect(prompt).toContain("If runtime workspace AGENTS are provided in the prompt context, treat them as operator-specific operating rules and stable workflow preferences unless they conflict with hardcoded system rules.");
     expect(prompt).toContain("If workspace memory is provided in the prompt context, treat it as operator-specific terminology, project knowledge, durable context, and preferences unless it conflicts with the system rules.");
     expect(prompt).toContain("If a Notion agenda template is provided in the prompt context, prefer it when creating or extending Notion agendas unless the user explicitly overrides it.");
-    expect(prompt).toContain("When runKind=webhook-issue-created, inspect the freshly created Linear issue and decide whether there is any clear, safe action you can execute now through the existing proposal tools.");
-    expect(prompt).toContain("For webhook-issue-created system tasks, use actionability-first reasoning: execute only when a concrete manager-operable action is available now, and otherwise choose no-op.");
+    expect(prompt).toContain("When runKind=webhook-issue-created, default to a best-effort initial proposal comment on the created issue instead of no-op.");
+    expect(prompt).toContain("For webhook-issue-created system tasks, first call linear_get_issue_facts for the created issue to inspect raw facts and existing comments before you decide.");
     expect(prompt).toContain("Webhook issue-created processing has no Slack thread context. Use the issue facts you are given plus normal read tools, assume the control room is the only operator surface, and do not ask follow-up questions in webhook mode.");
-    expect(prompt).toContain("For webhook-issue-created system tasks, prefer no-op over speculative or low-confidence changes.");
-    expect(prompt).toContain("For webhook-issue-created system tasks, if you decide execute, do the smallest safe action set needed to satisfy the issue instead of adding extra side effects.");
-    expect(prompt).toContain("For webhook-issue-created system tasks, treat human work items, design tasks, implementation tasks, and ambiguous requests as no-op unless they map cleanly onto an existing proposal tool.");
+    expect(prompt).toContain("For webhook-issue-created system tasks, the only allowed mutation proposal is propose_add_comment for the created issue itself.");
+    expect(prompt).toContain(`For webhook-issue-created system tasks, if issue facts already show a comment containing the exact marker ${WEBHOOK_INITIAL_PROPOSAL_MARKER}`);
+    expect(prompt).toContain(`For webhook-issue-created system tasks, when you propose the initial comment body, start it with the exact marker ${WEBHOOK_INITIAL_PROPOSAL_MARKER} on its own line, then ${WEBHOOK_INITIAL_PROPOSAL_HEADING} on its own line.`);
+    expect(prompt).toContain("For webhook-issue-created system tasks, for thin issues do not stop at generalities.");
     expect(prompt).toContain("Use intent=run_task for imperative execution requests on an existing issue such as AIC-123 を進めて, この issue を実行して, or このタスクを進めて.");
     expect(prompt).toContain("For run_task turns, call report_task_execution_decision once with decision=execute or noop");
     expect(prompt).toContain("Do not downgrade an explicit imperative issue execution request such as AIC-123 を実行して or AIC-123 を進めて into intent=query");
