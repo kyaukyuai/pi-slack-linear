@@ -455,6 +455,7 @@ export interface ManagerCommittedCommand {
   commandType: ManagerCommandProposal["commandType"];
   issueIds: string[];
   summary: string;
+  publicReply?: string;
   notionPageTargetEffect?: {
     action: "set-active" | "clear";
     pageId: string;

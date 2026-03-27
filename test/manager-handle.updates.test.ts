@@ -1085,6 +1085,9 @@ describe("handleManagerMessage update flows", () => {
 
     expect(result.handled).toBe(true);
     expect(result.reply).not.toContain("更新対象の issue をこの thread から特定できませんでした");
+    expect(result.reply).toContain("AIC-65 を完了にしました。");
+    expect(result.reply).toContain("次は AIC-66 に着手できます。");
+    expect(result.reply).not.toContain("system log:");
     expect(linearMocks.updateManagedLinearIssue).toHaveBeenCalledWith(
       expect.objectContaining({
         issueId: "AIC-65",

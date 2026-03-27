@@ -51,6 +51,22 @@ export function formatStatusReply(
   ]);
 }
 
+export function formatCompactStatusReply(
+  kind: UpdateSignal,
+  issue: LinearIssue,
+  extras: string[] = [],
+): string {
+  const intro = kind === "completed"
+    ? isCanceledIssueState(issue)
+      ? `${issue.identifier} を Canceled にしました。`
+      : `${issue.identifier} を完了にしました。`
+    : kind === "blocked"
+      ? `${issue.identifier} を blocked にしました。`
+      : `${issue.identifier} の進捗を反映しました。`;
+
+  return joinSlackSentences([intro, ...extras]) ?? intro;
+}
+
 export function formatFollowupResolutionReply(
   followup: FollowupLedgerEntry,
   issue: LinearIssue,

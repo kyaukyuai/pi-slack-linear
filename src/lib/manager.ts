@@ -62,6 +62,7 @@ import {
 import {
   commitManagerCommandProposals,
   type CommitManagerCommandArgs,
+  type ManagerCommittedCommand,
   type ManagerIntentReport,
   type PendingClarificationDecisionReport,
 } from "./manager-command-commit.js";
@@ -414,6 +415,41 @@ function formatCommitLogs(commitSummaries: string[]): string {
   return commitSummaries
     .map((summary) => `> system log: ${summary}`)
     .join("\n");
+}
+
+function extractCompactAgentFollowupSentence(agentReply: string): string | undefined {
+  const sentences = agentReply
+    .replace(/\n+/g, " ")
+    .match(/[^。！？!?]+[。！？!?]?/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) ?? [];
+  return sentences.find((sentence) => /^(次|引き続き|必要なら|まずは|残りは|続けて)/.test(sentence));
+}
+
+function buildCompactSuccessfulMutationReply(args: {
+  intent: ManagerIntentReport["intent"] | undefined;
+  agentReply: string;
+  committed: ManagerCommittedCommand[];
+  commitRejections: string[];
+}): string | undefined {
+  if (!isMutableIntent(args.intent) || args.commitRejections.length > 0 || args.committed.length !== 1) {
+    return undefined;
+  }
+
+  const committedEntry = args.committed[0];
+  const publicReply = committedEntry.publicReply?.trim();
+  if (!publicReply || committedEntry.issueIds.length !== 1) {
+    return undefined;
+  }
+
+  const followupSentence = extractCompactAgentFollowupSentence(args.agentReply);
+  if (!followupSentence) {
+    return publicReply;
+  }
+  if (normalizeCommitSummaryForCompare(followupSentence) === normalizeCommitSummaryForCompare(publicReply)) {
+    return publicReply;
+  }
+  return joinSlackSentences([publicReply, followupSentence]) ?? publicReply;
 }
 
 function formatPendingOwnerMapConfirmationReply(summaryLines: string[]): string {
@@ -1432,15 +1468,22 @@ export async function handleManagerMessage(
       ? extractedQuerySnapshot
       : undefined;
     const missingQuerySnapshot = agentIntent === "query" && !completeQuerySnapshot;
+    const commitRejectionReasons = commitResult.rejected.map((entry) => entry.reason);
     const preferRejectionReply = isMutableIntent(agentIntent)
       && commitResult.committed.length === 0
       && commitResult.rejected.length > 0;
+    const compactSuccessfulMutationReply = buildCompactSuccessfulMutationReply({
+      intent: agentIntent,
+      agentReply: agentTurn.reply,
+      committed: commitResult.committed,
+      commitRejections: commitRejectionReasons,
+    });
     const mergedReplyBase = missingQuerySnapshot
       ? buildSafetyQueryReply()
-      : mergeAgentReplyWithCommit({
+      : compactSuccessfulMutationReply ?? mergeAgentReplyWithCommit({
           agentReply: agentTurn.reply,
           commitSummaries: commitResult.replySummaries,
-          commitRejections: commitResult.rejected.map((entry) => entry.reason),
+          commitRejections: commitRejectionReasons,
           preferCommittedPublicReply: shouldPreferCommittedPublicReply(agentIntent),
           preferRejectionReply,
         });

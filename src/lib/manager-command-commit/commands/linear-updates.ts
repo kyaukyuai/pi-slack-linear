@@ -8,7 +8,10 @@ import {
   updateManagedLinearIssue,
   type LinearIssue,
 } from "../../linear.js";
-import { formatStatusReply } from "../../../orchestrators/updates/reply-format.js";
+import {
+  formatCompactStatusReply,
+  formatStatusReply,
+} from "../../../orchestrators/updates/reply-format.js";
 import { updateFollowupsWithIssueResponse } from "../../../orchestrators/updates/followup-state.js";
 import { getSlackThreadContext } from "../../slack-context.js";
 import { loadThreadQueryContinuation } from "../../query-continuation.js";
@@ -280,6 +283,9 @@ export async function commitUpdateIssueStatusProposal(
     commandType: proposal.commandType,
     issueIds: updatedIssues.map((issue) => issue.identifier),
     summary: formatStatusReply(proposal.signal, updatedIssues, replyExtras),
+    publicReply: updatedIssues.length === 1
+      ? formatCompactStatusReply(proposal.signal, updatedIssues[0], replyExtras)
+      : undefined,
   };
 }
 

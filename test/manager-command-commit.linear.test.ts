@@ -155,6 +155,7 @@ describe("manager command commit linear", () => {
       expect.any(Object),
     );
     expect(linearMocks.addLinearComment).not.toHaveBeenCalled();
+    expect(result.committed[0]?.publicReply).toBe("AIC-501 を完了にしました。");
   });
 
   it("normalizes cancel aliases to Canceled and avoids completed wording in the reply", async () => {
@@ -202,6 +203,7 @@ describe("manager command commit linear", () => {
     );
     expect(result.committed[0]?.summary).toContain("Canceled に変更しました。");
     expect(result.committed[0]?.summary).not.toContain("完了として反映しました。");
+    expect(result.committed[0]?.publicReply).toBe("AIC-60 を Canceled にしました。");
   });
 
   it("commits progress updates with a due date in one update call and records the new due date", async () => {
@@ -250,6 +252,7 @@ describe("manager command commit linear", () => {
     );
     expect(linearMocks.addLinearProgressComment).not.toHaveBeenCalled();
     expect(result.committed[0]?.summary).toContain("期限は 2026-03-27 として反映しました。");
+    expect(result.committed[0]?.publicReply).toBe("AIC-38 の進捗を反映しました。 期限は 2026-03-27 として反映しました。");
 
     const projection = await testContext.repositories.workgraph.project();
     expect(projection.issues["AIC-38"]).toMatchObject({
