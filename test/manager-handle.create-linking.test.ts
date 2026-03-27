@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleManagerMessage } from "../src/lib/manager.js";
 import { ensureManagerStateFiles } from "../src/lib/manager-state.js";
+import { loadPendingManagerClarification } from "../src/lib/pending-manager-clarification.js";
 import { buildSystemPaths } from "../src/lib/system-workspace.js";
+import { buildThreadPaths } from "../src/lib/thread-workspace.js";
 import { createFileBackedManagerRepositories } from "../src/state/repositories/file-backed-manager-repositories.js";
 import { recordPlanningOutcome } from "../src/state/workgraph/recorder.js";
 import { createDefaultTestManagerAgentTurn } from "./helpers/default-manager-agent-mock.js";
@@ -585,6 +587,146 @@ describe("handleManagerMessage create and linking flow", () => {
       childIssueIds: expect.arrayContaining(["AIC-86", "AIC-87"]),
       linkedIssueIds: expect.arrayContaining(["AIC-61"]),
       lastResolvedIssueId: "AIC-61",
+    });
+  });
+
+  it("handles clear create items now and persists clarification for one fuzzy duplicate", async () => {
+    piSessionMocks.runManagerAgentTurn.mockResolvedValueOnce({
+      reply: "残りの ChatGPT プロジェクト招待だけ、既存 task を使うか新規で作るか確認したいです。",
+      toolCalls: [
+        {
+          toolName: "report_manager_intent",
+          details: {
+            intentReport: {
+              intent: "create_work",
+              confidence: 0.95,
+              summary: "2件は新規作成し、1件は duplicate clarification が必要です。",
+            },
+          },
+        },
+        {
+          toolName: "report_pending_clarification_decision",
+          details: {
+            pendingClarificationDecision: {
+              decision: "new_request",
+              persistence: "replace",
+              summary: "ChatGPT プロジェクト招待の扱いを確認したいです。",
+            },
+          },
+        },
+      ],
+      proposals: [
+        {
+          commandType: "create_issue",
+          planningReason: "single-issue",
+          threadParentHandling: "ignore",
+          duplicateHandling: "create-new",
+          issue: {
+            title: "OPT役員チャンネルに角井さんを招待する",
+            description: "## Slack source\n角井さんを招待する",
+            assigneeMode: "leave-unassigned",
+          },
+          reasonSummary: "新規 task を作成します。",
+        },
+        {
+          commandType: "create_issue",
+          planningReason: "single-issue",
+          threadParentHandling: "ignore",
+          duplicateHandling: "create-new",
+          issue: {
+            title: "金澤さんにMTG定例名を確認する",
+            description: "## Slack source\n収集対象の定例を確認する",
+            assigneeMode: "leave-unassigned",
+          },
+          reasonSummary: "新規 task を作成します。",
+        },
+        {
+          commandType: "create_issue",
+          planningReason: "single-issue",
+          threadParentHandling: "ignore",
+          duplicateHandling: "clarify",
+          issue: {
+            title: "金澤さんのChatGPTのプロジェクト招待",
+            description: "## Slack source\n金澤さんのChatGPTのプロジェクト招待",
+            assigneeMode: "leave-unassigned",
+          },
+          reasonSummary: "近い既存 task があるため確認したいです。",
+        },
+      ],
+      invalidProposalCount: 0,
+      intentReport: {
+        intent: "create_work",
+        confidence: 0.95,
+        summary: "2件は新規作成し、1件は duplicate clarification が必要です。",
+      },
+      pendingClarificationDecision: {
+        decision: "new_request",
+        persistence: "replace",
+        summary: "ChatGPT プロジェクト招待の扱いを確認したいです。",
+      },
+    });
+
+    linearMocks.searchLinearIssues
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "issue-61",
+        identifier: "AIC-61",
+        title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+        url: "https://linear.app/kyaukyuai/issue/AIC-61",
+        state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+        relations: [],
+        inverseRelations: [],
+      }]);
+    linearMocks.createManagedLinearIssue
+      .mockResolvedValueOnce({
+        id: "issue-88",
+        identifier: "AIC-88",
+        title: "OPT役員チャンネルに角井さんを招待する",
+        url: "https://linear.app/kyaukyuai/issue/AIC-88",
+        relations: [],
+        inverseRelations: [],
+      })
+      .mockResolvedValueOnce({
+        id: "issue-89",
+        identifier: "AIC-89",
+        title: "金澤さんにMTG定例名を確認する",
+        url: "https://linear.app/kyaukyuai/issue/AIC-89",
+        relations: [],
+        inverseRelations: [],
+      });
+
+    const result = await handleManagerMessage(
+      { ...config, workspaceDir },
+      systemPaths,
+      {
+        channelId: "C0ALAMDRB9V",
+        rootThreadTs: "thread-grounded-create-work-clarify",
+        messageTs: "msg-grounded-create-work-clarify-1",
+        userId: "U1",
+        text: "各タスクを追加しておいて",
+      },
+      new Date("2026-03-27T06:59:00.000Z"),
+    );
+
+    expect(result.handled).toBe(true);
+    expect(result.reply).toBe(
+      "2件対応しました。\n\n"
+      + "- 新規作成: AIC-88（OPT役員チャンネルに角井さんを招待する） を作成しました\n"
+      + "- 新規作成: AIC-89（金澤さんにMTG定例名を確認する） を作成しました\n\n"
+      + "残り1件だけ確認です。「金澤さんのChatGPTのプロジェクト招待」は近い既存 issue があるため、新規で作るか既存を使うか確認したいです。対象 issue ID か「新規で作成」と返してください。",
+    );
+    expect(result.reply).not.toContain("system log:");
+    expect(linearMocks.createManagedLinearIssue).toHaveBeenCalledTimes(2);
+
+    const pending = await loadPendingManagerClarification(
+      buildThreadPaths(workspaceDir, "C0ALAMDRB9V", "thread-grounded-create-work-clarify"),
+      new Date("2026-03-27T06:59:00.000Z"),
+    );
+    expect(pending).toMatchObject({
+      intent: "create_work",
+      clarificationReply: expect.stringContaining("残り1件だけ確認です。"),
+      missingDecisionSummary: expect.stringContaining("近い既存 issue"),
     });
   });
 

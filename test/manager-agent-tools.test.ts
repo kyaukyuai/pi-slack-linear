@@ -11,6 +11,7 @@ import { WEBHOOK_INITIAL_PROPOSAL_MARKER } from "../src/orchestrators/webhooks/i
 const linearMocks = vi.hoisted(() => ({
   getLinearIssue: vi.fn(),
   listOpenLinearIssues: vi.fn(),
+  searchLinearIssues: vi.fn(),
 }));
 
 const notionMocks = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ vi.mock("../src/lib/linear.js", async () => {
     ...actual,
     getLinearIssue: linearMocks.getLinearIssue,
     listOpenLinearIssues: linearMocks.listOpenLinearIssues,
+    searchLinearIssues: linearMocks.searchLinearIssues,
   };
 });
 
@@ -93,6 +95,7 @@ describe("manager agent tools", () => {
     notionMocks.getNotionPageContent.mockReset();
     linearMocks.getLinearIssue.mockReset();
     linearMocks.listOpenLinearIssues.mockReset();
+    linearMocks.searchLinearIssues.mockReset();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -388,5 +391,41 @@ describe("manager agent tools", () => {
     const tools = createManagerAgentTools(config, buildRepositoriesForTools());
 
     expect(tools.some((entry) => entry.name === "propose_link_existing_issue")).toBe(true);
+  });
+
+  it("includes duplicate candidate search with deterministic multi-query recall", async () => {
+    linearMocks.searchLinearIssues.mockImplementation(async ({ query }: { query: string }) => {
+      if (/chatgpt/.test(query) || /プロジェクト 招待/.test(query)) {
+        return [{
+          id: "issue-61",
+          identifier: "AIC-61",
+          title: "金澤さんのChatGPTプロジェクトに角井さんを招待してもらう",
+          url: "https://linear.app/kyaukyuai/issue/AIC-61",
+          state: { id: "state-backlog", name: "Backlog", type: "unstarted" },
+          updatedAt: "2026-03-27T06:00:00.000Z",
+          relations: [],
+          inverseRelations: [],
+        }];
+      }
+      return [];
+    });
+
+    const tools = createManagerAgentTools(config, buildRepositoriesForTools());
+    const tool = tools.find((entry) => entry.name === "linear_find_duplicate_candidates");
+
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute("tool-call-duplicate-candidates", {
+      text: "金澤さんのChatGPTのプロジェクト招待",
+    });
+
+    expect(linearMocks.searchLinearIssues).toHaveBeenCalledTimes(5);
+    expect(result.details).toMatchObject([
+      {
+        identifier: "AIC-61",
+        matchedQueries: expect.arrayContaining(["金澤 chatgpt プロジェクト 招待", "プロジェクト 招待"]),
+        matchedTokenCount: 4,
+      },
+    ]);
   });
 });

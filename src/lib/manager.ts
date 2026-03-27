@@ -65,6 +65,7 @@ import {
   type CommitManagerCommandArgs,
   type ManagerCommittedCommand,
   type ManagerIntentReport,
+  type ManagerProposalRejection,
   type PendingClarificationDecisionReport,
 } from "./manager-command-commit.js";
 import {
@@ -487,6 +488,63 @@ function buildGroundedCreateWorkReply(args: {
     summaryLine,
     formatSlackBullets(bulletLines),
   ]);
+}
+
+function buildCreateWorkClarificationLines(rejected: ManagerProposalRejection[]): string[] {
+  return rejected.flatMap((entry) => {
+    if (entry.proposal.commandType !== "create_issue" || entry.proposal.duplicateHandling !== "clarify") {
+      return [];
+    }
+    return [
+      `「${entry.proposal.issue.title}」は近い既存 issue があるため、新規で作るか既存を使うか確認したいです。対象 issue ID か「新規で作成」と返してください。`,
+    ];
+  });
+}
+
+function buildGroundedCreateWorkClarificationReply(args: {
+  intent: ManagerIntentReport["intent"] | undefined;
+  committed: ManagerCommittedCommand[];
+  rejected: ManagerProposalRejection[];
+  pendingClarificationPersistence: PendingClarificationDecisionReport["persistence"] | undefined;
+}): string | undefined {
+  if (
+    args.intent !== "create_work"
+    || args.committed.length === 0
+    || args.pendingClarificationPersistence !== "replace"
+  ) {
+    return undefined;
+  }
+
+  const supportedEntries = args.committed.filter((entry) => (
+    entry.commandType === "create_issue" || entry.commandType === "link_existing_issue"
+  ));
+  if (supportedEntries.length !== args.committed.length) {
+    return undefined;
+  }
+  if (supportedEntries.some((entry) => !entry.publicReply?.trim())) {
+    return undefined;
+  }
+
+  const clarificationLines = buildCreateWorkClarificationLines(args.rejected);
+  if (clarificationLines.length === 0) {
+    return undefined;
+  }
+
+  const replyParts = [
+    `${supportedEntries.length}件対応しました。`,
+    formatSlackBullets(supportedEntries.map((entry) => (
+      `${entry.commandType === "link_existing_issue" ? "既存利用" : "新規作成"}: ${stripSlackSentenceEnding(entry.publicReply!)}`
+    ))),
+  ];
+
+  if (clarificationLines.length === 1) {
+    replyParts.push(`残り1件だけ確認です。${clarificationLines[0]}`);
+  } else {
+    replyParts.push("残りは確認したい点があります。");
+    replyParts.push(formatSlackBullets(clarificationLines));
+  }
+
+  return composeSlackReply(replyParts);
 }
 
 function formatPendingOwnerMapConfirmationReply(summaryLines: string[]): string {
@@ -1521,9 +1579,15 @@ export async function handleManagerMessage(
       committed: commitResult.committed,
       commitRejections: commitRejectionReasons,
     });
+    const groundedCreateWorkClarificationReply = buildGroundedCreateWorkClarificationReply({
+      intent: agentIntent,
+      committed: commitResult.committed,
+      rejected: commitResult.rejected,
+      pendingClarificationPersistence: agentTurn.pendingClarificationDecision?.persistence,
+    });
     const mergedReplyBase = missingQuerySnapshot
       ? buildSafetyQueryReply()
-      : compactSuccessfulMutationReply ?? groundedCreateWorkReply ?? mergeAgentReplyWithCommit({
+      : compactSuccessfulMutationReply ?? groundedCreateWorkClarificationReply ?? groundedCreateWorkReply ?? mergeAgentReplyWithCommit({
           agentReply: agentTurn.reply,
           commitSummaries: commitResult.replySummaries,
           commitRejections: commitRejectionReasons,

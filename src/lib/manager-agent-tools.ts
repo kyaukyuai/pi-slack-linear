@@ -3,6 +3,10 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { AppConfig } from "./config.js";
 import type { ManagerRepositories } from "../state/repositories/file-backed-manager-repositories.js";
 import {
+  findLinearDuplicateCandidates,
+  type LinearDuplicateCandidate,
+} from "./linear-duplicate-candidates.js";
+import {
   getLinearIssue,
   listOpenLinearIssues,
   listLinearTeamMembers,
@@ -67,6 +71,16 @@ function formatJsonDetails(value: unknown): string {
 
 function formatIssue(issue: { identifier: string; title: string; url?: string | null }): string {
   return issue.url ? `${issue.identifier} ${issue.title}\n${issue.url}` : `${issue.identifier} ${issue.title}`;
+}
+
+function formatDuplicateCandidate(candidate: LinearDuplicateCandidate): string {
+  return [
+    formatIssue(candidate),
+    `matchedQueries: ${candidate.matchedQueries.join(" | ")}`,
+    `matchedTokenCount: ${candidate.matchedTokenCount}`,
+    candidate.state ? `state: ${candidate.state}` : undefined,
+    candidate.updatedAt ? `updatedAt: ${candidate.updatedAt}` : undefined,
+  ].filter(Boolean).join("\n");
 }
 
 function formatDateLabel(value: string | null | undefined): string | undefined {
@@ -671,6 +685,32 @@ function createLinearReadTools(
         return {
           content: [{ type: "text", text: issues.length > 0 ? issues.map(formatIssue).join("\n\n") : "No matching issues found." }],
           details: issues,
+        };
+      },
+    },
+    {
+      name: "linear_find_duplicate_candidates",
+      label: "Linear Find Duplicate Candidates",
+      description: "Search likely duplicate active issues for one requested work item using deterministic query variants.",
+      promptSnippet: "Use this before create_work when deciding whether one requested item should create new work, reuse an existing issue, or ask for clarification.",
+      parameters: Type.Object({
+        text: Type.String({ description: "One requested work item title or short description." }),
+        limit: Type.Optional(Type.Number({ description: "Maximum number of candidates to return." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const candidates = await findLinearDuplicateCandidates(
+          params as { text: string; limit?: number },
+          env,
+          signal,
+        );
+        return {
+          content: [{
+            type: "text",
+            text: candidates.length > 0
+              ? ["Duplicate candidates:", ...candidates.map((candidate) => `- ${formatDuplicateCandidate(candidate).replace(/\n/g, "\n  ")}`)].join("\n")
+              : "No duplicate candidates found.",
+          }],
+          details: candidates,
         };
       },
     },
