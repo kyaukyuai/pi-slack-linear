@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,11 @@ const execFileAsync = promisify(execFile);
 const repoDir = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const tsxBin = join(repoDir, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
 const diagnosticsScript = join(repoDir, "scripts", "manager-diagnostics.ts");
+
+async function writeExecutable(path: string, content: string): Promise<void> {
+  await writeFile(path, content, "utf8");
+  await chmod(path, 0o755);
+}
 
 describe("manager diagnostics cli", () => {
   const tempDirs: string[] = [];
@@ -255,5 +260,104 @@ describe("manager diagnostics cli", () => {
       ],
       technicalFailure: "reply planner timeout",
     });
+  });
+
+  it("prints external boundary diagnostics with lightweight CLI checks", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "manager-diagnostics-boundaries-"));
+    tempDirs.push(cwd);
+    const binDir = join(cwd, "bin");
+    await mkdir(binDir, { recursive: true });
+
+    await writeExecutable(join(binDir, "linear"), `#!/bin/sh
+set -eu
+case "$*" in
+  "--version")
+    echo "linear-cli v2.8.0"
+    ;;
+  "auth whoami")
+    echo "diagnostics-user"
+    ;;
+  "issue children --help"|"issue parent --help"|"issue create-batch --help"|"team members --help"|"webhook list --help"|"webhook create --help"|"webhook update --help")
+    echo "ok"
+    ;;
+  "team list")
+    printf '%s\\n' "AIC Alpha Team" "OPS Ops Team"
+    ;;
+  *)
+    echo "unexpected linear args: $*" >&2
+    exit 1
+    ;;
+esac
+`);
+    await writeExecutable(join(binDir, "ntn"), `#!/bin/sh
+set -eu
+case "$*" in
+  "--help")
+    echo "ntn help"
+    ;;
+  *)
+    echo "unexpected ntn args: $*" >&2
+    exit 1
+    ;;
+esac
+`);
+
+    await writeFile(join(cwd, ".env"), [
+      "SLACK_APP_TOKEN=xapp-test",
+      "SLACK_BOT_TOKEN=xoxb-test",
+      "SLACK_ALLOWED_CHANNEL_IDS=C0ALAMDRB9V",
+      "LINEAR_API_KEY=lin_api_test",
+      "LINEAR_WORKSPACE=kyaukyuai",
+      "LINEAR_TEAM_KEY=AIC",
+      "NOTION_API_TOKEN=secret_test",
+      "",
+    ].join("\n"), "utf8");
+
+    const { stdout } = await execFileAsync(tsxBin, [diagnosticsScript, "boundaries", "./workspace"], {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    });
+    const json = stdout.slice(stdout.indexOf("{"));
+    const diagnostics = JSON.parse(json) as {
+      overallStatus: string;
+      linear: {
+        status: string;
+        version?: string;
+        steps: Array<{ name: string; status: string }>;
+      };
+      notion: {
+        status: string;
+        sampleShellCommand: string;
+      };
+      webResearch: {
+        status: string;
+        parserFixtureCommand: string;
+      };
+      operatorSummary: {
+        commands: string[];
+      };
+    };
+
+    expect(diagnostics.overallStatus).toBe("ok");
+    expect(diagnostics.linear).toMatchObject({
+      status: "ok",
+      version: "2.8.0",
+    });
+    expect(diagnostics.linear.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "cli-version", status: "ok" }),
+      expect.objectContaining({ name: "auth-whoami", status: "ok" }),
+      expect.objectContaining({ name: "required-command-surface", status: "ok" }),
+      expect.objectContaining({ name: "team-list", status: "ok" }),
+    ]));
+    expect(diagnostics.notion.status).toBe("ok");
+    expect(diagnostics.notion.sampleShellCommand).toContain("ntn api /v1/search");
+    expect(diagnostics.webResearch).toMatchObject({
+      status: "ok",
+      parserFixtureCommand: "npm test -- test/web-research.test.ts",
+    });
+    expect(diagnostics.operatorSummary.commands).toContain("npm run manager:diagnostics -- boundaries /workspace");
   });
 });

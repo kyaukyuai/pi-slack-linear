@@ -38,7 +38,7 @@ function decodeSearchUrl(rawUrl: string): string {
   }
 }
 
-function parseSearchResults(html: string, limit: number): WebSearchResult[] {
+export function parseWebSearchResultsHtml(html: string, limit: number): WebSearchResult[] {
   const links = Array.from(
     html.matchAll(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi),
   );
@@ -76,7 +76,7 @@ export async function webSearchFetch(
   }
 
   const html = await response.text();
-  return parseSearchResults(html, Math.max(1, Math.min(limit, 10)));
+  return parseWebSearchResultsHtml(html, Math.max(1, Math.min(limit, 10)));
 }
 
 export async function webFetchUrl(url: string, signal?: AbortSignal): Promise<WebPageSummary> {

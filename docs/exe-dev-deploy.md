@@ -341,9 +341,16 @@ npm run manager:diagnostics -- personalization /workspace
 npm run manager:diagnostics -- memory /workspace
 npm run manager:diagnostics -- workgraph /workspace
 npm run manager:diagnostics -- llm /workspace
+npm run manager:diagnostics -- boundaries /workspace
 ```
 
 `manager:diagnostics` は repo の `.env` を読んで app 本体と同じ runtime config を組み立てます。`ANTHROPIC_API_KEY` が入っていれば `authSource.source=runtime-override`、未設定で `/workspace/.pi/agent/auth.json` を使う場合は `authSource.source=auth-storage` です。
+
+`boundaries` は external dependency の lightweight smoke check です。
+
+- Linear: `linear-cli` version、`auth whoami`、required command surface、`LINEAR_TEAM_KEY` の `team list` 照合
+- Notion: `ntn` binary / `--help` と shell command contract
+- Web research: DuckDuckGo parser の fixture drift test 案内。live fetch は diagnostics では実行しません
 
 local と `exe.dev` の差分確認手順:
 
