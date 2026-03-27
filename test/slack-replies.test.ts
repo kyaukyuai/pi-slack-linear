@@ -82,13 +82,14 @@ describe("slack reply helpers", () => {
 
   it("starts and stops a reply stream for read-only replies", async () => {
     vi.useFakeTimers();
-    const postMessage = vi.fn();
+    const postMessage = vi.fn().mockResolvedValue({ ts: "placeholder.123" });
     const update = vi.fn();
+    const deleteMessage = vi.fn().mockResolvedValue({});
     const startStream = vi.fn().mockResolvedValue({ ts: "stream.123" });
     const appendStream = vi.fn().mockResolvedValue({});
     const stopStream = vi.fn().mockResolvedValue({});
     const webClient = {
-      chat: { postMessage, update, startStream, appendStream, stopStream },
+      chat: { postMessage, update, delete: deleteMessage, startStream, appendStream, stopStream },
     } as never;
 
     const controller = createSlackReplyStreamController(webClient, {
@@ -105,6 +106,15 @@ describe("slack reply helpers", () => {
     const text = await controller.finalizeReply("こんにちは");
 
     expect(text).toBe("こんにちは");
+    expect(postMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "111.222",
+      text: "考え中...",
+    });
+    expect(deleteMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "placeholder.123",
+    });
     expect(startStream).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "111.222",
@@ -117,19 +127,19 @@ describe("slack reply helpers", () => {
       ts: "stream.123",
       markdown_text: undefined,
     });
-    expect(postMessage).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 
   it("appends buffered deltas on a throttle while streaming", async () => {
     vi.useFakeTimers();
-    const postMessage = vi.fn();
+    const postMessage = vi.fn().mockResolvedValue({ ts: "placeholder.456" });
     const update = vi.fn();
+    const deleteMessage = vi.fn().mockResolvedValue({});
     const startStream = vi.fn().mockResolvedValue({ ts: "stream.456" });
     const appendStream = vi.fn().mockResolvedValue({});
     const stopStream = vi.fn().mockResolvedValue({});
     const webClient = {
-      chat: { postMessage, update, startStream, appendStream, stopStream },
+      chat: { postMessage, update, delete: deleteMessage, startStream, appendStream, stopStream },
     } as never;
 
     const controller = createSlackReplyStreamController(webClient, {
@@ -150,6 +160,10 @@ describe("slack reply helpers", () => {
     const text = await controller.finalizeReply("こんにちは。よろしくお願いします。");
 
     expect(text).toBe("こんにちは。よろしくお願いします。");
+    expect(deleteMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "placeholder.456",
+    });
     expect(startStream).toHaveBeenCalledTimes(1);
     expect(appendStream).toHaveBeenCalledWith({
       channel: "C123",
@@ -161,19 +175,40 @@ describe("slack reply helpers", () => {
       ts: "stream.456",
       markdown_text: undefined,
     });
-    expect(postMessage).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("falls back to placeholder plus update when stream setup fails", async () => {
-    vi.useFakeTimers();
+  it("posts the processing notice immediately when the controller is created", () => {
+    const postMessage = vi.fn().mockResolvedValue({ ts: "123.456" });
+    const update = vi.fn();
+    const webClient = {
+      chat: { postMessage, update, delete: vi.fn(), startStream: vi.fn(), appendStream: vi.fn(), stopStream: vi.fn() },
+    } as never;
+
+    createSlackReplyStreamController(webClient, {
+      channel: "C123",
+      threadTs: "111.222",
+      recipientUserId: "U123",
+      recipientTeamId: "T123",
+      linearWorkspace: "kyaukyuai",
+    });
+
+    expect(postMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "111.222",
+      text: "考え中...",
+    });
+  });
+
+  it("falls back to placeholder plus update when placeholder delete fails", async () => {
     const postMessage = vi.fn().mockResolvedValue({ ts: "123.456" });
     const update = vi.fn().mockResolvedValue({});
-    const startStream = vi.fn().mockRejectedValue(new Error("stream_not_allowed"));
+    const deleteMessage = vi.fn().mockRejectedValue(new Error("cant_delete"));
+    const startStream = vi.fn();
     const appendStream = vi.fn();
     const stopStream = vi.fn();
     const webClient = {
-      chat: { postMessage, update, startStream, appendStream, stopStream },
+      chat: { postMessage, update, delete: deleteMessage, startStream, appendStream, stopStream },
     } as never;
 
     const controller = createSlackReplyStreamController(webClient, {
@@ -198,6 +233,52 @@ describe("slack reply helpers", () => {
     expect(update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "123.456",
+      text: "こんにちは",
+      blocks: expect.any(Array),
+    });
+    expect(startStream).not.toHaveBeenCalled();
+    expect(stopStream).not.toHaveBeenCalled();
+  });
+
+  it("reposts the placeholder when stream setup fails after delete", async () => {
+    const postMessage = vi.fn()
+      .mockResolvedValueOnce({ ts: "123.456" })
+      .mockResolvedValueOnce({ ts: "123.789" });
+    const update = vi.fn().mockResolvedValue({});
+    const deleteMessage = vi.fn().mockResolvedValue({});
+    const startStream = vi.fn().mockRejectedValue(new Error("stream_not_allowed"));
+    const appendStream = vi.fn();
+    const stopStream = vi.fn();
+    const webClient = {
+      chat: { postMessage, update, delete: deleteMessage, startStream, appendStream, stopStream },
+    } as never;
+
+    const controller = createSlackReplyStreamController(webClient, {
+      channel: "C123",
+      threadTs: "111.222",
+      recipientUserId: "U123",
+      recipientTeamId: "T123",
+      linearWorkspace: "kyaukyuai",
+    });
+
+    await controller.enableStreaming();
+    controller.pushTextDelta("こんにちは");
+
+    const text = await controller.finalizeReply("こんにちは");
+
+    expect(text).toBe("こんにちは");
+    expect(deleteMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "123.456",
+    });
+    expect(postMessage).toHaveBeenNthCalledWith(2, {
+      channel: "C123",
+      thread_ts: "111.222",
+      text: "考え中...",
+    });
+    expect(update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "123.789",
       text: "こんにちは",
       blocks: expect.any(Array),
     });

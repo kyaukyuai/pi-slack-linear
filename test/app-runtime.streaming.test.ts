@@ -68,6 +68,7 @@ function createWebClient() {
     chat: {
       postMessage: vi.fn().mockResolvedValue({ ts: "placeholder.123" }),
       update: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
       startStream: vi.fn().mockResolvedValue({ ts: "stream.123" }),
       appendStream: vi.fn().mockResolvedValue({}),
       stopStream: vi.fn().mockResolvedValue({}),
@@ -158,12 +159,20 @@ describe("app runtime Slack streaming", () => {
       recipient_team_id: "T123",
       markdown_text: "こんにちは",
     });
+    expect(webClient.chat.postMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "111.222",
+      text: "考え中...",
+    });
+    expect(webClient.chat.delete).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "placeholder.123",
+    });
     expect(webClient.chat.stopStream).toHaveBeenCalledWith({
       channel: "C123",
       ts: "stream.123",
       markdown_text: undefined,
     });
-    expect(webClient.chat.postMessage).not.toHaveBeenCalled();
     expect(webClient.chat.update).not.toHaveBeenCalled();
     expect(threadWorkspaceMocks.appendThreadLog).toHaveBeenCalledTimes(2);
     expect(threadWorkspaceMocks.appendThreadLog).toHaveBeenLastCalledWith(
@@ -215,6 +224,7 @@ describe("app runtime Slack streaming", () => {
     await flushQueue();
 
     expect(webClient.chat.startStream).not.toHaveBeenCalled();
+    expect(webClient.chat.delete).not.toHaveBeenCalled();
     expect(webClient.chat.postMessage).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "111.333",
@@ -228,7 +238,7 @@ describe("app runtime Slack streaming", () => {
     });
   });
 
-  it("falls back to the existing placeholder path when read-only intent arrives after the timer", async () => {
+  it("switches from placeholder to streaming when read-only intent arrives later", async () => {
     const { createAppRuntimeHandlers } = await import("../src/runtime/app-runtime.js");
     const webClient = createWebClient();
     const logger = createLogger();
@@ -269,18 +279,28 @@ describe("app runtime Slack streaming", () => {
     await vi.runAllTimersAsync();
     await flushQueue();
 
-    expect(webClient.chat.startStream).not.toHaveBeenCalled();
+    expect(webClient.chat.startStream).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "111.444",
+      recipient_user_id: "U123",
+      recipient_team_id: "T123",
+      markdown_text: "今日やるべきことです。",
+    });
     expect(webClient.chat.postMessage).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "111.444",
       text: "考え中...",
     });
-    expect(webClient.chat.update).toHaveBeenCalledWith({
+    expect(webClient.chat.delete).toHaveBeenCalledWith({
       channel: "C123",
       ts: "placeholder.123",
-      text: "今日やるべきことです。",
-      blocks: expect.any(Array),
     });
+    expect(webClient.chat.stopStream).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "stream.123",
+      markdown_text: undefined,
+    });
+    expect(webClient.chat.update).not.toHaveBeenCalled();
   });
 
   it("updates the streamed message with a provider-aware failure reply when a read-only turn fails", async () => {
@@ -325,14 +345,24 @@ describe("app runtime Slack streaming", () => {
       thread_ts: "111.555",
       recipient_user_id: "U123",
       recipient_team_id: "T123",
-      markdown_text: expect.stringContaining("LLM 側のエラーです。Anthropic 429"),
+      markdown_text: "途中の返信",
     }));
-    expect(webClient.chat.stopStream).toHaveBeenCalledWith({
+    expect(webClient.chat.postMessage).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "111.555",
+      text: "考え中...",
+    });
+    expect(webClient.chat.delete).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "placeholder.123",
+    });
+    expect(webClient.chat.update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "stream.123",
-      markdown_text: undefined,
+      text: expect.stringContaining("LLM 側のエラーです。Anthropic 429"),
+      blocks: expect.any(Array),
     });
-    expect(webClient.chat.update).not.toHaveBeenCalled();
+    expect(webClient.chat.stopStream).not.toHaveBeenCalled();
     expect(threadWorkspaceMocks.appendThreadLog).toHaveBeenCalledTimes(2);
     expect(threadWorkspaceMocks.appendThreadLog).toHaveBeenLastCalledWith(
       expect.any(Object),

@@ -25,25 +25,6 @@ function messagePayloadText(reply: string, linearWorkspace: string): string {
   return buildSlackMessagePayload(reply, { linearWorkspace }).text;
 }
 
-function createDeferred<T>() {
-  let resolved = false;
-  let resolveRef: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((resolve) => {
-    resolveRef = (value) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(value);
-    };
-  });
-  return {
-    promise,
-    resolve: resolveRef,
-    get resolved() {
-      return resolved;
-    },
-  };
-}
-
 export function createSlackReplyStreamController(
   webClient: SlackChatClient,
   args: {
@@ -57,10 +38,7 @@ export function createSlackReplyStreamController(
     onEvent?: (event: SlackReplyStreamEvent) => void;
   },
 ): SlackReplyStreamController {
-  const processingNoticeDelayMs = args.processingNoticeDelayMs ?? SLACK_PROCESSING_NOTICE_DELAY_MS;
   const appendThrottleMs = args.appendThrottleMs ?? SLACK_STREAM_APPEND_THROTTLE_MS;
-  const placeholderDeferred = createDeferred<string | undefined>();
-  let placeholderTimer: NodeJS.Timeout | undefined;
   let placeholderPostedTs: string | undefined;
   let placeholderPostingPromise: Promise<string | undefined> | undefined;
   let streamingEnabled = false;
@@ -78,15 +56,9 @@ export function createSlackReplyStreamController(
     args.onEvent?.(event);
   };
 
-  const clearPlaceholderTimer = () => {
-    if (placeholderTimer) {
-      clearTimeout(placeholderTimer);
-      placeholderTimer = undefined;
-    }
-  };
-
-  const resolvePlaceholder = (value: string | undefined) => {
-    placeholderDeferred.resolve(value);
+  const clearPlaceholderReference = () => {
+    placeholderPostedTs = undefined;
+    placeholderPostingPromise = undefined;
   };
 
   const ensurePlaceholderPosted = async (): Promise<string | undefined> => {
@@ -96,31 +68,44 @@ export function createSlackReplyStreamController(
     if (placeholderPostingPromise) {
       return placeholderPostingPromise;
     }
-    clearPlaceholderTimer();
     placeholderPostingPromise = postSlackProcessingNotice(webClient, {
       channel: args.channel,
       threadTs: args.threadTs,
     }).then((ts) => {
       placeholderPostedTs = ts;
-      resolvePlaceholder(ts);
       return ts;
     }).catch(() => {
-      resolvePlaceholder(undefined);
       return undefined;
+    }).finally(() => {
+      placeholderPostingPromise = undefined;
     });
     return placeholderPostingPromise;
   };
 
-  placeholderTimer = setTimeout(() => {
-    void ensurePlaceholderPosted();
-  }, processingNoticeDelayMs);
-
-  const cancelPlaceholder = () => {
-    clearPlaceholderTimer();
-    if (!placeholderDeferred.resolved) {
-      resolvePlaceholder(undefined);
+  const deletePlaceholderForStreaming = async (): Promise<boolean> => {
+    const placeholderTs = await ensurePlaceholderPosted();
+    if (!placeholderTs) {
+      return true;
+    }
+    try {
+      await webClient.chat.delete({
+        channel: args.channel,
+        ts: placeholderTs,
+      });
+      clearPlaceholderReference();
+      return true;
+    } catch (error) {
+      emit({
+        type: "stream_fallback",
+        reason: "placeholder delete failed",
+        error: error instanceof Error ? error.message : String(error),
+        ts: placeholderTs,
+      });
+      return false;
     }
   };
+
+  void ensurePlaceholderPosted();
 
   const markStreamFailure = async (reason: string, error?: unknown): Promise<void> => {
     if (streamFailed) {
@@ -209,10 +194,10 @@ export function createSlackReplyStreamController(
 
   return {
     async enableStreaming(): Promise<boolean> {
-      if (streamingDisabled || finalized || placeholderPostedTs) {
+      if (streamingDisabled || finalized) {
         emit({
           type: "stream_fallback",
-          reason: placeholderPostedTs ? "processing notice already posted" : "streaming disabled",
+          reason: "streaming disabled",
           ts: placeholderPostedTs,
         });
         return false;
@@ -236,8 +221,12 @@ export function createSlackReplyStreamController(
         return true;
       }
 
+      const placeholderDeleted = await deletePlaceholderForStreaming();
+      if (!placeholderDeleted) {
+        return false;
+      }
+
       streamingEnabled = true;
-      cancelPlaceholder();
       if (bufferedRawText) {
         await flushNow();
       }
@@ -245,7 +234,7 @@ export function createSlackReplyStreamController(
         emit({
           type: "stream_fallback",
           reason: streamFailedReason ?? "stream setup failed",
-          ts: streamTs,
+          ts: streamTs ?? placeholderPostedTs,
         });
         return false;
       }
@@ -308,12 +297,10 @@ export function createSlackReplyStreamController(
             ?? (streamTs ? "final reply diverged from streamed content" : "stream never started"),
           ts: streamTs ?? placeholderPostedTs,
         });
-      } else {
-        cancelPlaceholder();
       }
 
       finalized = true;
-      const updateTs = streamTs ?? placeholderPostedTs ?? await placeholderDeferred.promise;
+      const updateTs = streamTs ?? placeholderPostedTs ?? await ensurePlaceholderPosted();
       return sendSlackReply(webClient, {
         channel: args.channel,
         threadTs: args.threadTs,

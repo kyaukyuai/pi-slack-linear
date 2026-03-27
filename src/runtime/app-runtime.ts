@@ -533,6 +533,7 @@ export function createAppRuntimeHandlers(args: {
     const message = normalizeSlackMessage(rawEvent);
     const threadKey = `${message.channelId}:${message.rootThreadTs}`;
     let observedIntent: ManagerIntentReport["intent"] | undefined;
+    let streamActivationPromise: Promise<boolean> | undefined;
     const streamController = createSlackReplyStreamController(args.webClient, {
       channel: message.channelId,
       threadTs: message.rootThreadTs,
@@ -625,15 +626,17 @@ export function createAppRuntimeHandlers(args: {
                 observedIntent = report.intent;
                 if (!isReadOnlyStreamingIntent(report.intent)) {
                   streamController.disableStreaming();
+                  streamActivationPromise = undefined;
                   return;
                 }
-                void streamController.enableStreaming().catch((error) => {
+                streamActivationPromise = streamController.enableStreaming().catch((error) => {
                   args.logger.warn("Failed to enable Slack reply streaming", {
                     channelId: message.channelId,
                     threadTs: message.rootThreadTs,
                     intent: report.intent,
                     error: error instanceof Error ? error.message : String(error),
                   });
+                  return false;
                 });
               },
               onTextDelta: (delta) => {
@@ -698,6 +701,9 @@ export function createAppRuntimeHandlers(args: {
         }
 
         const reply = managerResult.reply ?? "必要なことを少し具体的に教えてください。";
+        if (streamActivationPromise) {
+          await streamActivationPromise;
+        }
         const formattedReply = await streamController.finalizeReply(reply);
 
         await appendThreadLog(paths, {
@@ -713,6 +719,9 @@ export function createAppRuntimeHandlers(args: {
           threadTs: message.rootThreadTs,
           error: errorMessage,
         });
+        if (streamActivationPromise) {
+          await streamActivationPromise;
+        }
         const reply = await streamController.finalizeReply(buildSlackVisibleFailureReply({
           error,
           fallbackReply: "処理に失敗しました。設定や Linear 連携を確認してください。",
