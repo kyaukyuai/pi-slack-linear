@@ -347,6 +347,14 @@ interface BatchIssueSpec {
   state?: string;
 }
 
+interface LinearDescriptionArgOptions {
+  descriptionFilePath?: string;
+}
+
+interface LinearCommentArgOptions {
+  bodyFilePath?: string;
+}
+
 export interface GetLinearIssueOptions {
   includeComments?: boolean;
 }
@@ -376,6 +384,10 @@ function workspaceArgs(env: LinearCommandEnv): string[] {
   if (env.LINEAR_API_KEY?.trim()) return [];
   const workspace = env.LINEAR_WORKSPACE?.trim();
   return workspace ? ["-w", workspace] : [];
+}
+
+function hasMultilineLinearText(text: string | undefined): boolean {
+  return Boolean(text && /[\r\n]/.test(text));
 }
 
 function parseIssueId(text: string): string | undefined {
@@ -774,6 +786,7 @@ function buildManagedCreateIssueArgs(
   input: ManagedCreateIssueInput,
   env: LinearCommandEnv = process.env,
   assignee?: string,
+  options: LinearDescriptionArgOptions = {},
 ): string[] {
   ensureLinearAuthConfigured(env);
   const title = input.title.trim();
@@ -790,12 +803,16 @@ function buildManagedCreateIssueArgs(
     "--no-interactive",
     "--title",
     title,
-    "--description",
-    description,
     "--team",
     teamKey,
     "--json",
   ];
+
+  if (options.descriptionFilePath?.trim()) {
+    args.push("--description-file", options.descriptionFilePath.trim());
+  } else {
+    args.push("--description", description);
+  }
 
   if (input.state?.trim()) args.push("--state", input.state.trim());
   if (input.dueDate?.trim()) args.push("--due-date", input.dueDate.trim());
@@ -810,6 +827,7 @@ function buildManagedUpdateIssueArgs(
   input: ManagedUpdateIssueInput,
   env: LinearCommandEnv = process.env,
   assignee?: string,
+  options: LinearDescriptionArgOptions = {},
 ): string[] {
   ensureLinearAuthConfigured(env);
   const issueId = input.issueId.trim();
@@ -818,7 +836,13 @@ function buildManagedUpdateIssueArgs(
   const args = ["issue", "update", ...workspaceArgs(env), issueId, "--json"];
 
   if (input.title?.trim()) args.push("--title", input.title.trim());
-  if (input.description?.trim()) args.push("--description", input.description.trim());
+  if (input.description?.trim()) {
+    if (options.descriptionFilePath?.trim()) {
+      args.push("--description-file", options.descriptionFilePath.trim());
+    } else {
+      args.push("--description", input.description.trim());
+    }
+  }
   if (input.state?.trim()) args.push("--state", input.state.trim());
   if (input.dueDate?.trim()) args.push("--due-date", input.dueDate.trim());
   if (input.clearDueDate) args.push("--clear-due-date");
@@ -853,7 +877,11 @@ function buildBatchIssueSpec(input: ManagedCreateIssueInput, assignee?: string):
   };
 }
 
-export function buildCreateIssueArgs(input: CreateIssueInput, env: LinearCommandEnv = process.env): string[] {
+export function buildCreateIssueArgs(
+  input: CreateIssueInput,
+  env: LinearCommandEnv = process.env,
+  options: LinearDescriptionArgOptions = {},
+): string[] {
   ensureLinearAuthConfigured(env);
   const title = input.title.trim();
   const description = input.description.trim();
@@ -866,7 +894,12 @@ export function buildCreateIssueArgs(input: CreateIssueInput, env: LinearCommand
     throw new Error("Issue description is required");
   }
 
-  const args = ["issue", "create", "--no-interactive", "--title", title, "--description", description];
+  const args = ["issue", "create", "--no-interactive", "--title", title];
+  if (options.descriptionFilePath?.trim()) {
+    args.push("--description-file", options.descriptionFilePath.trim());
+  } else {
+    args.push("--description", description);
+  }
   args.push(...workspaceArgs(env), "--team", teamKey);
 
   if (input.state?.trim()) {
@@ -1007,13 +1040,34 @@ export function buildIssueCommentAddArgs(
   issueId: string,
   body: string,
   env: LinearCommandEnv = process.env,
+  options: LinearCommentArgOptions = {},
 ): string[] {
   const trimmedIssueId = issueId.trim();
   const trimmedBody = body.trim();
   if (!trimmedIssueId) throw new Error("Issue ID is required");
   if (!trimmedBody) throw new Error("Comment body is required");
 
+  if (options.bodyFilePath?.trim()) {
+    return ["issue", "comment", "add", ...workspaceArgs(env), trimmedIssueId, "--body-file", options.bodyFilePath.trim(), "--json"];
+  }
+
   return ["issue", "comment", "add", ...workspaceArgs(env), trimmedIssueId, "--body", trimmedBody, "--json"];
+}
+
+async function withTemporaryLinearTextFile<T>(
+  prefix: string,
+  fileName: string,
+  content: string,
+  action: (filePath: string) => Promise<T>,
+): Promise<T> {
+  const tempDir = await mkdtemp(join(tmpdir(), prefix));
+  const filePath = join(tempDir, fileName);
+  try {
+    await writeFile(filePath, content, "utf8");
+    return await action(filePath);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 export function buildIssueRelationAddArgs(
@@ -1139,8 +1193,8 @@ async function loadIssueRelations(
 export async function verifyLinearCli(teamKey: string): Promise<void> {
   const versionResult = await execLinear(["--version"], process.env);
   const version = versionResult.stdout || versionResult.stderr;
-  if (compareVersions(version, "2.8.0") < 0) {
-    throw new Error(`linear-cli v2.8.0 or newer is required. Current version: ${version || "unknown"}`);
+  if (compareVersions(version, "2.9.0") < 0) {
+    throw new Error(`linear-cli v2.9.0 or newer is required. Current version: ${version || "unknown"}`);
   }
 
   const whoami = await execLinear(["auth", "whoami"], process.env);
@@ -1262,7 +1316,20 @@ export async function createManagedLinearIssue(
   signal?: AbortSignal,
 ): Promise<LinearIssue> {
   const assignee = await resolveAssigneeSpecifier(env, input.assignee, signal);
-  const payload = await execLinearJson<CliIssuePayload>(buildManagedCreateIssueArgs(input, env, assignee), env, signal);
+  const executeCreate = async (descriptionFilePath?: string) =>
+    execLinearJson<CliIssuePayload>(
+      buildManagedCreateIssueArgs(input, env, assignee, { descriptionFilePath }),
+      env,
+      signal,
+    );
+  const payload = hasMultilineLinearText(input.description)
+    ? await withTemporaryLinearTextFile(
+        "cogito-work-manager-linear-create-",
+        "description.md",
+        input.description.trim(),
+        (descriptionFilePath) => executeCreate(descriptionFilePath),
+      )
+    : await executeCreate();
   const issue = normalizeLinearIssuePayload(payload);
   if (!issue) {
     throw new Error("Linear issue creation returned no issue");
@@ -1337,7 +1404,20 @@ export async function updateManagedLinearIssue(
   signal?: AbortSignal,
 ): Promise<LinearIssue> {
   const assignee = await resolveAssigneeSpecifier(env, input.assignee, signal);
-  const payload = await execLinearJson<CliIssuePayload>(buildManagedUpdateIssueArgs(input, env, assignee), env, signal);
+  const executeUpdate = async (descriptionFilePath?: string) =>
+    execLinearJson<CliIssuePayload>(
+      buildManagedUpdateIssueArgs(input, env, assignee, { descriptionFilePath }),
+      env,
+      signal,
+    );
+  const payload = hasMultilineLinearText(input.description)
+    ? await withTemporaryLinearTextFile(
+        "cogito-work-manager-linear-update-",
+        "description.md",
+        input.description!.trim(),
+        (descriptionFilePath) => executeUpdate(descriptionFilePath),
+      )
+    : await executeUpdate();
   const issue = normalizeLinearIssuePayload(payload);
   if (!issue) {
     throw new Error("Linear issue update returned no issue");
@@ -1379,7 +1459,20 @@ export async function addLinearComment(
   env: LinearCommandEnv = process.env,
   signal?: AbortSignal,
 ): Promise<{ id: string; url?: string | null; body: string }> {
-  const payload = await execLinearJson<CliCommentPayload>(buildIssueCommentAddArgs(issueId, body, env), env, signal);
+  const executeComment = async (bodyFilePath?: string) =>
+    execLinearJson<CliCommentPayload>(
+      buildIssueCommentAddArgs(issueId, body, env, { bodyFilePath }),
+      env,
+      signal,
+    );
+  const payload = hasMultilineLinearText(body)
+    ? await withTemporaryLinearTextFile(
+        "cogito-work-manager-linear-comment-",
+        "comment.md",
+        body.trim(),
+        (bodyFilePath) => executeComment(bodyFilePath),
+      )
+    : await executeComment();
   const id = toStringOrUndefined(payload.id);
   if (!id) {
     throw new Error("Failed to add Linear comment");

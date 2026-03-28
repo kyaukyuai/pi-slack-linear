@@ -4,7 +4,7 @@ import type { AppConfig } from "./config.js";
 import { buildNotionShellCommand, buildSearchNotionArgs } from "./notion.js";
 
 const execFileAsync = promisify(execFile);
-const REQUIRED_LINEAR_VERSION = "2.8.0";
+const REQUIRED_LINEAR_VERSION = "2.9.0";
 
 export type ExternalBoundaryStatus = "ok" | "warning" | "failed" | "disabled" | "skipped";
 

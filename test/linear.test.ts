@@ -273,7 +273,7 @@ describe("linear command builders", () => {
     ).toEqual(["webhook", "delete", "webhook-1", "--json"]);
   });
 
-  it("parses structured create-batch partial failures from linear-cli v2.8.0", () => {
+  it("parses structured create-batch partial failures from linear-cli v2.9.0 baseline", () => {
     const failure = parseLinearBatchCreateFailure(JSON.stringify({
       success: false,
       error: {
