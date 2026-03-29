@@ -35,11 +35,11 @@ afterEach(() => {
 });
 
 describe("linear write path hardening", () => {
-  it("rejects linear-cli versions below 2.9.0", async () => {
+  it("rejects linear-cli versions below 2.9.1", async () => {
     mockExecFileSuccess(async () => ({ stdout: "linear-cli v2.8.0" }));
     const { verifyLinearCli } = await import("../src/lib/linear.js");
 
-    await expect(verifyLinearCli("AIC")).rejects.toThrow("linear-cli v2.9.0 or newer is required");
+    await expect(verifyLinearCli("AIC")).rejects.toThrow("linear-cli v2.9.1 or newer is required");
   });
 
   it("uses --description-file for multiline managed issue creation and cleans the temp file", async () => {

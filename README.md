@@ -97,7 +97,7 @@ Optional:
 - `WORKGRAPH_AUTO_COMPACT_MAX_ACTIVE_EVENTS`
 - `LOG_LEVEL`
 
-この bot は `linear-cli v2.9.0` 以上を前提にしています。実行時の Linear 取得・更新は `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を使います。multiline の description / comment は `--description-file` / `--body-file` を使い、relation add は retry-safe 前提で扱います。
+この bot は `linear-cli v2.9.1` 以上を前提にしています。実行時の Linear 取得・更新は `issue list/view/create/update --json`, `issue comment add --json`, `issue relation add/list --json`, `team members --json`, `issue parent/children --json`, `issue create-batch --file ... --json` を使います。multiline の description / comment は `--description-file` / `--body-file` を使い、relation add は retry-safe 前提で扱います。
 
 `NOTION_API_TOKEN` を設定すると、bundled `ntn v0.4.0` を使って Notion を参照できます。現状のスコープでは page search、page facts、page content 抜粋、database search、database query の読み出しに加えて、`NOTION_AGENDA_PARENT_PAGE_ID` を設定すると指定 parent page 配下に agenda page を作成できます。また、既存 page に対しては title 更新、append 追記、Cogito 管理ページに限定した heading_2 単位の `replace_section` 更新、archive/trash までサポートします。管理対象ページは `workspace/system/notion-pages.json` に登録された page です。database row の更新・削除はまだ扱いません。Notion は task system of record にはしません。
 
@@ -105,7 +105,7 @@ Optional:
 
 runtime `AGENTS.md` / `MEMORY.md` は会話や実行結果から silent auto-update されます。抽出候補は `/workspace/system/personalization-ledger.json` に保存され、昇格したものだけ runtime `AGENTS.md` / `MEMORY.md` に反映されます。rich な project snapshot を保存したい場合は、`MEMORY に保存して` を明示して `project-overview / members-and-roles / roadmap-and-milestones` を含む structured save を使うのが主経路です。
 
-`LINEAR_WORKSPACE` は固定先の説明用です。`LINEAR_API_KEY` がある場合、`linear-cli v2.9.0` でも `-w/--workspace` と併用しないようにしています。
+`LINEAR_WORKSPACE` は固定先の説明用です。`LINEAR_API_KEY` がある場合、`linear-cli v2.9.1` でも `-w/--workspace` と併用しないようにしています。
 
 `LINEAR_WEBHOOK_ENABLED=true` にすると、同一プロセスで issue create webhook listener を起動します。受信対象は `LINEAR_TEAM_KEY` の新規 issue だけで、署名検証と delivery dedupe を行ったうえで、agent-first / strict tools / manager commit の system workflow に載せます。判定基準は「価値があるか」ではなく「既存 proposal surface で今すぐ安全に実行できる action があるか」です。no-op は silent で、action 実行時と failed 時だけ control room に通知します。
 
